@@ -32,6 +32,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'assessment_tool',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -77,6 +78,9 @@ WSGI_APPLICATION = 'math_assessment_platform.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
+        'OPTIONS': {
+            'target_session_attrs': 'read-write',
+        },
         'NAME': config('DB_ACTUAL_NAME'),
         'USER': config('SECRET_DB_USER'),
         'PASSWORD': config('DB_USER_PASSWORD'),
@@ -84,6 +88,9 @@ DATABASES = {
         'PORT': '5432',
     }
 }
+
+# Overwrite the django 'User' table to use my database 'User' table:
+AUTH_USER_MODEL = 'assessment_tool.User'
 
 
 # Password validation
