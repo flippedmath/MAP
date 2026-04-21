@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -76,9 +77,9 @@ WSGI_APPLICATION = 'math_assessment_platform.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'your_db_name',
-        'USER': 'your_postgres_user',
-        'PASSWORD': 'your_password',
+        'NAME': config('DB_ACTUAL_NAME'),
+        'USER': config('SECRET_DB_USER'),
+        'PASSWORD': config('DB_USER_PASSWORD'),
         'HOST': 'localhost',
         'PORT': '5432',
     }
