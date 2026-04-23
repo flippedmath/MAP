@@ -6,7 +6,141 @@
 #   * Remove `managed = False` lines if you wish to allow Django to create, modify, and delete the table
 # Feel free to rename the models, but don't rename db_table values or field names.
 from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager #, PermissionsMixin
+from django.utils import timezone
+
+class MyUserManager(BaseUserManager):
+    def _format_user_data(self, gender, first_name, last_name, display_name):
+        """Helper to format strings and validate gender."""
+        # Gender validation
+        gender = gender[0].lower() if gender else 'o'
+        if gender not in ['m', 'f', 'o']:
+            raise ValueError('Gender must be (m)ale, (f)emale, or (o)ther.')
+
+        # Name formatting helper
+        def clean_name(name, required=True):
+            name = " ".join(name.split()) if name else ""
+            if not name and required:
+                raise ValueError("Name values cannot be blank")
+            return name.capitalize() if name else None
+
+        return (
+            gender,
+            clean_name(first_name),
+            clean_name(last_name),
+            clean_name(display_name, required=False)
+        )
+    
+    def create_user(self, user_email, username, gender, user_first_name, user_last_name, password=None, **extra_fields):
+        """The base method used by all other creation methods."""
+        if user_email:
+            user_email = self.normalize_email(user_email)
+        
+        # Format names and gender
+        gender, f_name, l_name, d_name = self._format_user_data(
+            gender, user_first_name, user_last_name, extra_fields.pop('user_display_name', '')
+        )
+
+        extra_fields.setdefault('creation_date', timezone.now())
+
+        user = self.model(
+            user_email=user_email,
+            username=username,
+            gender=gender,
+            user_first_name=f_name,
+            user_last_name=l_name,
+            user_display_name=d_name,
+            **extra_fields
+        )
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_student_user(self, **fields):
+        fields.setdefault('user_type', 'Student')
+        fields.setdefault('unactivated_account', False)
+        fields.setdefault('ongoing_assessment', False)
+        fields.setdefault('ban_account', False)
+        return self.create_user(**fields)
+    
+    def create_teacher_user(self, **fields):
+        fields.setdefault('user_type', 'Teacher')
+        fields.setdefault('unactivated_account', False)
+        fields.setdefault('ongoing_assessment', False)
+        fields.setdefault('ban_account', False)
+        fields.setdefault('user_credit', 0)
+        return self.create_user(**fields)
+
+    def create_superuser(self, user_email, username, gender, user_first_name, user_last_name, **extra_fields):
+        # IT Support users are required to have an email
+        if not user_email:
+            raise ValueError('Users must have an email address')
+        
+        extra_fields.setdefault('user_type', 'IT_Support')
+        extra_fields.setdefault('unactivated_account', False)
+        extra_fields.setdefault('ongoing_assessment', False)
+        extra_fields.setdefault('ban_account', False)
+        
+        user = self.create_user(
+            user_email=user_email,
+            username=username,
+            gender=gender,
+            user_first_name=user_first_name,
+            user_last_name=user_last_name,
+            **extra_fields
+        )
+        # user.is_superuser = True
+
+        return user
+
+class UserProfile(AbstractBaseUser): #, PermissionsMixin):
+    user_id = models.AutoField(primary_key=True)
+    username = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_username CHECK (LOWER(username) = username)')
+    user_email = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_email CHECK (LOWER(user_email) = user_email)')
+    password = models.CharField(max_length=255, db_column='user_password')
+    user_type = models.TextField()  # This field type is a guess.
+    gender = models.CharField(max_length=5, blank=True, null=True, db_comment="CONSTRAINT chk_Gender CHECK (LOWER(Gender) IN ('m', 'f', 'other'));")
+    user_first_name = models.CharField(max_length=255, blank=True, null=True)
+    user_last_name = models.CharField(max_length=255, blank=True, null=True)
+    user_display_name = models.CharField(max_length=255, blank=True, null=True)
+    user_credit = models.IntegerField(blank=True, null=True, db_comment='Default is null generally; application logic should set 0 when user_type is Teacher')
+    organization = models.CharField(max_length=255, blank=True, null=True)
+    creation_date = models.DateTimeField(default=timezone.now, blank=True, null=True)
+    unactivated_account = models.BooleanField(blank=True, null=True, db_comment="When an account has a required email that hasn't been verified, then the account is not activated")
+    ban_account = models.BooleanField(blank=True, null=True)
+    ongoing_assessment = models.BooleanField(blank=True, null=True, db_comment='Use this as a quick check to see if the user is currently ongoing a test')
+    last_login = models.DateTimeField(default=timezone.now, blank=True, null=True)
+
+    # Link the manager
+    objects = MyUserManager()
+
+    # Tell Django which fields to use for login
+    USERNAME_FIELD = 'user_email' 
+    # Add any other NOT NULL fields here to be prompted in the terminal
+    #  (besides USERNAME_FIELD and 'password' which are included by default)
+    REQUIRED_FIELDS = ['username', 'gender', 'user_first_name', 'user_last_name']
+
+    @property
+    def is_staff(self):
+        # Allow IT_Support to access the admin
+        return self.user_type in ['IT_Support']
+
+    # You must manually define these properties so Django doesn't crash 
+    # when it tries to check permissions in the Admin panel
+    @property
+    def is_superuser(self):
+        return self.user_type == 'IT_Support' # Or however you define a top-level admin
+
+    def has_perm(self, perm, obj=None):
+        return self.is_superuser
+
+    def has_module_perms(self, app_label):
+        return self.is_superuser
+
+    class Meta:
+        managed = False
+        db_table = 'user_profile'
+
 
 class QA(models.Model):
     title = models.CharField(max_length=150, blank=True, null=True)
@@ -26,7 +160,7 @@ class Assessment(models.Model):
     name = models.CharField(max_length=255)
     order = models.CharField(max_length=100, blank=True, null=True, db_comment="Will only be 'null' if it's the copied version assigned to a student for test taking")
     parent_assessment = models.ForeignKey('self', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
-    user = models.ForeignKey('User', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
     points_weight = models.FloatField(blank=True, null=True, db_comment='This is used to make the assessment grade for all students be tilted')
     status = models.TextField(blank=True, null=True, db_comment="closed, open, locked, retake available, submitted, active, inactive, upcoming. 'null' means it's not tied to an individual (like a template course)")  # This field type is a guess.
     is_historic = models.BooleanField(db_comment="When 'true' this is used to determine if the assessment is a static, needs to be unchanged, assessment that a Student is specifically assigned to complete with a single static (with concrete, not variable, inputs) answer tied to the problems. When 'false' it determines the assessment has questions with multiple answers tied to the problems.")
@@ -86,7 +220,7 @@ class BranchGroup(models.Model):
     parent = models.ForeignKey('self', models.DO_NOTHING, db_column='parent', blank=True, null=True)
     location = models.CharField(unique=True, max_length=255)
     order = models.CharField(max_length=100, blank=True, null=True)
-    owner = models.ForeignKey('User', models.DO_NOTHING, db_column='owner')
+    owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     name = models.CharField(max_length=255)
     creation_date = models.DateTimeField(blank=True, null=True)
     modification_date = models.DateTimeField(blank=True, null=True)
@@ -100,7 +234,7 @@ class BranchGroup(models.Model):
 class ContactUs(models.Model):
     subject = models.CharField(max_length=255)
     contact_purpose = models.TextField()  # This field type is a guess.
-    username = models.ForeignKey('User', models.DO_NOTHING, db_column='username', blank=True, null=True)
+    username = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='username', blank=True, null=True)
     respond_to_email = models.CharField(max_length=255)
     first_name = models.CharField(max_length=255, db_comment='So the response knows who to address')
     inquiry = models.TextField()
@@ -113,7 +247,7 @@ class ContactUs(models.Model):
 class Course(models.Model):
     image = models.BinaryField(blank=True, null=True)
     status = models.TextField()  # This field type is a guess.
-    owner = models.ForeignKey('User', models.DO_NOTHING, db_column='owner')
+    owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     short_desc = models.CharField(max_length=255, blank=True, null=True)
     name = models.CharField(max_length=255)
     branch_location = models.ForeignKey(BranchGroup, models.DO_NOTHING, db_column='branch_location', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
@@ -159,7 +293,7 @@ class CustomQuestionDistribution(models.Model):
 
 
 class EmailAuthentication(models.Model):
-    u = models.ForeignKey('User', models.DO_NOTHING, blank=True, null=True)
+    u = models.ForeignKey('UserProfile', models.DO_NOTHING, blank=True, null=True)
     temp_email = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_email CHECK (LOWER(temp_email) = temp_email)')
     code = models.CharField(max_length=255, db_comment='This gets generated per user when email is changed originally. User is emailed, and needs to return the code for verification')
     timeout = models.DateTimeField()
@@ -211,7 +345,7 @@ class EntityUserInput(models.Model):
 class FinalGradeCalculation(models.Model):
     course = models.ForeignKey(Course, models.DO_NOTHING)
     weight = models.IntegerField()
-    user = models.ForeignKey('User', models.DO_NOTHING)
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING)
     assessment = models.ForeignKey(Assessment, models.DO_NOTHING, blank=True, null=True, db_comment="Will only be 'null' if the 'delete: set null' activates")
     assessment_grade_points = models.FloatField(blank=True, null=True, db_comment='This identifies the numeric score of a given assessment for the student')
     assessment_grade_max_points = models.FloatField(blank=True, null=True, db_comment='This identifies the maximum possible score of a given assessment for a student')
@@ -223,7 +357,7 @@ class FinalGradeCalculation(models.Model):
 
 
 class Invoice(models.Model):
-    user = models.ForeignKey('User', models.DO_NOTHING, blank=True, null=True)
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING, blank=True, null=True)
     invoice_number = models.CharField(unique=True, max_length=100)
     status = models.TextField()  # This field type is a guess.
     issue_date = models.DateField()
@@ -243,7 +377,7 @@ class Invoice(models.Model):
 
 
 class LoginLogs(models.Model):
-    u = models.ForeignKey('User', models.DO_NOTHING)
+    u = models.ForeignKey('UserProfile', models.DO_NOTHING)
     log_entry = models.TextField()  # This field type is a guess.
     state = models.BooleanField(blank=True, null=True, db_comment="For login attempts, this will be marked 'true' for successful login or 'false' for unsuccessful login attempts")
     notes = models.TextField(blank=True, null=True)
@@ -255,11 +389,11 @@ class LoginLogs(models.Model):
 
 
 class Notification(models.Model):
-    receiver = models.ForeignKey('User', models.DO_NOTHING, db_column='receiver')
+    receiver = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='receiver')
     content = models.TextField(blank=True, null=True)  # This field type is a guess.
     creation_date = models.DateTimeField(blank=True, null=True)
     title = models.CharField(max_length=255)
-    sender = models.ForeignKey('User', models.DO_NOTHING, db_column='sender', related_name='notification_sender_set', blank=True, null=True)
+    sender = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='sender', related_name='notification_sender_set', blank=True, null=True)
     send_on = models.DateTimeField(blank=True, null=True)
     expr_date = models.DateTimeField(blank=True, null=True, db_comment='If there is a system update for instance, no need to still bring this notification to attention after the update has been scheduled to be completed.')
     reason = models.CharField(max_length=255, blank=True, null=True)
@@ -271,7 +405,7 @@ class Notification(models.Model):
 
 class OpenStudentAssessmentOverwrite(models.Model):
     a = models.OneToOneField(Assessment, models.DO_NOTHING, primary_key=True, db_comment='assessment.id')  # The composite primary key (a_id, u_id) found, that is not supported. The first column is selected.
-    u = models.ForeignKey('User', models.DO_NOTHING, db_comment='user.id')
+    u = models.ForeignKey('UserProfile', models.DO_NOTHING, db_comment='user_profile.id')
     status_open = models.BooleanField(blank=True, null=True, db_comment="true means 'open', false means 'closed'")
 
     class Meta:
@@ -282,8 +416,8 @@ class OpenStudentAssessmentOverwrite(models.Model):
 
 
 class ParentUserCourse(models.Model):
-    student = models.OneToOneField('User', models.DO_NOTHING, primary_key=True)  # The composite primary key (student_id, parent_id, course_id) found, that is not supported. The first column is selected.
-    parent = models.ForeignKey('User', models.DO_NOTHING, related_name='parentusercourse_parent_set')
+    student = models.OneToOneField(UserProfile, models.DO_NOTHING, primary_key=True)  # The composite primary key (student_id, parent_id, course_id) found, that is not supported. The first column is selected.
+    parent = models.ForeignKey(UserProfile, models.DO_NOTHING, related_name='parentusercourse_parent_set')
     course = models.ForeignKey(Course, models.DO_NOTHING)
 
     class Meta:
@@ -366,7 +500,7 @@ class QuestionType(models.Model):
 class SubscriptionTransactions(models.Model):
     transaction_id = models.CharField(primary_key=True, max_length=255, db_comment='Unique ID from payment provider')
     subscription = models.ForeignKey('Subscriptions', models.DO_NOTHING, blank=True, null=True)
-    user = models.ForeignKey('User', models.DO_NOTHING)
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     currency = models.CharField(max_length=10)
     status = models.CharField(max_length=50)
@@ -382,7 +516,7 @@ class SubscriptionTransactions(models.Model):
 
 
 class Subscriptions(models.Model):
-    user = models.OneToOneField('User', models.DO_NOTHING)
+    user = models.OneToOneField('UserProfile', models.DO_NOTHING)
     status = models.CharField(max_length=20, db_comment='active, canceled, past_due')
     subscription_id = models.CharField(unique=True, blank=True, null=True, db_comment='e.g., sub_456')
     customer_id = models.CharField(unique=True, blank=True, null=True, db_comment='e.g., cus_abc123')
@@ -403,10 +537,10 @@ class Ticket(models.Model):
     status = models.TextField(blank=True, null=True)  # This field type is a guess.
     title = models.CharField(max_length=255)
     contact_purpose = models.TextField()  # This field type is a guess.
-    username = models.ForeignKey('User', models.DO_NOTHING, db_column='username', blank=True, null=True)
+    username = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='username', blank=True, null=True)
     respond_to_email = models.CharField(max_length=255)
     first_name = models.CharField(max_length=255, db_comment='So the response knows who to address')
-    assigned_to = models.ForeignKey('User', models.DO_NOTHING, db_column='assigned_to', related_name='ticket_assigned_to_set', blank=True, null=True, db_comment='This would be an IT Support user')
+    assigned_to = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='assigned_to', related_name='ticket_assigned_to_set', blank=True, null=True, db_comment='This would be an IT Support user')
     creation_date = models.DateTimeField()
 
     class Meta:
@@ -425,58 +559,6 @@ class TicketDiscussion(models.Model):
         managed = False
         db_table = 'ticket_discussion'
         db_table_comment = 'Essentially the chat history for a given ticket'
-
-
-class MyUserManager(BaseUserManager):
-    def create_user(self, user_email, username, password=None):
-        if not user_email:
-            raise ValueError('Users must have an email address')
-        user = self.model(
-            user_email=self.normalize_email(user_email),
-            username=username,
-        )
-        user.set_password(password)
-        user.save(using=self._db)
-        return user
-
-    def create_superuser(self, user_email, username, password=None):
-        user = self.create_user(user_email, username, password=password)
-        user.is_admin = True # Note: You may need to add this field to your model
-        user.save(using=self._db)
-        return user
-
-class User(AbstractBaseUser, PermissionsMixin):
-    user_id = models.AutoField(primary_key=True)
-    username = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_username CHECK (LOWER(username) = username)')
-    user_email = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_email CHECK (LOWER(user_email) = user_email)')
-    password = models.CharField(max_length=255, db_column='user_password')
-    user_type = models.TextField()  # This field type is a guess.
-    gender = models.CharField(max_length=5, blank=True, null=True, db_comment="CONSTRAINT chk_Gender CHECK (LOWER(Gender) IN ('m', 'f', 'other'));")
-    user_first_name = models.CharField(max_length=255, blank=True, null=True)
-    user_last_name = models.CharField(max_length=255, blank=True, null=True)
-    user_display_name = models.CharField(max_length=255, blank=True, null=True)
-    user_credit = models.IntegerField(blank=True, null=True, db_comment='Default is null generally; application logic should set 0 when user_type is Teacher')
-    organization = models.CharField(max_length=255, blank=True, null=True)
-    creation_date = models.DateTimeField(blank=True, null=True)
-    unactivated_account = models.BooleanField(db_comment="When an account has a required email that hasn't been verified, then the account is not activated")
-    ban_account = models.BooleanField()
-    ongoing_assessment = models.BooleanField(db_comment='Use this as a quick check to see if the user is currently ongoing a test')
-
-    # Link the manager
-    objects = MyUserManager()
-
-    # Tell Django which fields to use for login
-    USERNAME_FIELD = 'user_email' 
-    REQUIRED_FIELDS = ['username']
-
-    @property
-    def is_staff(self):
-        # Allow IT_Support and Teachers to access the admin
-        return self.user_type in ['IT_Support', 'Teacher']
-
-    class Meta:
-        managed = False
-        db_table = 'user'
 
 
 class UserCourseActivation(models.Model):
@@ -505,7 +587,7 @@ class UserPermissionGroup(models.Model):
 
 class UsersGroup(models.Model):
     branch = models.ForeignKey(BranchGroup, models.DO_NOTHING)
-    user = models.ForeignKey(User, models.DO_NOTHING, blank=True, null=True, db_comment='This or permission_group need to be specified')
+    user = models.ForeignKey(UserProfile, models.DO_NOTHING, blank=True, null=True, db_comment='This or permission_group need to be specified')
     permission_group = models.ForeignKey(PermissionGroup, models.DO_NOTHING, db_column='permission_group', blank=True, null=True, db_comment='This or user_id need to be specified')
     permissions = models.TextField()  # This field type is a guess.
     creation_date = models.DateTimeField(blank=True, null=True)
@@ -518,7 +600,7 @@ class UsersGroup(models.Model):
 
 
 class UsersInCourse(models.Model):
-    user = models.ForeignKey(User, models.DO_NOTHING, blank=True, null=True, db_comment="If it is 'null', then it will show up as a Student Slot for the Teacher's view")
+    user = models.ForeignKey(UserProfile, models.DO_NOTHING, blank=True, null=True, db_comment="If it is 'null', then it will show up as a Student Slot for the Teacher's view")
     course = models.ForeignKey(Course, models.DO_NOTHING)
     user_access = models.TextField()  # This field type is a guess.
     creation_date = models.DateTimeField(blank=True, null=True)

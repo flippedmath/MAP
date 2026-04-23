@@ -89,8 +89,8 @@ DATABASES = {
     }
 }
 
-# Overwrite the django 'User' table to use my database 'User' table:
-AUTH_USER_MODEL = 'assessment_tool.User'
+# Overwrite the django 'User' table to use my database 'UserProfile' table:
+AUTH_USER_MODEL = 'assessment_tool.UserProfile'
 
 
 # Password validation
@@ -111,6 +111,12 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+
+# Make it so the login process allows either the email or username for login:
+AUTHENTICATION_BACKENDS = [
+    'assessment_tool.backends.UsernameOrEmailBackend',
+    'django.contrib.auth.backends.ModelBackend', # Keep this as a fallback
+]
 
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
