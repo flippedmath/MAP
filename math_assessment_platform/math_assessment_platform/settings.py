@@ -48,6 +48,7 @@ MIDDLEWARE = [
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'assessment_tool.middleware.OneSessionPerUserMiddleware', # must come after 'AuthenticationMiddleware' and 'MessageMiddleware'
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -56,7 +57,7 @@ ROOT_URLCONF = 'math_assessment_platform.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -145,3 +146,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 #  to managed=True so it can make temporary dummy databases
 TEST_RUNNER = 'test_runner.ManagedModelTestRunner'
 
+# settings.py
+LOGIN_REDIRECT_URL = 'dashboard'
+LOGOUT_REDIRECT_URL = 'login'
+LOGIN_URL = 'login'

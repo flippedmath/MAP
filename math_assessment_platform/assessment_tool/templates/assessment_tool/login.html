@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="display: flex; justify-content: center; align-items: center; min-height: 70vh;">
+    <div class="card" style="width: 100%; max-width: 400px;">
+        <h2 style="text-align: center; margin-top: 0;">Sign In</h2>
+        
+        {% if form.errors %}
+            <div style="background: #fee2e2; color: #991b1b; padding: 0.8rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid #fecaca; font-size: 0.9rem;">
+                {% for field in form %}
+                    {% for error in field.errors %}
+                        <div>{{ error }}</div>
+                    {% endfor %}
+                {% endfor %}
+                {% for error in form.non_field_errors %}
+                    <div>{{ error }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <form method="post">
+            {% csrf_token %}
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; margin-bottom: 5px; font-weight: 600;">Username or Email</label>
+                <input type="text" name="username" required style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+            </div>
+            <div style="margin-bottom: 1.5rem;">
+                <label style="display: block; margin-bottom: 5px; font-weight: 600;">Password</label>
+                <input type="password" name="password" required style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+            </div>
+            <button type="submit" style="width: 100%; font-weight: 600;">Enter Platform</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

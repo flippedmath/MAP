@@ -110,6 +110,8 @@ class UserProfile(AbstractBaseUser): #, PermissionsMixin):
     ban_account = models.BooleanField(blank=True, null=True)
     ongoing_assessment = models.BooleanField(blank=True, null=True, db_comment='Use this as a quick check to see if the user is currently ongoing a test')
     last_login = models.DateTimeField(default=timezone.now, blank=True, null=True)
+    last_session_key = models.CharField(max_length=40, null=True, blank=True)
+
 
     # Link the manager
     objects = MyUserManager()

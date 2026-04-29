@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h1>Welcome, {{ user.user_first_name }}</h1>
+    <p>Role: <strong>{{ user.user_type }}</strong></p>
+</div>
+
+<div class="dashboard-grid">
+    {% if user.user_type == "Student" %}
+        {% for course in courses %}
+            <div class="card">
+                <h3>{{ course.name }}</h3>
+                <p>Status: Active</p>
+                <button class="btn">View Assessments</button>
+            </div>
+        {% empty %}
+            <div class="card">
+                <p>No courses assigned yet.</p>
+            </div>
+        {% endfor %}
+
+        {% if ongoing_test %}
+            <div class="alert alert-warning">
+                You have an assessment in progress. <a href="#">Resume Test</a>
+            </div>
+        {% endif %}
+
+    {% elif user.user_type == "Teacher" %}
+        <div class="card">
+            <h2>Classroom Management</h2>
+            <a href="{% url 'admin:index' %}" class="btn">Access Question Bank</a>
+            </div>
+
+    {% elif user.user_type == "IT_Support" %}
+        <div class="card">
+            <h2>System Administration</h2>
+            <p>Logged in as IT Support. You have full access to the database via Admin.</p>
+        </div>
+    {% endif %}
+
+    </div>
+
+{% endblock %}
