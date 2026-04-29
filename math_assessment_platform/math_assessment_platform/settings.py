@@ -139,3 +139,9 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# I need to run this before tests are initially run to swap all the models 
+#  to managed=True so it can make temporary dummy databases
+TEST_RUNNER = 'test_runner.ManagedModelTestRunner'
+
