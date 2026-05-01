@@ -87,6 +87,36 @@
         }
 
         button:hover { background-color: #1d4ed8; }
+
+        /* Base style for all messages */
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border: 1px solid transparent;
+            text-align: center;
+        }
+
+        /* Green for success */
+        .alert-success {
+            background-color: #dcfce7;
+            color: #166534;
+            border-color: #bbf7d0;
+        }
+
+        /* Red for error */
+        .alert-error, .alert-danger {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border-color: #fecaca;
+        }
+
+        /* Blue for info */
+        .alert-info {
+            background-color: #e0f2fe;
+            color: #075985;
+            border-color: #bae6fd;
+        }
     </style>
 </head>
 <body>
@@ -106,11 +136,13 @@
     </nav>
     <main class="container">
         {% if messages %}
-            {% for message in messages %}
-                <div style="background: #fee2e2; color: #991b1b; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid #fecaca;">
-                    {{ message }}
-                </div>
-            {% endfor %}
+            <div class="messages-container">
+                {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
         {% endif %}
 
         {% block content %}{% endblock %}

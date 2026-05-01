@@ -61,12 +61,8 @@ def register_teacher(request):
                     )
 
                     # 2. Populate email_authentication table
-                    EmailAuthentication.objects.create(
-                        u_id=user.user_id,
-                        temp_email=form.cleaned_data['email'],
-                        code=secrets.token_urlsafe(20), # Randomized string
-                        timeout=timezone.now() + timedelta(minutes=60) # 60 min future
-                    )
+                    EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+
 
                 return redirect('login')
             except Exception as e:
@@ -85,46 +81,47 @@ from .models import EmailAuthentication, UserProfile
 from django.utils.timezone import make_aware, is_naive
 
 def verify_email(request):
-    # Get the authentication record for this user
-    auth_record = EmailAuthentication.objects.filter(u_id=request.user.user_id).first() # user.user_id?
+    auth_record = EmailAuthentication.objects.filter(u_id=request.user).first()
     
+    # If the button 'resend' was pressed
+    if request.method == 'POST' and 'resend' in request.POST:
+        # We use the email currently stored in the auth_record
+        if auth_record:
+            EmailAuthentication.generate_auth_record(request.user, auth_record.temp_email)
+            messages.success(request, "A new activation code has been sent!")
+            return redirect('verify_email')
+
     if not auth_record:
         # If no record exists but account is unactivated, something is wrong
-        messages.error(request, "If no email_authentication record exists but account is unactivated, something is wrong.")
+        messages.error(request, "If you navigated to a page to authenticate an email. You need to have added a new email first.")
         return redirect('dashboard')
 
-    # Ensure auth_record.timeout is timezone-aware
+    # Time logic
     timeout_time = auth_record.timeout
-    if is_naive(timeout_time):
-        timeout_time = make_aware(timeout_time)
+    if timezone.is_naive(timeout_time):
+        timeout_time = timezone.make_aware(timeout_time)
 
-    now = timezone.now()
-    remaining_time = timeout_time - now # Now both are aware
+    remaining_time = timeout_time - timezone.now()
     minutes_left = int(remaining_time.total_seconds() // 60)
+    is_expired = minutes_left <= 0
 
-    if minutes_left <= 0:
-        messages.error(request, "Your activation code has expired. Please contact support.")
-        # Logic for resending code could go here
-    
-    if request.method == 'POST':
+    if request.method == 'POST' and 'code' in request.POST:
         input_code = request.POST.get('code')
-        
-        if input_code == auth_record.code:
+        if not is_expired and input_code == auth_record.code:
             user = request.user
-            # Update user profile with the temporary email
             user.user_email = auth_record.temp_email
             user.unactivated_account = False
             user.save()
-            
-            # Delete all authentication rows for this user
-            EmailAuthentication.objects.filter(u_id=user.user_id).delete()
-            
-            messages.success(request, "Email authenticated successfully!")
+            EmailAuthentication.objects.filter(u_id=user).delete()
+            messages.success(request, "Account activated successfully!")
             return redirect('dashboard')
+        elif is_expired:
+            messages.error(request, "This code has expired. Please resend a new one.")
         else:
-            messages.error(request, "Invalid code. Please try again.")
+            messages.error(request, "Invalid code.")
 
     return render(request, 'assessment_tool/verify_email.html', {
         'minutes_left': max(0, minutes_left),
-        'temp_email': auth_record.temp_email
+        'temp_email': auth_record.temp_email,
+        'is_expired': is_expired
     })

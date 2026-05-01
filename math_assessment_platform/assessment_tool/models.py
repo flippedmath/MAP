@@ -8,6 +8,9 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager #, PermissionsMixin
 from django.utils import timezone
+import secrets
+from datetime import timedelta
+from django.db import transaction
 
 class MyUserManager(BaseUserManager):
     def _format_user_data(self, gender, first_name, last_name, display_name):
@@ -299,6 +302,20 @@ class EmailAuthentication(models.Model):
     temp_email = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_email CHECK (LOWER(temp_email) = temp_email)')
     code = models.CharField(max_length=255, db_comment='This gets generated per user when email is changed originally. User is emailed, and needs to return the code for verification')
     timeout = models.DateTimeField()
+
+    @classmethod
+    def generate_auth_record(cls, user, email):
+        with transaction.atomic():
+            # 1. Delete any existing codes for this user to prevent clutter
+            cls.objects.filter(u_id=user.user_id).delete()
+            
+            # 2. Create the new record
+            return cls.objects.create(
+                u_id=user.user_id,
+                temp_email=email,
+                code=secrets.token_urlsafe(20), # Randomized string
+                timeout=timezone.now() + timedelta(minutes=60)
+            )
 
     class Meta:
         managed = False

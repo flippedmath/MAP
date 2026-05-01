@@ -4,25 +4,61 @@
 <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh;">
     <div class="card" style="width: 100%; max-width: 450px; text-align: center;">
         <h2 style="margin-top: 0;">Verify Your Email</h2>
-        <p>A code was sent to <strong>{{ temp_email }}</strong>.</p>
         
-        <div style="background: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
-            <span style="font-size: 0.9rem; color: #64748b;">Time remaining to verify:</span>
-            <div style="font-size: 1.5rem; font-weight: bold; color: #2563eb;">
-                {{ minutes_left }} minutes
+        {% if is_expired %}
+            <div style="background: #fee2e2; color: #991b1b; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #fecaca;">
+                <strong>Code Expired</strong><br>
+                The 60-minute window has passed.
             </div>
-        </div>
+            <form method="post">
+                {% csrf_token %}
+                <button type="submit" name="resend" class="btn" style="width: 100%; background-color: #0f172a;">
+                    Resend Activation Code
+                </button>
+            </form>
+        {% else %}
+            <p>A code was sent to <strong>{{ temp_email }}</strong>.</p>
+            <div style="background: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                <span style="font-size: 0.9rem; color: #64748b;">Time remaining:</span>
+                <div style="font-size: 1.5rem; font-weight: bold; color: #2563eb;">
+                    {{ minutes_left }} minutes
+                </div>
+            </div>
 
-        <form method="post">
-            {% csrf_token %}
-            <div style="margin-bottom: 20px;">
-                <input type="text" name="code" placeholder="Enter Authentication Code" required 
-                       style="width: 100%; padding: 12px; border: 2px solid #cbd5e1; border-radius: 8px; text-align: center; font-size: 1.1rem;">
-            </div>
-            <button type="submit" class="btn" style="width: 100%; padding: 12px; font-weight: 600;">
-                Activate Account
-            </button>
-        </form>
+            <form method="post">
+                {% csrf_token %}
+                <div style="margin-bottom: 20px;">
+                    <input type="text" 
+                        name="code" 
+                        placeholder="Enter Code" 
+                        required 
+                        style="width: 100%; 
+                                padding: 12px; 
+                                border: 2px solid #cbd5e1; 
+                                border-radius: 8px; 
+                                text-align: center; 
+                                box-sizing: border-box; /* Added to match width exactly */
+                                font-size: 1.1rem;">
+                </div>
+                
+                <button type="submit" 
+                        class="btn" 
+                        style="width: 100%; 
+                            padding: 12px; 
+                            font-weight: 600; 
+                            box-sizing: border-box; /* Ensures the button matches the input */
+                            cursor: pointer;">
+                    Activate Account
+                </button>
+                
+                <button type="submit" 
+                        name="resend" 
+                        formnovalidate 
+                        style="margin-top: 15px; background: none; border: none; color: #64748b; text-decoration: underline; cursor: pointer; font-size: 0.9rem; width: 100%;">
+                    Resend new code
+                </button>
+            </form>
+        {% endif %}
     </div>
 </div>
 {% endblock %}
