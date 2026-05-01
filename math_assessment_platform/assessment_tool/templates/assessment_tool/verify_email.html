@@ -59,6 +59,35 @@
                 </button>
             </form>
         {% endif %}
+
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 20px 0;">
+
+        <details style="text-align: left; cursor: pointer;">
+            <summary style="color: #64748b; font-size: 0.9rem; text-align: center;">Entered the wrong email? Click here.</summary>
+            
+            <form method="post" style="margin-top: 15px;">
+                {% csrf_token %}
+                <div style="margin-bottom: 10px;">
+                    <label style="display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 5px;">New Email Address</label>
+                    <input type="email" name="new_email" required 
+                        style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+                </div>
+                <button type="submit" name="change_email" class="btn" 
+                        style="width: 100%; background-color: #64748b; padding: 10px; font-size: 0.9rem;">
+                    Update Email & Resend Code
+                </button>
+
+                {% if is_already_active %}
+                    <button type="submit" 
+                            name="cancel_activation" 
+                            formnovalidate 
+                            onclick="return confirm('Are you sure? This will cancel the email verification for {{ temp_email }} and continue to use {{ current_email }}.');"
+                            style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem;">
+                        Cancel and continue with current email
+                    </button>
+                {% endif %}
+            </form>
+        </details>
     </div>
 </div>
 {% endblock %}

@@ -83,14 +83,6 @@ from django.utils.timezone import make_aware, is_naive
 def verify_email(request):
     auth_record = EmailAuthentication.objects.filter(u_id=request.user).first()
     
-    # If the button 'resend' was pressed
-    if request.method == 'POST' and 'resend' in request.POST:
-        # We use the email currently stored in the auth_record
-        if auth_record:
-            EmailAuthentication.generate_auth_record(request.user, auth_record.temp_email)
-            messages.success(request, "A new activation code has been sent!")
-            return redirect('verify_email')
-
     if not auth_record:
         # If no record exists but account is unactivated, something is wrong
         messages.error(request, "If you navigated to a page to authenticate an email. You need to have added a new email first.")
@@ -105,23 +97,63 @@ def verify_email(request):
     minutes_left = int(remaining_time.total_seconds() // 60)
     is_expired = minutes_left <= 0
 
-    if request.method == 'POST' and 'code' in request.POST:
-        input_code = request.POST.get('code')
-        if not is_expired and input_code == auth_record.code:
+    if request.method == 'POST':    
+        if 'change_email' in request.POST:
+            new_email = request.POST.get('new_email', '').strip().lower()
+            
+            if new_email:
+                # 1. Check if the email is already taken by a permanent user 
+                # or a pending registration (excluding the current user's record)
+                email_exists = UserProfile.objects.filter(user_email=new_email).exists()
+                pending_exists = EmailAuthentication.objects.filter(temp_email=new_email).exclude(u_id=request.user.user_id).exists()
+
+                if email_exists or pending_exists:
+                    messages.error(request, f"The email {new_email} is already associated with an account.")
+                else:
+                    # 2. Proceed with update if unique
+                    EmailAuthentication.generate_auth_record(request.user, new_email)
+                    messages.success(request, f"Email changed to {new_email}. A new code has been sent.")
+                    return redirect('verify_email')
+
+        # If the button 'resend' was pressed
+        if 'resend' in request.POST:
+            # We use the email currently stored in the auth_record
+            if auth_record:
+                EmailAuthentication.generate_auth_record(request.user, auth_record.temp_email)
+                messages.success(request, "A new activation code has been sent!")
+                return redirect('verify_email')
+
+        if 'code' in request.POST:
+            input_code = request.POST.get('code')
+            if not is_expired and input_code == auth_record.code:
+                user = request.user
+                user.user_email = auth_record.temp_email
+                user.unactivated_account = False
+                user.save()
+                EmailAuthentication.objects.filter(u_id=user).delete()
+                messages.success(request, "Account activated successfully!")
+                return redirect('dashboard')
+            elif is_expired:
+                messages.error(request, "This code has expired. Please resend a new one.")
+            else:
+                messages.error(request, "Invalid code.")
+    
+        if 'cancel_activation' in request.POST:
             user = request.user
-            user.user_email = auth_record.temp_email
+            # Mark the account as active
             user.unactivated_account = False
             user.save()
-            EmailAuthentication.objects.filter(u_id=user).delete()
-            messages.success(request, "Account activated successfully!")
+            
+            # Wipe the pending authentication data
+            EmailAuthentication.objects.filter(u_id=user.user_id).delete()
+            
+            messages.info(request, "Email verification cancelled. Your account is now active with your current email.")
             return redirect('dashboard')
-        elif is_expired:
-            messages.error(request, "This code has expired. Please resend a new one.")
-        else:
-            messages.error(request, "Invalid code.")
 
     return render(request, 'assessment_tool/verify_email.html', {
         'minutes_left': max(0, minutes_left),
         'temp_email': auth_record.temp_email,
-        'is_expired': is_expired
+        'is_expired': is_expired,
+        'is_already_active': not request.user.unactivated_account, # True if they are updating email, false if they are a brand new user
+        'current_email': request.user.user_email
     })
