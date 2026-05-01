@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="display: flex; justify-content: center; align-items: center; min-height: 60vh;">
+    <div class="card" style="width: 100%; max-width: 450px; text-align: center;">
+        <h2 style="margin-top: 0;">Verify Your Email</h2>
+        <p>A code was sent to <strong>{{ temp_email }}</strong>.</p>
+        
+        <div style="background: #f1f5f9; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <span style="font-size: 0.9rem; color: #64748b;">Time remaining to verify:</span>
+            <div style="font-size: 1.5rem; font-weight: bold; color: #2563eb;">
+                {{ minutes_left }} minutes
+            </div>
+        </div>
+
+        <form method="post">
+            {% csrf_token %}
+            <div style="margin-bottom: 20px;">
+                <input type="text" name="code" placeholder="Enter Authentication Code" required 
+                       style="width: 100%; padding: 12px; border: 2px solid #cbd5e1; border-radius: 8px; text-align: center; font-size: 1.1rem;">
+            </div>
+            <button type="submit" class="btn" style="width: 100%; padding: 12px; font-weight: 600;">
+                Activate Account
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

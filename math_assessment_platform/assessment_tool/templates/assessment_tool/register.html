@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="display: flex; justify-content: center; padding: 20px;">
+    <div class="card" style="width: 100%; max-width: 600px;">
+        <h2 style="text-align: center; margin-bottom: 20px;">Create Teacher Account</h2>
+        
+        <form method="post">
+            {% csrf_token %}
+            
+            <!-- Show general errors that aren't tied to one specific field -->
+            {% if form.non_field_errors %}
+                <div style="background: #fee2e2; color: #991b1b; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #fecaca;">
+                    {{ form.non_field_errors }}
+                </div>
+            {% endif %}
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                {% for field in form %}
+                    <div style="margin-bottom: 10px; {% if field.name == 'organization_name' %}grid-column: span 2;{% endif %}">
+                        <label style="display: block; font-weight: 600; margin-bottom: 5px;">
+                            {{ field.label }} {% if field.field.required %}<span style="color: red;">*</span>{% endif %}
+                        </label>
+                        
+                        <!-- Ensure the widget renders correctly -->
+                        {{ field }}
+                        
+                        {% if field.errors %}
+                            {% for error in field.errors %}
+                                <small style="color: #991b1b; display: block; font-weight: bold;">{{ error }}</small>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+
+            <button type="submit" class="btn" style="width: 100%; margin-top: 20px; padding: 12px;">Register</button>
+        </form>
+    </div>
+</div>
+
+<style>
+    input, select {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #cbd5e1;
+        border-radius: 6px;
+        box-sizing: border-box;
+    }
+</style>
+{% endblock %}

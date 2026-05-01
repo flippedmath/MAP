@@ -8,6 +8,22 @@ class OneSessionPerUserMiddleware:
 
     def __call__(self, request):
         if request.user.is_authenticated:
+            ###############
+            # force user to authenticate email before navigating elsewhere
+            ###############
+            # Check if account is unactivated
+            if request.user.unactivated_account:
+                # Define paths that are ALLOWED (use the actual URL paths)
+                # Adjust these strings to match your actual URLs in urls.py
+                allowed_paths = ['/verify/', '/logout/', '/logout', '/verify']
+                
+                # If the current path is NOT in our allowed list, force redirect
+                if request.path_info not in allowed_paths:
+                    return redirect('verify_email')
+
+            ###############
+            # single sign on logic follows
+            ###############
             stored_session_key = request.user.last_session_key
             
             # If a session exists in DB and doesn't match current browser session

@@ -65,7 +65,7 @@ class MyUserManager(BaseUserManager):
     
     def create_teacher_user(self, **fields):
         fields.setdefault('user_type', 'Teacher')
-        fields.setdefault('unactivated_account', False)
+        fields.setdefault('unactivated_account', True)
         fields.setdefault('ongoing_assessment', False)
         fields.setdefault('ban_account', False)
         fields.setdefault('user_credit', 0)
