@@ -1,0 +1,58 @@
+{% load db_extras %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Internal DB Viewer</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; color: #334155; background: #f8fafc; }
+        .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
+        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+        th { background: #64748b; color: white; text-align: left; padding: 12px; font-size: 0.85rem; text-transform: uppercase; }
+        td { padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 0.9rem; }
+        tr:hover { background-color: #f1f5f9; }
+        select, button { padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1; cursor: pointer; }
+        .btn-refresh { background: #3b82f6; color: white; border: none; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <h2>Database Table Viewer</h2>
+
+    <div class="controls">
+        <form method="GET" id="tableForm">
+            <label for="table">Select Table:</label>
+            <select name="table" onchange="document.getElementById('tableForm').submit()">
+                <option value="user_profile" {% if selected_table == 'user_profile' %}selected{% endif %}>User Profiles</option>
+                <option value="email_authentication" {% if selected_table == 'email_authentication' %}selected{% endif %}>Email Authentications</option>
+            </select>
+        </form>
+
+        <button class="btn-refresh" onclick="window.location.reload()">Refresh Data</button>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                {% for header in headers %}
+                    <th>{{ header }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in data %}
+                <tr>
+                    {% for header in headers %}
+                        <!-- Use dynamic attribute fetching -->
+                        <td>{{ row|get_attr:header }}</td>
+                    {% endfor %}
+                </tr>
+            {% empty %}
+                <tr>
+                    <td colspan="{{ headers|length }}" style="text-align: center;">No data found in this table.</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+</body>
+</html>

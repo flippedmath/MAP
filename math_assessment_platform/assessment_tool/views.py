@@ -157,3 +157,30 @@ def verify_email(request):
         'is_already_active': not request.user.unactivated_account, # True if they are updating email, false if they are a brand new user
         'current_email': request.user.user_email
     })
+
+
+from django.apps import apps
+from django.contrib.auth.decorators import user_passes_test
+
+@user_passes_test(lambda u: u.is_superuser, login_url='/dashboard/')
+def database_viewer(request):
+    # Get the table selection from the GET request
+    table_name = request.GET.get('table', 'user_profile')
+    
+    # Map the dropdown values to the actual Models
+    model_map = {
+        'user_profile': UserProfile,
+        'email_authentication': EmailAuthentication,
+    }
+    
+    selected_model = model_map.get(table_name, UserProfile)
+    
+    # Fetch all data and field names for the headers
+    data = selected_model.objects.all()
+    headers = [field.name for field in selected_model._meta.fields]
+    
+    return render(request, 'assessment_tool/db_viewer.html', {
+        'data': data,
+        'headers': headers,
+        'selected_table': table_name
+    })
