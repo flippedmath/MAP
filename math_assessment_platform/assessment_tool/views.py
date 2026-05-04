@@ -35,6 +35,7 @@ import secrets
 from django.utils import timezone
 from datetime import timedelta
 from django.contrib import messages
+from django.db import IntegrityError
 
 def register_teacher(request):
     # If the user is already logged in, don't let them register
@@ -48,23 +49,33 @@ def register_teacher(request):
             try:
                 with transaction.atomic():
                     # 1. Create the user using your manager method
-                    from .models import UserProfile
-                    user = UserProfile.objects.create_teacher_user(
-                        username=form.cleaned_data['username'],
-                        user_email=form.cleaned_data['email'],
-                        password=form.cleaned_data['password'],
-                        user_first_name=form.cleaned_data['first_name'],
-                        user_last_name=form.cleaned_data['last_name'],
-                        gender=form.cleaned_data['gender'],
-                        organization=form.cleaned_data['organization_name'],
-                        user_display_name=form.cleaned_data.get('display_name')
-                    )
+                    try:
+                        user = UserProfile.objects.create_teacher_user(
+                            username=form.cleaned_data['username'],
+                            user_email=form.cleaned_data['email'],
+                            password=form.cleaned_data['password'],
+                            user_first_name=form.cleaned_data['first_name'],
+                            user_last_name=form.cleaned_data['last_name'],
+                            gender=form.cleaned_data['gender'],
+                            organization=form.cleaned_data['organization_name'],
+                            user_display_name=form.cleaned_data.get('display_name')
+                        )
 
-                    # 2. Populate email_authentication table
-                    EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                        # 2. Populate email_authentication table
+                        EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
 
+                        return redirect('login')
 
-                return redirect('login')
+                    except IntegrityError as e:
+                        err_msg = str(e)
+            
+                        if 'unique_lower_user_email' in err_msg or 'user_email' in err_msg:
+                            messages.error(request, "That email is already registered. Please use a different one or log in.")
+                        elif 'user_username_key' in err_msg or 'unique_lower_username' in err_msg:
+                            messages.error(request, "That username is already taken. Please choose another.")
+                        else:
+                            messages.error(request, "A database error occurred. Please try again.")
+
             except Exception as e:
                 form.add_error(None, f"An error occurred during registration: {e}")
     else:
@@ -104,7 +115,7 @@ def verify_email(request):
             if new_email:
                 # 1. Check for existence using case-insensitive lookup
                 # This covers all bases: 'Existing@Email.com' or 'existing@email.com'
-                email_exists = UserProfile.objects.filter(user_email__iexact=new_email).exists()
+                email_exists = UserProfile.objects.filter(user_email__iexact=new_email).exclude(user_id=request.user.user_id).exists()
                 pending_exists = EmailAuthentication.objects.filter(temp_email__iexact=new_email).exclude(u_id=request.user.user_id).exists()
 
                 if email_exists or pending_exists:
