@@ -11,6 +11,7 @@ from django.utils import timezone
 import secrets
 from datetime import timedelta
 from django.db import transaction
+from django.db.models.functions import Lower
 
 class MyUserManager(BaseUserManager):
     def _format_user_data(self, gender, first_name, last_name, display_name):
@@ -142,9 +143,28 @@ class UserProfile(AbstractBaseUser): #, PermissionsMixin):
     def has_module_perms(self, app_label):
         return self.is_superuser
 
+    def save(self, *args, **kwargs):
+        # Force username to lowercase before hitting the DB
+        if self.username:
+            self.username = self.username.lower()
+        super().save(*args, **kwargs)
+
+        # Note: The email from the '@' on is forced to lowercase in MyUserManage using 'normalize_email',
+        #  but I won't allow a second user to have an email that matches if they are both lowercase
+
     class Meta:
         managed = False
         db_table = 'user_profile'
+        constraints = [
+            models.UniqueConstraint(
+                Lower('user_email'), 
+                name='unique_email_case_insensitive'
+            ),
+            models.UniqueConstraint(
+                Lower('username'), 
+                name='unique_username_case_insensitive'
+            )
+        ]
 
 
 class QA(models.Model):
@@ -305,6 +325,9 @@ class EmailAuthentication(models.Model):
 
     @classmethod
     def generate_auth_record(cls, user, email):
+        # Normalize the email (lowercase domain, etc.)
+        normalized_email = BaseUserManager.normalize_email(email)
+
         with transaction.atomic():
             # 1. Delete any existing codes for this user to prevent clutter
             cls.objects.filter(u_id=user.user_id).delete()
@@ -312,7 +335,7 @@ class EmailAuthentication(models.Model):
             # 2. Create the new record
             return cls.objects.create(
                 u_id=user.user_id,
-                temp_email=email,
+                temp_email=normalized_email,
                 code=secrets.token_urlsafe(20), # Randomized string
                 timeout=timezone.now() + timedelta(minutes=60)
             )
@@ -320,6 +343,12 @@ class EmailAuthentication(models.Model):
     class Meta:
         managed = False
         db_table = 'email_authentication'
+        constraints = [
+            models.UniqueConstraint(
+                Lower('temp_email'), 
+                name='unique_temp_email_case_insensitive'
+            )
+        ]
 
 
 class EntitySegment(models.Model):

@@ -102,10 +102,10 @@ def verify_email(request):
             new_email = request.POST.get('new_email', '').strip().lower()
             
             if new_email:
-                # 1. Check if the email is already taken by a permanent user 
-                # or a pending registration (excluding the current user's record)
-                email_exists = UserProfile.objects.filter(user_email=new_email).exists()
-                pending_exists = EmailAuthentication.objects.filter(temp_email=new_email).exclude(u_id=request.user.user_id).exists()
+                # 1. Check for existence using case-insensitive lookup
+                # This covers all bases: 'Existing@Email.com' or 'existing@email.com'
+                email_exists = UserProfile.objects.filter(user_email__iexact=new_email).exists()
+                pending_exists = EmailAuthentication.objects.filter(temp_email__iexact=new_email).exclude(u_id=request.user.user_id).exists()
 
                 if email_exists or pending_exists:
                     messages.error(request, f"The email {new_email} is already associated with an account.")

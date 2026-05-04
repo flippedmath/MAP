@@ -6,7 +6,7 @@ class UsernameOrEmailBackend(ModelBackend):
     def authenticate(self, request, username=None, password=None, **kwargs):
         try:
             # Look for the user where username OR user_email matches the input
-            user = UserProfile.objects.get(Q(username=username) | Q(user_email=username))
+            user = UserProfile.objects.get(Q(username__iexact=username) | Q(user_email__iexact=username))
         except UserProfile.DoesNotExist:
             return None
 
