@@ -1,0 +1,53 @@
+<div class="course-container">
+    <h2>Course Management ({{ user_type }})</h2>
+
+    <!-- Section: Create New from Template -->
+    <div class="action-bar">
+        <form method="POST">
+            {% csrf_token %}
+            <label>Create New Course from:</label>
+            <select name="source_course_id">
+                {% for course in courses %}
+                    {% if user_type == 'IT_Support' and course.status == 'developing' %}
+                        <option value="{{ course.id }}">
+                            [Dev] {{ course.course_name }} ({{ course.assessments.count }} Assessments)
+                        </option>
+                    {% elif course.status == 'template' %}
+                        <option value="{{ course.id }}">
+                            [Template] {{ course.course_name }} ({{ course.assessments.count }} Assessments)
+                        </option>
+                    {% endif %}
+                {% endfor %}
+            </select>
+            <button type="submit" name="copy_course" class="btn-create">Clone Selected</button>
+        </form>
+    </div>
+
+    <!-- Section: Course Table -->
+    <table>
+        <thead>
+            <tr>
+                <th>Course Name</th>
+                <th>Status</th>
+                {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for course in courses %}
+            <tr class="status-{{ course.status }}">
+                <td>{{ course.course_name }}</td>
+                <td><span class="badge">{{ course.status }}</span></td>
+                {% if user_type == 'IT_Support' %}
+                    <td>{{ course.owner.username }}</td> <!-- -->
+                {% endif %}
+                <td>
+                    {% if course.owner == request.user or user_type == 'IT_Support' %}
+                        <a href="#">Edit</a>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

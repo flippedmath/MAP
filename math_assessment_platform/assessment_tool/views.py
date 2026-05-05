@@ -195,3 +195,50 @@ def database_viewer(request):
         'headers': headers,
         'selected_table': table_name
     })
+
+
+from django.shortcuts import get_object_or_404
+from django.contrib.auth.decorators import login_required
+from django.db.models import Q
+from .models import Course
+
+@login_required
+def course_list_view(request):
+    user = request.user
+    
+    # 1. Logic for Visibility
+    if user.user_type == 'IT_Support':
+        # IT Support sees all courses
+        courses = Course.objects.all().select_related('owner')
+    elif user.user_type == 'Teacher':
+        # Teachers see their own courses OR any template
+        courses = Course.objects.filter(
+            Q(owner=user) | Q(status='template')
+        ).select_related('owner')
+    else:
+        # Placeholder for Student view
+        return render(request, 'courses/student_placeholder.html')
+
+    # 2. Handling the "Create by Copying" (POST logic)
+    if request.method == 'POST' and 'copy_course' in request.POST:
+        source_id = request.POST.get('source_course_id')
+        source_course = get_object_or_404(Course, id=source_id)
+        
+        new_status = None
+        if user.user_type == 'IT_Support' and source_course.status == 'developing':
+            new_status = 'template'
+        elif source_course.status == 'template':
+            new_status = 'active'
+
+        if new_status:
+            # The model method handles the entire chain of references
+            source_course.duplicate_course(new_owner=user, new_status=new_status)
+            messages.success(request, f"Full course chain cloned as {new_status}.")
+            return redirect('course_list')
+        else:
+            messages.error(request, "Permission denied for this specific copy operation.")
+
+    return render(request, 'assessment_tool/course_page.html', {
+        'courses': courses, 
+        'user_type': user.user_type
+    })

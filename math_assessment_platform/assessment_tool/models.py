@@ -181,7 +181,7 @@ class QA(models.Model):
 
 
 class Assessment(models.Model):
-    course = models.ForeignKey('Course', models.DO_NOTHING)
+    course = models.ForeignKey('Course', models.DO_NOTHING, related_name='assessments')
     name = models.CharField(max_length=255)
     order = models.CharField(max_length=100, blank=True, null=True, db_comment="Will only be 'null' if it's the copied version assigned to a student for test taking")
     parent_assessment = models.ForeignKey('self', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
@@ -194,6 +194,25 @@ class Assessment(models.Model):
     end_time = models.DateTimeField(blank=True, null=True, db_comment="only an available option for the 'parent' assessment")
     creation_date = models.DateTimeField(blank=True, null=True)
     modified_date = models.DateTimeField(blank=True, null=True)
+
+    def duplicate_assessment(self, new_course, new_owner):
+        """Duplicates the assessment and all its related questions."""
+        new_assessment = self
+        new_assessment.pk = None
+        new_assessment.id = None
+        new_assessment.order = self.order
+        new_assessment.name = self.name
+        new_assessment.course = new_course
+        new_assessment.owner = new_owner
+        # new_assessment.branch_location = ??
+        new_assessment.save()
+
+        # Trigger duplication for all related problems
+        for problem in self.problems.all():
+            problem.duplicate_problem(new_assessment)
+        
+        return new_assessment
+
 
     class Meta:
         managed = False
@@ -271,7 +290,7 @@ class ContactUs(models.Model):
 
 class Course(models.Model):
     image = models.BinaryField(blank=True, null=True)
-    status = models.TextField()  # This field type is a guess.
+    status = models.TextField()  # Enum for one of these: 'active', 'template', 'hidden', 'developing', 'closed', 'deleted'
     owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     short_desc = models.CharField(max_length=255, blank=True, null=True)
     name = models.CharField(max_length=255)
@@ -279,6 +298,26 @@ class Course(models.Model):
     creation_date = models.DateTimeField(blank=True, null=True)
     version = models.CharField(max_length=100, blank=True, null=True)
     introduction = models.TextField(blank=True, null=True)  # This field type is a guess.
+
+    def duplicate_course(self, new_owner, new_status):
+        """Duplicates the course and all its related assessments."""
+        with transaction.atomic():
+            new_course = self
+            new_course.pk = None
+            new_course.id = None
+            new_course.owner = new_owner
+            new_course.status = new_status
+            new_course.short_desc = self.short_desc
+            new_course.introduction = self.introduction
+            # new_course.version = # It's different depending on the status that it gets changed to. Incorporate later
+            new_course.course_name = f"Copy of {self.course_name}"
+            new_course.save()
+
+            # Trigger duplication for all related assessments
+            for assessment in self.assessments.all():
+                assessment.duplicate_assessment(new_course, new_owner)
+            
+            return new_course
 
     class Meta:
         managed = False
@@ -490,6 +529,20 @@ class Problem(models.Model):
     branch_location = models.ForeignKey(BranchGroup, models.DO_NOTHING, db_column='branch_location', db_comment="Will always have a branch location. If 'aqg_id' is null, then it's an isolated problem, if 'aqg_is' is not null, then it's part of a course->problem branch")
     problem_status = models.TextField()  # This field type is a guess.
     title = models.CharField(max_length=255)
+
+    def duplicate_problem(self, new_assessment):
+        """Duplicates the problem and all its related options."""
+        new_problem = self
+        new_problem.pk = None
+        new_problem.id = None
+        new_problem.assessment = new_assessment
+        new_problem.save()
+
+        # Trigger duplication for all related multiple-choice options
+        for option in self.options.all():
+            option.duplicate_option(new_problem)
+            
+        return new_problem
 
     class Meta:
         managed = False
