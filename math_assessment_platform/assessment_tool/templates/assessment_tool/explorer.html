@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'assessment_tool/css/explorer.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="finder-container" id="finder-explorer">
+    <!-- Initial Column -->
+    <div class="finder-column" id="col-root" data-level="0">
+        <div class="item" onclick="loadFolder('{{ root_folder.id }}', 1)">
+            <i class="fas fa-home icon-folder"></i> 
+            <span>{{ root_folder.name }}</span>
+            <i class="fas fa-chevron-right arrow"></i>
+        </div>
+    </div>
+    
+    <!-- Dynamic columns will appear here -->
+    <div id="dynamic-columns" style="display: flex;"></div>
+</div>
+
+<script>
+// Add a level parameter to your initial call in explorer.html: 
+// onclick="loadFolder('{{ root_folder.id }}', 0)"
+
+async function loadFolder(folderId, level) {
+    const container = document.getElementById('dynamic-columns');
+    
+    // This removes columns that are at the level we are about to fill or deeper
+    const columns = container.querySelectorAll('.finder-column');
+    columns.forEach(col => {
+        if (parseInt(col.dataset.level) >= level) {
+            col.remove();
+        }
+    });
+
+    // 2. Fetch the new column
+    try {
+        const response = await fetch(`/get-folder-contents/${folderId}/?level=${level}`);
+        const html = await response.text();
+
+        const newCol = document.createElement('div');
+        newCol.className = 'finder-column';
+        newCol.dataset.level = level;
+        newCol.innerHTML = html;
+        container.appendChild(newCol);
+        
+        // Scroll right
+        document.getElementById('finder-explorer').scrollLeft += 300;
+    } catch (e) { console.error("Error:", e); }
+}
+
+async function loadPreview(itemId, type, level) {
+    const container = document.getElementById('dynamic-columns');
+    
+    // Clear right columns
+    const columns = container.querySelectorAll('.finder-column');
+    columns.forEach(col => {
+        if (parseInt(col.dataset.level) >= level) col.remove();
+    });
+
+    try {
+        const response = await fetch(`/get-item-preview/${type}/${itemId}/`);
+        const html = await response.text();
+
+        const previewCol = document.createElement('div');
+        previewCol.className = 'finder-column preview-column';
+        previewCol.dataset.level = level;
+        previewCol.innerHTML = html;
+        container.appendChild(previewCol);
+    } catch (e) { console.error("Error:", e); }
+}
+</script>
+{% endblock %}

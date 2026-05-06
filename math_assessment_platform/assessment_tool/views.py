@@ -182,6 +182,8 @@ def database_viewer(request):
     model_map = {
         'user_profile': UserProfile,
         'email_authentication': EmailAuthentication,
+        'course': Course,
+        'branch_group': BranchGroup,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
@@ -217,28 +219,106 @@ def course_list_view(request):
         ).select_related('owner')
     else:
         # Placeholder for Student view
-        return render(request, 'courses/student_placeholder.html')
+        return render(request, 'assessment_tool/student_placeholder.html', {
+            'message': "Student dashboard is coming soon!"
+        })
 
-    # 2. Handling the "Create by Copying" (POST logic)
-    if request.method == 'POST' and 'copy_course' in request.POST:
-        source_id = request.POST.get('source_course_id')
-        source_course = get_object_or_404(Course, id=source_id)
+    if request.method == 'POST':
+        # 2. Handling the "Create by Copying" (POST logic)
+        if 'copy_course' in request.POST:
+            source_id = request.POST.get('source_course_id')
+            source_course = get_object_or_404(Course, id=source_id)
+            
+            new_status = None
+            if user.user_type == 'IT_Support' and source_course.status == 'developing':
+                new_status = 'template'
+            elif source_course.status == 'template':
+                new_status = 'active'
+
+            if new_status:
+                # The model method handles the entire chain of references
+                source_course.duplicate_course(new_owner=user, new_status=new_status)
+                messages.success(request, f"Full course chain cloned as {new_status}.")
+                return redirect('course_list')
+            else:
+                messages.error(request, "Permission denied for this specific copy operation.")
         
-        new_status = None
-        if user.user_type == 'IT_Support' and source_course.status == 'developing':
-            new_status = 'template'
-        elif source_course.status == 'template':
-            new_status = 'active'
-
-        if new_status:
-            # The model method handles the entire chain of references
-            source_course.duplicate_course(new_owner=user, new_status=new_status)
-            messages.success(request, f"Full course chain cloned as {new_status}.")
+        # HANDLE NEW DEVELOPING COURSE (IT_Support Only)
+        elif 'create_developing' in request.POST and user.user_type == 'IT_Support':
+            name = request.POST.get('course_name')
+            desc = request.POST.get('short_description', '')
+            if name:
+                Course.create_developing(owner=user, name=name, short_desc=desc)
+                messages.success(request, f"New developing course '{name}' created.")
+            else:
+                messages.error(request, "Course name is required.")
             return redirect('course_list')
-        else:
-            messages.error(request, "Permission denied for this specific copy operation.")
+
 
     return render(request, 'assessment_tool/course_page.html', {
         'courses': courses, 
         'user_type': user.user_type
+    })
+
+
+from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup
+
+@login_required
+@user_passes_test(lambda u: u.user_type in ['Teacher', 'IT_Support'], login_url='/dashboard/')
+def file_explorer(request):
+    # Get the root folder for the user
+    root_folder = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
+    
+    if not root_folder:
+        # Optional: Trigger the folder creation logic here if it's missing
+        return render(request, 'assessment_tool/explorer_error.html', {
+            'error': "Your folder structure hasn't been initialized. Please contact IT."
+        })
+
+    # We pass the root folder initially; Javascript will handle loading sub-columns
+    return render(request, 'assessment_tool/explorer.html', {
+        'root_folder': root_folder,
+    })
+
+# AJAX view to get contents of a specific folder
+
+def get_folder_contents(request, group_id):
+    # This will return a 404 page instead of a DoesNotExist crash
+    group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
+    
+    contents = {
+        'folders': BranchGroup.objects.filter(parent=group),
+        'courses': Course.objects.filter(branch_location=group),
+        'assessments': Assessment.objects.filter(branch_location=group),
+        'problems': Problem.objects.filter(branch_location=group),
+        'question_selection': CustomQuestionDistribution.objects.filter(assigned_folder=group),
+        'assessment_selection': AssessmentQuestionGroup.objects.filter(branch_location=group),
+    }
+    return render(request, 'assessment_tool/partials/column.html', {
+        'contents': contents,
+        'level': int(request.GET.get('level', 1))
+    })
+
+from django.http import HttpResponseForbidden
+
+@login_required
+def get_item_preview(request, item_type, item_id):
+    model_map = {
+        'course': Course,
+        'assessment': Assessment,
+        'problem': Problem,
+        'question_selection': CustomQuestionDistribution,
+        'assessment_selection': AssessmentQuestionGroup,
+    }
+    
+    model = model_map.get(item_type)
+    item = get_object_or_404(model, id=item_id)
+    
+    # Permissions check: IT_Support sees all, Teachers see owned
+    if request.user.user_type != 'IT_Support' and item.owner != request.user:
+        return HttpResponseForbidden()
+
+    return render(request, 'assessment_tool/partials/preview.html', {
+        'item': item,
+        'type': item_type
     })

@@ -1,0 +1,45 @@
+.finder-container {
+    display: flex;
+    overflow-x: auto;
+    height: 80vh;
+    background: #f5f5f7;
+    border: 1px solid #d1d1d6;
+    border-radius: 10px;
+}
+.finder-column {
+    min-width: 250px;
+    border-right: 1px solid #d1d1d6;
+    background: white;
+    padding: 10px 0;
+}
+.item {
+    padding: 8px 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.item:hover { background: #e8e8ed; }
+.item.selected { background: #007aff; color: white; }
+
+/* Unique Branding for Table Sources */
+.icon-folder { color: #5ac8fa; }              /* Sky Blue for Folders */
+.icon-course { color: #ff9500; }              /* Orange for Courses */
+.icon-assessment { color: #af52de; }          /* Purple for Assessments */
+.icon-problem { color: #ff3b30; }             /* Red for Problems */
+.icon-customquestiondist { color: #feab30; }  /* Golden Yellow for CustomQuestionDistribution */
+.icon-assessmentquest { color: #bffb39; }     /* Green for AssessmentQuestionGroup */
+
+.item-file {
+    cursor: default; /* Items don't drill down further like folders do */
+}
+
+.arrow {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: #c7c7cc;
+}
+
+.item.selected .arrow {
+    color: white;
+}

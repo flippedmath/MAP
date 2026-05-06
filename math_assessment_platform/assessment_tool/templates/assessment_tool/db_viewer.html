@@ -24,6 +24,8 @@
             <select name="table" onchange="document.getElementById('tableForm').submit()">
                 <option value="user_profile" {% if selected_table == 'user_profile' %}selected{% endif %}>User Profiles</option>
                 <option value="email_authentication" {% if selected_table == 'email_authentication' %}selected{% endif %}>Email Authentications</option>
+                <option value="course" {% if selected_table == 'course' %}selected{% endif %}>Courses</option>
+                <option value="branch_group" {% if selected_table == 'branch_group' %}selected{% endif %}>Branch Group</option>
             </select>
         </form>
 

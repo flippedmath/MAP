@@ -299,6 +299,17 @@ class Course(models.Model):
     version = models.CharField(max_length=100, blank=True, null=True)
     introduction = models.TextField(blank=True, null=True)  # This field type is a guess.
 
+    @classmethod
+    def create_developing(cls, owner, name, short_desc):
+        """Creates a fresh course with 'developing' status."""
+        return cls.objects.create(
+            owner=owner,
+            status="developing",
+            name=name,
+            short_desc=short_desc,
+            # version-> firstnumber+1.0.0.0
+        )
+
     def duplicate_course(self, new_owner, new_status):
         """Duplicates the course and all its related assessments."""
         with transaction.atomic():
@@ -711,3 +722,30 @@ class UsersInCourse(models.Model):
         db_table = 'users_in_course'
         unique_together = (('user', 'course'),)
         db_table_comment = 'If a user is listed in this table, then they automatically are assigned to the course. Teachers will show up as Teachers, Students will show up as Students.'
+
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+@receiver(post_save, sender=UserProfile)
+def create_user_folder_structure(sender, instance, created, **kwargs):
+    if created:
+        # 1. Create the Master Root Folder
+        root = BranchGroup.objects.create(
+            name=instance.username,
+            owner=instance,
+            parent=None,
+            location=f"{instance.username}_root",
+        )
+
+        # 2. Define the default sub-folders
+        default_folders = ['courses', 'assessments', 'standalone problems']
+
+        # 3. Create each sub-folder nested under the root
+        for folder_name in default_folders:
+            BranchGroup.objects.create(
+                name=folder_name,
+                owner=instance,
+                parent=root,
+                location=f"{instance.username}/{folder_name.replace(' ', '_')}",
+            )

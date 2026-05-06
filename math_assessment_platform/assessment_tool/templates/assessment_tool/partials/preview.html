@@ -1,0 +1,42 @@
+<div class="preview-content" style="padding: 20px; text-align: center;">
+    <div class="preview-icon-large">
+        {% if type == 'course' %}
+            <i class="fas fa-graduation-cap icon-course" style="font-size: 4rem;"></i>
+        {% elif type == 'assessment' %}
+            <i class="fas fa-file-signature icon-assessment" style="font-size: 4rem;"></i>
+        {% elif type == 'problem' %}
+            <i class="fas fa-question-circle icon-problem" style="font-size: 4rem;"></i>
+        {% elif type == 'question_selection' %}
+            <i class="fas fa-random icon-customquestiondist" style="font-size: 4rem;"></i>
+        {% elif type == 'assessment_selection' %}
+            <i class="fas fa-list-ol icon-assessmentquest" style="font-size: 4rem;"></i>
+        {% endif %}
+    </div>
+    
+    <h3 style="margin-top: 20px;">
+        {{ item.name|default:item.course_name|default:item.title|default:item.group_name }}
+    </h3>
+    <hr style="border: 0; border-top: 1px solid #d1d1d6; margin: 20px 0;">
+    
+    <div class="preview-metadata" style="text-align: left; font-size: 0.9rem; color: #3a3a3c;">
+        <p><strong>Owner:</strong> {{ item.owner.username }}</p>
+        
+        {# Specific details for Question Distribution #}
+        {% if type == 'question_selection' %}
+            <p><strong>Logic Type:</strong> Random Distribution</p>
+            <p><strong>Total Questions:</strong> {{ item.total_count|default:"Not set" }}</p>
+        {% endif %}
+
+        {# Specific details for Assessment Groups #}
+        {% if type == 'assessment_selection' %}
+            <p><strong>Group Type:</strong> Static Collection</p>
+            <p><strong>Associated Assessment:</strong> {{ item.assessment.title }}</p>
+        {% endif %}
+
+        <p><strong>Last Modified:</strong> {{ item.updated_at|date:"M d, Y" }}</p>
+    </div>
+
+    <div class="preview-actions" style="margin-top: 30px;">
+        <a href="#" class="btn-edit" style="display: block; background: #007aff; color: white; padding: 10px; border-radius: 6px; text-decoration: none;">Configure Logic</a>
+    </div>
+</div>
