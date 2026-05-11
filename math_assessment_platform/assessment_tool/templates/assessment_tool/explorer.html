@@ -42,29 +42,74 @@ function getCookie(name) {
 
 async function loadFolder(folderId, level) {
     const container = document.getElementById('dynamic-columns');
-    
-    // This removes columns that are at the level we are about to fill or deeper
-    const columns = container.querySelectorAll('.finder-column');
-    columns.forEach(col => {
-        if (parseInt(col.dataset.level) >= level) {
-            col.remove();
-        }
-    });
+    const explorer = document.getElementById('finder-explorer');
+    const newFolderBtn = document.getElementById('btn-new-folder');
 
-    // 2. Fetch the new column
     try {
+        // 1. Fetch the data FIRST while all current columns stay in place
+        // This prevents the scrollbar from snapping left prematurely
         const response = await fetch(`/get-folder-contents/${folderId}/?level=${level}`);
+        if (!response.ok) throw new Error('Network response was not ok');
+        
         const html = await response.text();
 
+        // 2. NOW remove columns at this level or deeper
+        // The container will only shrink for a fraction of a millisecond
+        const columns = container.querySelectorAll('.finder-column');
+        columns.forEach(col => {
+            if (parseInt(col.dataset.level) >= level) {
+                col.remove();
+            }
+        });
+
+        // 3. Create and append the new column
         const newCol = document.createElement('div');
         newCol.className = 'finder-column';
         newCol.dataset.level = level;
         newCol.innerHTML = html;
+        // Extract the path from the hidden div we added to column.html
+        const pathMeta = newCol.querySelector('.column-path-meta');
+        if (pathMeta) {
+            newCol.dataset.folderPath = pathMeta.dataset.path;
+        }
         container.appendChild(newCol);
+
+        // --- 4. DYNAMIC PERMISSION CHECK ---
+        const username = "{{ request.user.username }}";
+        const rootPath = `/Users/${username}_root/`;
+        const firstItem = newCol.querySelector('.item');
         
-        // Scroll right
-        document.getElementById('finder-explorer').scrollLeft += 300;
-    } catch (e) { console.error("Error:", e); }
+        let isProtected = false;
+        if (folderId === '{{ root_folder.id }}') {
+            isProtected = true;
+        } else if (firstItem) {
+            const location = firstItem.getAttribute('data-location') || "";
+            if (location.startsWith(`${rootPath}Courses/`) || 
+                location.startsWith(`${rootPath}Standalone Assessments/`)) {
+                isProtected = true;
+            }
+        }
+
+        if (newFolderBtn) {
+            newFolderBtn.style.display = isProtected ? 'none' : 'block';
+            newFolderBtn.onclick = () => createNewFolder(folderId, level);
+        }
+
+        // --- 5. SURGICAL SCROLL ---
+        // We calculate the exact rightmost edge of the container
+        const scrollTarget = container.offsetWidth - explorer.clientWidth;
+        
+        // Only scroll if the new column actually extends past the viewable area
+        if (explorer.scrollLeft < scrollTarget) {
+            explorer.scrollTo({
+                left: scrollTarget,
+                behavior: 'smooth'
+            });
+        }
+
+    } catch (e) { 
+        console.error("Error loading folder:", e); 
+    }
 }
 
 function selectItem(element) {
@@ -104,6 +149,22 @@ async function loadPreview(itemId, type, level) {
 }
 
 async function createNewFolder(parentId, level) {
+    // 1. Get the column we are currently looking at
+    const currentColumn = document.querySelector(`.finder-column[data-level="${level}"]`);
+    const fullPath = currentColumn ? currentColumn.dataset.folderPath : "";
+
+    console.log("[createNewFolder] Current Folder Path: ", fullPath);
+
+    const username = "{{ request.user.username }}";
+    const rootPath = `/Users/${username}_root/`;
+    const protectedPaths = [`${rootPath}Courses/`, `${rootPath}Standalone Assessments/` ];
+
+    // 2. Block if inside protected root or it is the root itself
+    if (fullPath === rootPath || protectedPaths.some(p => fullPath.startsWith(p))) {
+        alert("Adding sub-folders is not permitted here.");
+        return;
+    }
+
     const folderName = prompt("Enter folder name:");
     if (!folderName) return;
 

@@ -4,7 +4,7 @@ def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='n
     # 1. Basic Validation: Alphanumeric and single internal spaces
     clean_name = requested_name.strip()
     if not clean_name or not re.match(r'^[a-zA-Z0-9]+( [a-zA-Z0-9]+)*$', clean_name):
-        return None, "Names must be alphanumeric with single spaces only."
+        return None, "Names must be alphanumeric and single spaced only."
 
     base_name = clean_name
     new_name = clean_name

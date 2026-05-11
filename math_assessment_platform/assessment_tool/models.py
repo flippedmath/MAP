@@ -749,14 +749,15 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
     if created:
         # 1. Create the Master Root Folder
         root = BranchGroup.objects.create(
-            name=instance.username,
+            name=f"{instance.username}_root",
             owner=instance,
             parent=None,
             location=f"{instance.username}_root",
         )
 
         # 2. Define the default sub-folders
-        default_folders = ['courses', 'assessments', 'standalone problems']
+        # NOTE: This should not be changed in order to conform with proper path naming restrictions
+        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems']
 
         # 3. Create each sub-folder nested under the root
         for folder_name in default_folders:

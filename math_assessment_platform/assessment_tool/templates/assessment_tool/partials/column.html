@@ -1,7 +1,10 @@
+<div class="column-path-meta" data-path="{{ current_path }}" style="display:none;"></div>
+
 {% for folder in contents.folders %}
 <div class="item"
     data-id="{{ folder.id }}" 
     data-type="folder" 
+    data-location="{{ folder.get_parent_path }}"
     data-parent-id="{{ parent_id }}"
     onclick="selectItem(this); loadFolder('{{ folder.id }}', {{ level|default:1|add:1 }})" 
     oncontextmenu="showContextMenu(event, '{{ folder.id }}', 'folder', '{{ folder.name|escapejs }}', '{{ folder.owner.username }}', '{{ folder.get_parent_path }}', {{ folder.branchgroup_set.exists|yesno:'true,false,unknown' }})">
@@ -63,10 +66,12 @@
 {% endif %}
 
 {% if level > 0 %}
-<div class="add-folder-container" style="margin-top: auto; padding: 10px; border-top: 1px solid #e5e5e5;">
-    <button class="btn-add-folder" onclick="createNewFolder('{{ parent_id }}', {{ level }})" 
-            style="width: 100%; text-align: left; background: none; border: none; color: #007aff; cursor: pointer; font-size: 0.9rem;">
-        <i class="fas fa-plus-circle"></i> New Folder
-    </button>
-</div>
+    {% if not is_protected %}
+        <div class="add-folder-container" style="margin-top: auto; padding: 10px; border-top: 1px solid #e5e5e5;">
+            <button class="btn-add-folder" onclick="createNewFolder('{{ parent_id }}', {{ level }})" 
+                    style="width: 100%; text-align: left; background: none; border: none; color: #007aff; cursor: pointer; font-size: 0.9rem;">
+                <i class="fas fa-plus-circle"></i> New Folder
+            </button>
+        </div>
+    {% endif %}
 {% endif %}

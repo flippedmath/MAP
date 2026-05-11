@@ -324,11 +324,26 @@ def get_folder_contents(request, group_id):
         'has_items': has_items,
     }
 
+    # Logic to determine if this folder allows creating a child folder
+    username = request.user.username
+    current_path = group.get_parent_path() + group.name + "/"
+    root_sys = f"/Users/{username}_root/"
+    
+    # Is this folder one of the protected system paths?
+    is_protected = (
+        current_path == root_sys or 
+        current_path.startswith(f"{root_sys}Courses/") or 
+        current_path.startswith(f"{root_sys}Standalone Assessments/")
+    )
+    print(f"DEBUG: current_path: {current_path}")
+    print(f"DEBUG -- is_protected: {is_protected}")
+
     return render(request, 'assessment_tool/partials/column.html', {
         'contents': contents,
         'parent_id': group.id,
-        # 'current_path': group.get_parent_path() + group.name + "/",
-        'level': int(request.GET.get('level', 1))
+        'level': int(request.GET.get('level', 1)),
+        'is_protected': is_protected,
+        'current_path': current_path,
     })
 
 
@@ -370,6 +385,25 @@ def create_folder(request):
 
     # Get parent and verify ownership
     parent_folder = get_object_or_404(BranchGroup, id=parent_id, owner=request.user)
+
+    # Check if this IS the root folder (assuming root has no parent)
+    is_root = parent_folder.parent is None
+    if is_root:
+        return JsonResponse({
+            'error': 'New folders cannot be created in the Home directory.'
+        }, status=403)
+
+    # Security: Check if parent is a protected system folder
+    username = request.user.username
+    parent_full_path = parent_folder.get_parent_path() + parent_folder.name + "/"
+    
+    root = f"/Users/{username}_root/"
+    # Block creation inside Courses or Standalone Assessments
+    if parent_full_path.startswith(f"{root}Courses/") or \
+       parent_full_path.startswith(f"{root}Standalone Assessments/"):
+        return JsonResponse({
+            'error': 'This directory is managed by the system. Sub-folders cannot be added here.'
+        }, status=403)
 
     # Use the helper logic
     unique_name, error = get_valid_unique_name(BranchGroup, parent_folder, requested_name)
@@ -468,14 +502,6 @@ def rename_item(request):
     item_type = data.get('type')
     new_name = data.get('new_name', '').strip()
 
-    if not new_name:
-        return JsonResponse({'error': 'Name cannot be empty.'}, status=400)
-    # Regex: Starts/ends with alphanumeric, allows single spaces in between
-    if not re.match(r'^[a-zA-Z0-9]+( [a-zA-Z0-9]+)*$', new_name):
-        return JsonResponse({'error': 'Names must be alphanumeric with single spaces only.'}, status=400)
-
-    # TODO: check to make sure the 'new_name' doesn't contain any special characters other than space (no '_' and '()' especially since I am going to hard code those in for special circumstances later)
-
     # Ensure field names match your actual model definitions
     model_map = {
         'folder': (BranchGroup, 'name'),
@@ -493,6 +519,13 @@ def rename_item(request):
     
     # This is where the 404 usually happens - double check ID and Owner
     obj = get_object_or_404(model_class, id=item_id, owner=request.user)
+
+    # Check to make sure the 'new_name' doesn't contain any special characters 
+    #    other than space (no '_' and '()' especially since I am going to hard code 
+    #    those in for special circumstances later)
+    new_name, error = get_valid_unique_name(BranchGroup, obj.parent, new_name)        
+    if error:
+        return JsonResponse({'error': error}, status=400)
 
     # Path Protection Logic
     if item_type == 'folder':
