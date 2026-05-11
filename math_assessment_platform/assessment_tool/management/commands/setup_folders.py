@@ -15,15 +15,14 @@ class Command(BaseCommand):
             # 1. Manually check for Root Folder
             root = BranchGroup.objects.filter(owner=user, parent__isnull=True).first()
             
+            # Generate a unique location, e.g., "admin_root"
+            root_location = f"{user.username}_root" 
             if not root:
                 try:
-                    # Generate a unique location, e.g., "admin_root"
-                    root_location = f"{user.username}_root" 
                     root = BranchGroup.objects.create(
-                        name=user.username,
+                        name=root_location, # user.username,
                         owner=user,
                         parent=None,
-                        location=root_location  # Added this
                     )
                     self.stdout.write(self.style.SUCCESS(f"Created root for {user.username}"))
                 except Exception as e:
@@ -31,27 +30,22 @@ class Command(BaseCommand):
                     continue
 
             # 2. Check and create Sub-folders
-            default_names = ['courses', 'standalone assessments', 'standalone problems']
+            default_names = [['Courses', "C"], ['Standalone Assessments', "V"], ['Standalone Problems', "h"]]
             for folder_name in default_names:
                 exists = BranchGroup.objects.filter(
                     owner=user, 
                     parent=root, 
-                    name=folder_name
+                    name=folder_name[0],
                 ).exists()
                 
                 if not exists:
                     try:
-                        # Generate a unique sub-location, e.g., "admin/courses"
-                        # Replacing spaces with underscores for safety
-                        loc_name = folder_name.replace(" ", "_")
-                        sub_location = f"{user.username}/{loc_name}"
-                        
                         BranchGroup.objects.create(
-                            name=folder_name,
+                            name=folder_name[0],
                             owner=user,
                             parent=root,
-                            location=sub_location  # Added this
+                            order=folder_name[1]
                         )
-                        self.stdout.write(f"  + Added '{folder_name}' to {user.username}")
+                        self.stdout.write(f"  + Added '{folder_name[0]}' to {user.username} at order {folder_name[1]}")
                     except Exception as e:
-                        self.stdout.write(self.style.ERROR(f"  - Error adding '{folder_name}': {e}"))
+                        self.stdout.write(self.style.ERROR(f"  - Error adding '{folder_name[0]}': {e}"))

@@ -2,6 +2,7 @@ from django.shortcuts import render, redirect
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
+from .util import get_valid_unique_name
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -282,22 +283,54 @@ def file_explorer(request):
 
 # AJAX view to get contents of a specific folder
 
+from django.db.models import Count
+
 def get_folder_contents(request, group_id):
-    # This will return a 404 page instead of a DoesNotExist crash
     group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
     
+
+    # print(f"--- DEBUG VIEW --- Folder: {group.name} | Path: {group.get_parent_path()}")
+
+
+    # 1. Define the QuerySets with your specific optimizations
+    folders_qs = BranchGroup.objects.filter(parent=group).select_related('parent__parent')
+    courses_qs = Course.objects.filter(branch_location=group).select_related('branch_location')
+    assessments_qs = Assessment.objects.filter(branch_location=group)
+    problems_qs = Problem.objects.filter(branch_location=group)
+    qs_qs = CustomQuestionDistribution.objects.filter(assigned_folder=group).annotate(num_pairs=Count('cqdpair'))
+    aq_qs = AssessmentQuestionGroup.objects.filter(branch_location=group)
+
+    # 2. Check if ANY items exist (use the simple filter results for speed)
+    # We use the raw filters here because .exists() is faster than running the full optimized query
+    has_items = (
+        folders_qs.exists() or 
+        courses_qs.exists() or 
+        assessments_qs.exists() or 
+        problems_qs.exists() or
+        qs_qs.exists() or
+        aq_qs.exists()
+    )
+
+    # print(f"folders_qs.exists(): {folders_qs.exists()}\n| courses_qs.exists(): {courses_qs.exists()}\n| assessments_qs.exists(): {assessments_qs.exists()}\n| problems_qs.exists(): {problems_qs.exists()}\n| qs_qs.exists(): {qs_qs.exists()}\n| aq_qs.exists(): {aq_qs.exists()}\n| Summary has_items: {has_items}")
+
+    # 3. Package everything into contents
     contents = {
-        'folders': BranchGroup.objects.filter(parent=group),
-        'courses': Course.objects.filter(branch_location=group),
-        'assessments': Assessment.objects.filter(branch_location=group),
-        'problems': Problem.objects.filter(branch_location=group),
-        'question_selection': CustomQuestionDistribution.objects.filter(assigned_folder=group),
-        'assessment_selection': AssessmentQuestionGroup.objects.filter(branch_location=group),
+        'folders': folders_qs,
+        'courses': courses_qs,
+        'assessments': assessments_qs,
+        'problems': problems_qs,
+        'question_selection': qs_qs,
+        'assessment_selection': aq_qs,
+        'has_items': has_items,
     }
+
     return render(request, 'assessment_tool/partials/column.html', {
         'contents': contents,
+        'parent_id': group.id,
+        # 'current_path': group.get_parent_path() + group.name + "/",
         'level': int(request.GET.get('level', 1))
     })
+
 
 from django.http import HttpResponseForbidden
 
@@ -322,3 +355,195 @@ def get_item_preview(request, item_type, item_id):
         'item': item,
         'type': item_type
     })
+
+import json
+from django.http import JsonResponse
+from .models import BranchGroup
+
+def create_folder(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+    data = json.loads(request.body)
+    parent_id = data.get('parent_id')
+    requested_name = data.get('name', 'New Folder')
+
+    # Get parent and verify ownership
+    parent_folder = get_object_or_404(BranchGroup, id=parent_id, owner=request.user)
+
+    # Use the helper logic
+    unique_name, error = get_valid_unique_name(BranchGroup, parent_folder, requested_name)
+    
+    if error:
+        return JsonResponse({'error': error}, status=400)
+
+    # Create the folder
+    new_folder = BranchGroup.objects.create(
+        name=unique_name,
+        parent=parent_folder,
+        owner=request.user
+    )
+
+    return JsonResponse({'status': 'success', 'id': new_folder.id})
+
+from django.http import JsonResponse
+import json
+
+def delete_item(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+        
+    data = json.loads(request.body)
+    item_id = data.get('id')
+    item_type = data.get('type')
+
+    # 1. Resolve Object & Path with strict Ownership Verification
+    try:
+        if item_type == 'folder':
+            obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
+            item_full_path = obj.get_parent_path() + obj.name + "/"
+        
+        elif item_type == 'course':
+            obj = get_object_or_404(Course, id=item_id, owner=request.user)
+            loc = obj.branch_location
+            item_full_path = loc.get_parent_path() + loc.name + "/"
+
+        elif item_type == 'assessment':
+            obj = get_object_or_404(Assessment, id=item_id, owner=request.user)
+            loc = obj.branch_location
+            item_full_path = loc.get_parent_path() + loc.name + "/"
+
+        elif item_type == 'problem':
+            obj = get_object_or_404(Problem, id=item_id, owner=request.user)
+            loc = obj.branch_location
+            item_full_path = loc.get_parent_path() + loc.name + "/"
+
+        elif item_type == 'assessment_selection':
+            # Note: Checking owner via the linked branch_location
+            obj = get_object_or_404(AssessmentQuestionGroup, id=item_id, branch_location__owner=request.user)
+            loc = obj.branch_location
+            item_full_path = loc.get_parent_path() + loc.name + "/"
+
+        else:
+            return JsonResponse({'error': f'Unsupported item type: {item_type}'}, status=400)
+            
+    except Exception as e:
+        return JsonResponse({'error': 'Item not found or permission denied.'}, status=404)
+
+    # 2. System Protection Check
+    username = request.user.username
+    root = f"/Users/{username}_root/"
+    protected = [f"{root}Courses/", f"{root}Standalone Assessments/", f"{root}Standalone Problems/"]
+
+    if item_full_path in protected:
+        return JsonResponse({'error': 'System folders cannot be deleted.'}, status=403)
+
+    # 3. Empty Check for Folders
+    if item_type == 'folder':
+        has_content = (
+            BranchGroup.objects.filter(parent=obj).exists() or
+            Course.objects.filter(branch_location=obj).exists() or
+            Assessment.objects.filter(branch_location=obj).exists() or
+            Problem.objects.filter(branch_location=obj).exists() or
+            AssessmentQuestionGroup.objects.filter(branch_location=obj).exists() or
+            CustomQuestionDistribution.objects.filter(assigned_folder=obj).exists()
+        )
+        if has_content:
+            return JsonResponse({'error': 'Folder is not empty.'}, status=400)
+
+    # 4. Execute
+    obj.delete()
+    return JsonResponse({'status': 'success'})
+
+from django.shortcuts import get_object_or_404
+from django.http import JsonResponse
+import json
+
+def rename_item(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+        
+    data = json.loads(request.body)
+    item_id = data.get('id')
+    item_type = data.get('type')
+    new_name = data.get('new_name', '').strip()
+
+    if not new_name:
+        return JsonResponse({'error': 'Name cannot be empty.'}, status=400)
+    # Regex: Starts/ends with alphanumeric, allows single spaces in between
+    if not re.match(r'^[a-zA-Z0-9]+( [a-zA-Z0-9]+)*$', new_name):
+        return JsonResponse({'error': 'Names must be alphanumeric with single spaces only.'}, status=400)
+
+    # TODO: check to make sure the 'new_name' doesn't contain any special characters other than space (no '_' and '()' especially since I am going to hard code those in for special circumstances later)
+
+    # Ensure field names match your actual model definitions
+    model_map = {
+        'folder': (BranchGroup, 'name'),
+        'course': (Course, 'name'), 
+        'assessment': (Assessment, 'name'),
+        'problem': (Problem, 'title'),
+        'assessment_selection': (AssessmentQuestionGroup, 'name'),
+        # can't rename the custom_question_group generated name from get_unique_name
+    }
+
+    if item_type not in model_map:
+        return JsonResponse({'error': 'Unknown item type.'}, status=400)
+
+    model_class, field_name = model_map[item_type]
+    
+    # This is where the 404 usually happens - double check ID and Owner
+    obj = get_object_or_404(model_class, id=item_id, owner=request.user)
+
+    # Path Protection Logic
+    if item_type == 'folder':
+        item_full_path = obj.get_parent_path() + obj.name + "/"
+    else:
+        item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
+
+    username = request.user.username
+    protected_roots = [
+        f"/Users/{username}_root/Courses/",
+        f"/Users/{username}_root/Standalone Assessments/",
+        f"/Users/{username}_root/Standalone Problems/"
+    ]
+
+    if item_full_path in protected_roots:
+        return JsonResponse({'error': 'Cannot rename system folders.'}, status=403)
+
+    if item_full_path.startswith(f"/Users/{username}_root/Courses/"):
+        return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
+
+    # Collision Check: Find the Parent/Location
+    # We need to check siblings (other items with the same parent)
+    parent = getattr(obj, 'parent', None) or getattr(obj, 'branch_location', None)
+    
+    # Automatic Suffix Incrementer Logic
+    base_name = new_name
+    counter = 1
+    
+    while True:
+        # Check if any sibling has this name
+        # We exclude the current object itself so we don't collide with our own name
+        duplicate_query = {field_name: new_name}
+        if parent:
+            if item_type == 'folder':
+                duplicate_exists = BranchGroup.objects.filter(parent=parent, **duplicate_query).exclude(id=obj.id).exists()
+            else:
+                # For items, check the specific model class in that location
+                duplicate_exists = model_class.objects.filter(branch_location=parent, **duplicate_query).exclude(id=obj.id).exists()
+        else:
+            # Root level check
+            duplicate_exists = BranchGroup.objects.filter(parent__isnull=True, owner=request.user, **duplicate_query).exclude(id=obj.id).exists()
+
+        if not duplicate_exists:
+            break
+        
+        # If exists, append/increment (n)
+        new_name = f"{base_name} ({counter})"
+        counter += 1
+
+    # Perform Rename
+    setattr(obj, field_name, new_name)
+    obj.save()
+
+    return JsonResponse({'status': 'success', 'new_name': new_name})

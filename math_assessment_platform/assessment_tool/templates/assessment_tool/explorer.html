@@ -9,7 +9,7 @@
 <div class="finder-container" id="finder-explorer">
     <!-- Initial Column -->
     <div class="finder-column" id="col-root" data-level="0">
-        <div class="item" onclick="loadFolder('{{ root_folder.id }}', 1)">
+        <div class="item" data-id="{{ root_folder.id }}" data-type="folder" onclick="loadFolder('{{ root_folder.id }}', 1)">
             <i class="fas fa-home icon-folder"></i> 
             <span>{{ root_folder.name }}</span>
             <i class="fas fa-chevron-right arrow"></i>
@@ -21,6 +21,22 @@
 </div>
 
 <script>
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            // Does this cookie string begin with the name we want?
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+
 // Add a level parameter to your initial call in explorer.html: 
 // onclick="loadFolder('{{ root_folder.id }}', 0)"
 
@@ -51,6 +67,21 @@ async function loadFolder(folderId, level) {
     } catch (e) { console.error("Error:", e); }
 }
 
+function selectItem(element) {
+    // 1. Find the column this item lives in
+    const column = element.closest('.finder-column');
+    
+    // 2. Remove 'selected' from all other items in THIS specific column
+    if (column) {
+        column.querySelectorAll('.item').forEach(item => {
+            item.classList.remove('selected');
+        });
+    }
+    
+    // 3. Highlight the clicked one
+    element.classList.add('selected');
+}
+
 async function loadPreview(itemId, type, level) {
     const container = document.getElementById('dynamic-columns');
     
@@ -71,5 +102,175 @@ async function loadPreview(itemId, type, level) {
         container.appendChild(previewCol);
     } catch (e) { console.error("Error:", e); }
 }
+
+async function createNewFolder(parentId, level) {
+    const folderName = prompt("Enter folder name:");
+    if (!folderName) return;
+
+    try {
+        const response = await fetch('/create-folder/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            },
+            body: JSON.stringify({
+                name: folderName,
+                parent_id: parentId
+            })
+        });
+
+        if (response.ok) {
+            // Re-load the current folder to show the new sub-folder
+            loadFolder(parentId, level);
+        } else {
+            // Replace your "else { alert('Error...'); }" with this:
+            const errorData = await response.json();
+            console.error("Server says:", errorData);
+            alert("Error: " + (errorData.error || "Unknown server error"));
+            // alert("Error creating folder.");
+        }
+    } catch (error) {
+        console.error("Request failed", error);
+    }
+}
+
+let currentItem = {}; // Stores info of the right-clicked item
+
+function showContextMenu(e, id, type, name, owner, location, hasItems) {
+    e.preventDefault();
+
+    const name_and_path = location + name + "/"
+    // console.log(`JS DEBUG -> Name: ${name}\n| Location: ${location}\n| Name and Path: ${name_and_path}`);
+
+    // Make sure when right clicking that it highlights the proper row if I didn't left click on it first
+    const targetItem = e.target.closest('.item');
+    if (targetItem) selectItem(targetItem);
+
+    const menu = document.getElementById('context-menu');
+    const renameOption = document.getElementById('menu-rename');
+    const deleteOption = document.getElementById('menu-delete');
+    // const addFileOption = document.getElementById('menu-addFile');
+    
+    currentItem = { id, type, name, owner, location, hasItems };
+    const username = "{{ request.user.username }}";
+
+    // 1. Define the protected "root" paths based on your get_parent_path() output
+    const rootPath = `/Users/`;
+
+    const coursesFolder = `${rootPath}${username}_root/Courses/`;
+    const assessmentsFolder = `${rootPath}${username}_root/Standalone Assessments/`;
+    const problemsFolder = `${rootPath}${username}_root/Standalone Problems/`;
+
+    // 2. System Folder Check: Is the item itself one of the core folders? If so, prevent editing inside the folder.
+    const isSystemFolder = name_and_path.startsWith(`${coursesFolder}`);
+
+    // 3. Check for core folder
+    // const isCoreFolder = [`${rootPath}`, `${coursesFolder}`, `${assessmentsFolder}`, `${problemsFolder}`].includes(location);
+    const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder].includes(name_and_path);
+
+    // alert(`${isCoreFolder} --> ${coursesFolder}`);
+
+    // 4. Permission Logic
+    let canRename = !isSystemFolder && !isCoreFolder;
+    let canDelete = !isSystemFolder && !isCoreFolder && !hasItems;
+
+    // console.log(`rootPath: ${rootPath}\n| coursesFolder: ${coursesFolder}\n| assessmentsFolder: ${assessmentsFolder}\n| problemsFolder: ${problemsFolder}\n| isSystemFolder: ${isSystemFolder}\n| isCoreFolder: ${isCoreFolder}\n| hasItems: ${hasItems}\n| canRename: ${canRename}\n| canDelete: ${canDelete}`);
+
+    // Type-specific rule
+    if (type === 'question_selection') canRename = false;
+
+    renameOption.className = canRename ? "" : "disabled";
+    deleteOption.className = canDelete ? "" : "disabled";
+    // addFileOption.className = canAddFile ? "" : "disabled";
+    
+    menu.style.display = 'block';
+    menu.style.left = e.pageX + 'px';
+    menu.style.top = e.pageY + 'px';
+}
+
+// Hide menu when clicking elsewhere
+document.addEventListener('click', () => {
+    document.getElementById('context-menu').style.display = 'none';
+});
+
+async function handleDelete() {
+    if (document.getElementById('menu-delete').classList.contains('disabled')) return;
+    if (!confirm(`Are you sure you want to delete "${currentItem.name}"?`)) return;
+
+    const element = document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
+    if (!element) return;
+
+    // Use the attributes we added to column.html
+    const parentId = element.getAttribute('data-parent-id');
+    const level = parseInt(element.closest('.finder-column').dataset.level);
+
+    try {
+        const response = await fetch('/delete-item/', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'X-CSRFToken': getCookie('csrftoken') 
+            },
+            body: JSON.stringify({ id: currentItem.id, type: currentItem.type })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // REFRESH ONLY THIS COLUMN
+            loadFolder(parentId, level);
+        } else {
+            alert(`Delete failed: ${data.error}`);
+        }
+    } catch (err) {
+        alert("A network error occurred.");
+    }
+}
+
+
+async function handleRename() {
+    if (document.getElementById('menu-rename').classList.contains('disabled')) return;
+    
+    const element = document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
+    if (!element) return;
+
+    const newName = prompt(`Rename ${currentItem.name} to:`, currentItem.name);
+    if (!newName || newName === currentItem.name) return;
+
+    const parentId = element.getAttribute('data-parent-id');
+    const level = parseInt(element.closest('.finder-column').dataset.level);
+
+    try {
+        const response = await fetch('/rename-item/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+            body: JSON.stringify({ 
+                id: currentItem.id, 
+                type: currentItem.type, 
+                new_name: newName 
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // REFRESH ONLY THIS COLUMN
+            loadFolder(parentId, level);
+        } else {
+            alert(`Rename failed: ${data.error}`);
+        }
+    } catch (err) {
+        alert("A network error occurred.");
+    }
+}
 </script>
+
+<div id="context-menu" class="custom-context-menu" style="display:none; position: fixed; z-index: 10000;">
+    <ul>
+        <li id="menu-rename" onclick="handleRename()">Rename</li>
+        <li id="menu-delete" onclick="handleDelete()">Delete</li>
+    </ul>
+</div>
+
 {% endblock %}

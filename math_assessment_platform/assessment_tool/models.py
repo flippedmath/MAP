@@ -269,6 +269,17 @@ class BranchGroup(models.Model):
     creation_date = models.DateTimeField(blank=True, null=True)
     modification_date = models.DateTimeField(blank=True, null=True)
 
+    def get_parent_path(self):
+        """Returns the path of the folder containing this item."""
+        if not self.parent:
+            path = f"/Users/"
+        else:
+            # Recursively get the parent's path and append the parent's name
+            path = f"{self.parent.get_parent_path()}{self.parent.name}/"
+
+        return path
+
+
     class Meta:
         managed = False
         db_table = 'branch_group'
@@ -361,6 +372,12 @@ class CqdPair(models.Model):
 class CustomQuestionDistribution(models.Model):
     assigned_folder = models.ForeignKey(BranchGroup, models.DO_NOTHING, db_column='assigned_folder')
     suggested_count = models.IntegerField()
+
+    def get_unique_name(self):
+        # Check if 'num_pairs' was already calculated by the view
+        # if not (e.g., in the admin panel), fall back to a standard count
+        num = getattr(self, 'num_pairs', self.cqdpair.count())
+        return f"ID ({self.id}) - Count = {num}"
 
     class Meta:
         managed = False

@@ -5,7 +5,10 @@ from .models import UserProfile, EmailAuthentication
 class TeacherRegistrationForm(forms.Form):
     GENDER_CHOICES = [('M', 'Male'), ('F', 'Female'), ('O', 'Other')]
 
-    username = forms.CharField(max_length=150, required=True)
+    username = forms.CharField(max_length=150, required=True, widget=forms.TextInput(attrs={
+            'pattern': '^[a-zA-Z0-9]+$',
+            'title': 'Username must be alphanumeric (no underscores or spaces).'
+        }))
     first_name = forms.CharField(max_length=150, required=True)
     display_name = forms.CharField(max_length=255, required=False)
     last_name = forms.CharField(max_length=150, required=True)
@@ -17,8 +20,17 @@ class TeacherRegistrationForm(forms.Form):
 
     def clean_username(self):
         username = self.cleaned_data.get('username')
+        
+        # Check for underscores, forward slashes, and other symbols (and at least 1 character)
+        if not username.isalnum():
+            raise ValidationError("Usernames must be alphanumeric.")
+        
+        if len(username) <= 3:
+            raise ValidationError("Usernames must contain at least 4 characters.")
+        
         if UserProfile.objects.filter(username=username).exists():
             raise ValidationError("This username is already taken.")
+        
         return username
 
     def clean_email(self):

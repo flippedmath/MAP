@@ -7,20 +7,50 @@
     border-radius: 10px;
 }
 .finder-column {
+    display: flex;
+    flex-direction: column;
     min-width: 250px;
     border-right: 1px solid #d1d1d6;
     background: white;
     padding: 10px 0;
 }
+.add-folder-container {
+    margin-top: auto;       /* The "Magic" property */
+    padding: 10px;
+    background-color: #f8f8f8;
+    border-top: 1px solid #e5e5e5;
+}
+.arrow {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: #c7c7cc;
+}
 .item {
-    padding: 8px 20px;
+    padding: 8px 12px;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    transition: background 0.1s;
+}
+
+/* The Highlight State */
+.item.selected {
+    background-color: #007aff !important;
+    color: white !important;
+}
+/* This ensures the little right-arrow and icons turn white too */
+.item.selected i {
+    color: white !important;
+}
+
+.item.selected .icon, 
+.item.selected .arrow {
+    color: white !important; /* Ensure icons turn white when background is blue */
+}
+
+/* Maintain hover effect for non-selected items */
+.item:hover:not(.selected) {
+    background-color: #e8e8e8;
 }
 .item:hover { background: #e8e8ed; }
-.item.selected { background: #007aff; color: white; }
 
 /* Unique Branding for Table Sources */
 .icon-folder { color: #5ac8fa; }              /* Sky Blue for Folders */
@@ -34,12 +64,33 @@
     cursor: default; /* Items don't drill down further like folders do */
 }
 
-.arrow {
-    margin-left: auto;
-    font-size: 0.7rem;
-    color: #c7c7cc;
+.custom-context-menu {
+    background: white;
+    border: 1px solid #d1d1d6;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    border-radius: 8px;
+    width: 150px;
+    padding: 5px 0;
 }
-
-.item.selected .arrow {
+.custom-context-menu ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.custom-context-menu li {
+    padding: 8px 15px;
+    cursor: pointer;
+    font-size: 14px;
+}
+.custom-context-menu li:hover {
+    background-color: #007aff;
     color: white;
+}
+.custom-context-menu li.disabled {
+    color: #c7c7cc;
+    cursor: not-allowed;
+    /* Prevent JavaScript clicks and hover states from firing */
+    pointer-events: none; 
+    /* Ensure the background doesn't change on hover even if pointer-events was active */
+    background-color: transparent !important; 
 }
