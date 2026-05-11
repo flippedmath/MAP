@@ -262,7 +262,6 @@ class AssessmentQuestionGroup(models.Model):
 
 class BranchGroup(models.Model):
     parent = models.ForeignKey('self', models.DO_NOTHING, db_column='parent', blank=True, null=True)
-    location = models.CharField(unique=True, max_length=255)
     order = models.CharField(max_length=100, blank=True, null=True)
     owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     name = models.CharField(max_length=255)
@@ -752,7 +751,6 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
             name=f"{instance.username}_root",
             owner=instance,
             parent=None,
-            location=f"{instance.username}_root",
         )
 
         # 2. Define the default sub-folders
@@ -765,5 +763,4 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
                 name=folder_name,
                 owner=instance,
                 parent=root,
-                location=f"{instance.username}/{folder_name.replace(' ', '_')}",
             )

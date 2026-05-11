@@ -287,10 +287,6 @@ from django.db.models import Count
 
 def get_folder_contents(request, group_id):
     group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
-    
-
-    # print(f"--- DEBUG VIEW --- Folder: {group.name} | Path: {group.get_parent_path()}")
-
 
     # 1. Define the QuerySets with your specific optimizations
     folders_qs = BranchGroup.objects.filter(parent=group).select_related('parent__parent')
@@ -310,8 +306,6 @@ def get_folder_contents(request, group_id):
         qs_qs.exists() or
         aq_qs.exists()
     )
-
-    # print(f"folders_qs.exists(): {folders_qs.exists()}\n| courses_qs.exists(): {courses_qs.exists()}\n| assessments_qs.exists(): {assessments_qs.exists()}\n| problems_qs.exists(): {problems_qs.exists()}\n| qs_qs.exists(): {qs_qs.exists()}\n| aq_qs.exists(): {aq_qs.exists()}\n| Summary has_items: {has_items}")
 
     # 3. Package everything into contents
     contents = {
@@ -335,8 +329,6 @@ def get_folder_contents(request, group_id):
         current_path.startswith(f"{root_sys}Courses/") or 
         current_path.startswith(f"{root_sys}Standalone Assessments/")
     )
-    print(f"DEBUG: current_path: {current_path}")
-    print(f"DEBUG -- is_protected: {is_protected}")
 
     return render(request, 'assessment_tool/partials/column.html', {
         'contents': contents,

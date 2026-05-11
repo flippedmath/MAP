@@ -153,7 +153,7 @@ async function createNewFolder(parentId, level) {
     const currentColumn = document.querySelector(`.finder-column[data-level="${level}"]`);
     const fullPath = currentColumn ? currentColumn.dataset.folderPath : "";
 
-    console.log("[createNewFolder] Current Folder Path: ", fullPath);
+    // console.log("[createNewFolder] Current Folder Path: ", fullPath);
 
     const username = "{{ request.user.username }}";
     const rootPath = `/Users/${username}_root/`;
