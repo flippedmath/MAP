@@ -288,33 +288,24 @@ from django.db.models import Count
 def get_folder_contents(request, group_id):
     group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
 
-    # 1. Define the QuerySets with your specific optimizations
-    folders_qs = BranchGroup.objects.filter(parent=group).select_related('parent__parent').order_by('order')
-    courses_qs = Course.objects.filter(branch_location=group).select_related('branch_location')
-    assessments_qs = Assessment.objects.filter(branch_location=group).order_by('order')
-    problems_qs = Problem.objects.filter(branch_location=group)
-    qs_qs = CustomQuestionDistribution.objects.filter(assigned_folder=group).annotate(num_pairs=Count('cqdpair'))
-    aq_qs = AssessmentQuestionGroup.objects.filter(branch_location=group).order_by('order')
+    # 1. Define folders_qs with prefetch_related
+    # This grabs the linked objects for ALL folders in this column in one go.
+    folders_qs = BranchGroup.objects.filter(parent=group)\
+        .select_related('parent__parent')\
+        .prefetch_related('course', 'assessment', 'cqd', 'aqg')\
+        .order_by('order')
 
-    # 2. Check if ANY items exist (use the simple filter results for speed)
-    # We use the raw filters here because .exists() is faster than running the full optimized query
-    has_items = (
-        folders_qs.exists() or 
-        courses_qs.exists() or 
-        assessments_qs.exists() or 
-        problems_qs.exists() or
-        qs_qs.exists() or
-        aq_qs.exists()
-    )
+    problems_qs = Problem.objects.filter(branch_location=group).order_by('title')
 
-    # 3. Package everything into contents
+    # 2. Check if items exist
+    has_items = folders_qs.exists() or problems_qs.exists()
+
+    # 3. Package contents
+    # We no longer need to pass separate lists for courses/assessments 
+    # because they are now "attached" to the objects in folders_qs.
     contents = {
         'folders': folders_qs,
-        'courses': courses_qs,
-        'assessments': assessments_qs,
         'problems': problems_qs,
-        'question_selection': qs_qs,
-        'assessment_selection': aq_qs,
         'has_items': has_items,
     }
 
@@ -328,7 +319,7 @@ def get_folder_contents(request, group_id):
         current_path == root_sys or 
         current_path.startswith(f"{root_sys}Courses/") or 
         current_path.startswith(f"{root_sys}Standalone Assessments/") or
-        current_path.startswith(f"{root_sys}'Shared for Collaboration'/") or
+        current_path.startswith(f"{root_sys}Shared for Collaboration/") or
         current_path.startswith(f"{root_sys}Student Generated Assessments by Course/") or
         current_path.startswith(f"{root_sys}Public/")
     )

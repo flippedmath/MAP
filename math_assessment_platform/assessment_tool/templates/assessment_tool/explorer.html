@@ -205,27 +205,26 @@ async function createNewFolder(parentId, level) {
 
 let currentItem = {}; // Stores info of the right-clicked item
 
-function showContextMenu(e, id, type, name, owner, location, hasItems) {
+function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId) {
     e.preventDefault();
 
-    const name_and_path = location + name + "/"
-    // console.log(`JS DEBUG -> Name: ${name}\n| Location: ${location}\n| Name and Path: ${name_and_path}`);
+    const name_and_path = location + name + "/";
 
-    // Make sure when right clicking that it highlights the proper row if I didn't left click on it first
     const targetItem = e.target.closest('.item');
     if (targetItem) selectItem(targetItem);
 
     const menu = document.getElementById('context-menu');
     const renameOption = document.getElementById('menu-rename');
     const deleteOption = document.getElementById('menu-delete');
-    // const addFileOption = document.getElementById('menu-addFile');
     
-    currentItem = { id, type, name, owner, location, hasItems };
+    // NEW: Get the element for the dynamic "Open" action
+    // Ensure you have <div id="menu-open-link"></div> in your context menu HTML
+    const openLinkOption = document.getElementById('menu-open-link');
+    
+    currentItem = { id, type, name, owner, location, hasItems, linkedId };
     const username = "{{ request.user.username }}";
 
-    // 1. Define the protected "root" paths based on your get_parent_path() output
     const rootPath = `/Users/`;
-
     const coursesFolder = `${rootPath}${username}_root/Courses/`;
     const assessmentsFolder = `${rootPath}${username}_root/Standalone Assessments/`;
     const problemsFolder = `${rootPath}${username}_root/Standalone Problems/`;
@@ -233,27 +232,54 @@ function showContextMenu(e, id, type, name, owner, location, hasItems) {
     const studentGeneratedAssessByCourse = `${rootPath}${username}_root/Student Generated Assessments by Course/`;
     const publicFolder = `${rootPath}${username}_root/Public/`;
 
-    // 2. System Folder Check: Is the item itself one of the core folders? If so, prevent editing inside the folder.
     const isSystemFolder = name_and_path.startsWith(`${coursesFolder}`);
-
-    // 3. Check for core folder
-    // const isCoreFolder = [`${rootPath}`, `${coursesFolder}`, `${assessmentsFolder}`, `${problemsFolder}`].includes(location);
     const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder, sharedForCollab, studentGeneratedAssessByCourse, publicFolder].includes(name_and_path);
 
-    // alert(`${isCoreFolder} --> ${coursesFolder}`);
-
-    // 4. Permission Logic
     let canRename = !isSystemFolder && !isCoreFolder;
     let canDelete = !isSystemFolder && !isCoreFolder && !hasItems;
 
-    // console.log(`rootPath: ${rootPath}\n| coursesFolder: ${coursesFolder}\n| assessmentsFolder: ${assessmentsFolder}\n| problemsFolder: ${problemsFolder}\n| isSystemFolder: ${isSystemFolder}\n| isCoreFolder: ${isCoreFolder}\n| hasItems: ${hasItems}\n| canRename: ${canRename}\n| canDelete: ${canDelete}`);
-
-    // Type-specific rule
     if (type === 'question_selection') canRename = false;
 
     renameOption.className = canRename ? "" : "disabled";
     deleteOption.className = canDelete ? "" : "disabled";
-    // addFileOption.className = canAddFile ? "" : "disabled";
+
+    // --- NEW: DYNAMIC LINK LOGIC ---
+    if (openLinkOption) {
+        if (linkedId && linkedId !== '') {
+            let label = "";
+            let url = "";
+
+            // Determine URL and Label based on folder_type
+            switch(type) {
+                case 'course':
+                    label = `<i class="fas fa-graduation-cap"></i> View Course`;
+                    url = `/courses/${linkedId}/`;
+                    break;
+                case 'assessment':
+                    label = `<i class="fas fa-file-signature"></i> Edit Assessment`;
+                    url = `/assessments/${linkedId}/edit/`;
+                    break;
+                case 'cqd':
+                    label = `<i class="fas fa-random"></i> View Distribution`;
+                    url = `/distributions/${linkedId}/`;
+                    break;
+                case 'aqg':
+                    label = `<i class="fas fa-list-ol"></i> View Question Group`;
+                    url = `/question-groups/${linkedId}/`;
+                    break;
+            }
+
+            if (label) {
+                openLinkOption.innerHTML = label;
+                openLinkOption.style.display = 'block';
+                openLinkOption.onclick = () => window.location.href = url;
+            } else {
+                openLinkOption.style.display = 'none';
+            }
+        } else {
+            openLinkOption.style.display = 'none';
+        }
+    }
     
     menu.style.display = 'block';
     menu.style.left = e.pageX + 'px';
@@ -339,6 +365,9 @@ async function handleRename() {
 
 <div id="context-menu" class="custom-context-menu" style="display:none; position: fixed; z-index: 10000;">
     <ul>
+        <li id="menu-open-link" style="display:none; border-bottom: 1px solid #eee; font-weight: 600; color: #007aff;">
+            </li>
+
         <li id="menu-rename" onclick="handleRename()">Rename</li>
         <li id="menu-delete" onclick="handleDelete()">Delete</li>
     </ul>

@@ -1,65 +1,64 @@
+{% load custom_tags %}
+
 <div class="column-path-meta" data-path="{{ current_path }}" style="display:none;"></div>
 
-{% for folder in contents.folders %}
-<div class="item"
-    data-id="{{ folder.id }}" 
-    data-type="folder" 
-    data-location="{{ folder.get_parent_path }}"
-    data-parent-id="{{ parent_id }}"
-    onclick="selectItem(this); loadFolder('{{ folder.id }}', {{ level|default:1|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ folder.id }}', 'folder', '{{ folder.name|escapejs }}', '{{ folder.owner.username }}', '{{ folder.get_parent_path }}', {{ folder.branchgroup_set.exists|yesno:'true,false,unknown' }})">
-    <i class="fas fa-folder icon-folder"></i>
-    <span>{{ folder.name }}</span>
-    <i class="fas fa-chevron-right arrow"></i>
-</div>
+{% for group in contents.folders %}
+    {# Pre-determine the linked ID based on type for the context menu #}
+    {% if group.folder_type == 'course' %}
+        {% define group.course.id as linked_id %}
+    {% elif group.folder_type == 'assessment' %}
+        {% define group.assessment.id as linked_id %}
+    {% elif group.folder_type == 'cqd' %}
+        {% define group.cqd.id as linked_id %}
+    {% elif group.folder_type == 'aqg' %}
+        {% define group.aqg.id as linked_id %}
+    {% else %}
+        {% define '' as linked_id %}
+    {% endif %}
+
+    {# Every row in 'folders' is a BranchGroup, but we style it based on folder_type #}
+    <div class="item"
+        data-id="{{ group.id }}" 
+        data-type="{{ group.folder_type }}" 
+        data-location="{{ group.get_parent_path }}"
+        data-parent-id="{{ parent_id }}"
+        onclick="selectItem(this); loadFolder('{{ group.id }}', {{ level|default:1|add:1 }})" 
+        oncontextmenu="showContextMenu(event, '{{ group.id }}', '{{ group.folder_type }}', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', {{ group.branchgroup_set.exists|yesno:'true,false' }}, '{{ linked_id }}')">
+        
+        {# Dynamic Icons based on the Enum #}
+        {% if group.folder_type == 'course' %}
+            <i class="fas fa-graduation-cap icon-course"></i>
+        {% elif group.folder_type == 'assessment' %}
+            <i class="fas fa-file-signature icon-assessment"></i>
+        {% elif group.folder_type == 'cqd' %}
+            <i class="fas fa-random icon-customquestiondist"></i>
+        {% elif group.folder_type == 'aqg' %}
+            <i class="fas fa-list-ol icon-assessmentquest"></i>
+        {% else %}
+            <i class="fas fa-folder icon-folder"></i>
+        {% endif %}
+
+        <span>{{ group.name }}</span>
+        <i class="fas fa-chevron-right arrow"></i>
+    </div>
 {% endfor %}
 
-{% for course in contents.courses %}
-<div class="item" onclick="selectItem(this); loadPreview('{{ course.id }}', 'course', {{ level|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ course.id }}', 'course', '{{ course.name|escapejs }}', '{{ course.owner.username }}', '{{ course.get_parent_path }}', {{ course.branchgroup_set.exists|yesno:'true,false' }})">
-    <i class="fas fa-graduation-cap icon-course"></i>
-    <span>{{ course.course_name }}</span>
-    <i class="fas fa-chevron-right arrow"></i>
-</div>
-{% endfor %}
-
-{% for assessment in contents.assessments %}
-<div class="item" onclick="selectItem(this); loadPreview('{{ assessment.id }}', 'assessment', {{ level|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ assessment.id }}', 'assessment', '{{ assessment.name|escapejs }}', '{{ assessment.owner.username }}', '{{ assessment.get_parent_path }}', {{ assessment.branchgroup_set.exists|yesno:'true,false' }})">
-    <i class="fas fa-file-signature icon-assessment"></i>
-    <span>{{ assessment.name }}</span>
-    <i class="fas fa-chevron-right arrow"></i>
-</div>
-{% endfor %}
-
+{# Problems remain separate as they are not BranchGroup rows #}
+{# passing empty string for linked_id #}
 {% for problem in contents.problems %}
-<div class="item" onclick="selectItem(this); loadPreview('{{ problem.id }}', 'problem', {{ level|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ problem.id }}', 'problem', '{{ problem.title|escapejs }}', '{{ problem.owner.username }}', '{{ problem.get_parent_path }}', {{ problem.branchgroup_set.exists|yesno:'true,false' }})">
+<div class="item" 
+    data-id="{{ problem.id }}"
+    data-type="problem"
+    onclick="selectItem(this); loadPreview('{{ problem.id }}', 'problem', {{ level|add:1 }})" 
+    oncontextmenu="showContextMenu(event, '{{ problem.id }}', 'problem', 'Problem #{{ problem.id }}', '{{ problem.owner.username }}', '{{ problem.get_parent_path }}', false, '')">
     <i class="fas fa-question-circle icon-problem"></i>
     <span>Problem #{{ problem.id }}</span>
     <i class="fas fa-chevron-right arrow"></i>
 </div>
 {% endfor %}
 
-{% for qs in contents.question_selection %}
-<div class="item" onclick="selectItem(this); loadPreview('{{ qs.id }}', 'question_selection', {{ level|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ qs.id }}', 'question_selection', '{{ qs.num_pairs|escapejs }}', '{{ qs.owner.username }}', '{{ qs.get_parent_path }}', {{ qs.branchgroup_set.exists|yesno:'true,false' }})">
-    <i class="fas fa-random icon-customquestiondist"></i>
-    <span>{{ qs.name|default:"Question Distribution" }}</span>
-    <i class="fas fa-chevron-right arrow"></i>
-</div>
-{% endfor %}
-
-{% for aq in contents.assessment_selection %}
-<div class="item" onclick="selectItem(this); loadPreview('{{ aq.id }}', 'assessment_selection', {{ level|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ aq.id }}', 'assessment_selection', '{{ aq.name|escapejs }}', '{{ aq.owner.username }}', '{{ aq.get_parent_path }}', {{ aq.branchgroup_set.exists|yesno:'true,false' }})">
-    <i class="fas fa-list-ol icon-assessmentquest"></i>
-    <span>{{ aq.group_name|default:"Assessment Group" }}</span>
-    <i class="fas fa-chevron-right arrow"></i>
-</div>
-{% endfor %}
-
-{% if not contents.folders and not contents.courses and not contents.assessments and not contents.problems and not contents.question_selection and not contents.assessment_selection %}
+{# Empty state check - simplified #}
+{% if not contents.folders and not contents.problems %}
 <div style="padding: 20px; color: #8e8e93; font-style: italic;">
     Empty Folder
 </div>
