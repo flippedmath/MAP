@@ -9,9 +9,12 @@ from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager #, PermissionsMixin
 from django.utils import timezone
 import secrets
+import random
 from datetime import timedelta
 from django.db import transaction
 from django.db.models.functions import Lower
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 
 class MyUserManager(BaseUserManager):
     def _format_user_data(self, gender, first_name, last_name, display_name):
@@ -328,23 +331,56 @@ class Course(models.Model):
     branch_location = models.OneToOneField(BranchGroup, models.DO_NOTHING, db_column='branch_location', related_name='course', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
     creation_date = models.DateTimeField(blank=True, null=True)
     version = models.CharField(max_length=100, blank=True, null=True)
-    introduction = models.TextField(blank=True, null=True)  # This field type is a guess.
+    introduction = models.JSONField(blank=True, null=True)  # This field type is a guess.
 
     @classmethod
     def create_developing(cls, owner, name, short_desc):
-        """Creates a fresh course with 'developing' status."""
+        """Creates a fresh course with 'developing' status and associated folder."""
+        
+        # 1. Generate random version: #.#.#.#
+        # e.g., 1.4.2.9
+        version_str = "1."+".".join(str(random.randint(0, 9)) for _ in range(3))
+
+        # 2. Locate the "Courses" parent folder
+        # Assuming root is /Users/username_root/ and Courses is a subfolder
+        try:
+            # We look for the folder named 'Courses' owned by this user
+            # that lives directly under the user's root.
+            courses_parent = BranchGroup.objects.get(
+                name='Courses', 
+                owner=owner,
+                parent__name=f"{owner.username}_root" 
+            )
+        except BranchGroup.DoesNotExist:
+            raise ValueError('The Courses folder under the user root directory must exist! Contact support for help.')
+
+        # 3. Create the BranchGroup for this specific course
+        # We set folder_type to 'course' as per your new Enum design
+        new_folder = BranchGroup.objects.create(
+            owner=owner,
+            name=name,
+            parent=courses_parent,
+            folder_type="course",
+            order=name            # Ensuring alphabetical sorting works
+        )
+
+        # 4. Create and return the Course
         return cls.objects.create(
             owner=owner,
             status="developing",
             name=name,
             short_desc=short_desc,
-            # version-> firstnumber+1.0.0.0
+            version=version_str,
+            branch_location=new_folder,
+            creation_date=timezone.now()
         )
 
     def duplicate_course(self, new_owner, new_status):
         """Duplicates the course and all its related assessments."""
         with transaction.atomic():
-            new_course = self
+            # Get a fresh instance of this object from the database 
+            # so we don't mess with the 'self' instance in memory
+            new_course = Course.objects.get(pk=self.pk)
             new_course.pk = None
             new_course.id = None
             new_course.owner = new_owner
@@ -761,8 +797,6 @@ class UsersInCourse(models.Model):
         db_table_comment = 'If a user is listed in this table, then they automatically are assigned to the course. Teachers will show up as Teachers, Students will show up as Students.'
 
 
-from django.db.models.signals import post_save
-from django.dispatch import receiver
 
 @receiver(post_save, sender=UserProfile)
 def create_user_folder_structure(sender, instance, created, **kwargs):
@@ -772,6 +806,7 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
             name=f"{instance.username}_root",
             owner=instance,
             parent=None,
+            folder_type="folder",
             order=f"{instance.username}_root", # default order to the name, it will cause it to sort alphabetically
         )
 
@@ -785,5 +820,6 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
                 name=folder_name,
                 owner=instance,
                 parent=root,
+                folder_type="folder",
                 order=folder_name, # default order to the name, it will cause it to sort alphabetically
             )
