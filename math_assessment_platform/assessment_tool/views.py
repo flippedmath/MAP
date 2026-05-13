@@ -289,12 +289,12 @@ def get_folder_contents(request, group_id):
     group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
 
     # 1. Define the QuerySets with your specific optimizations
-    folders_qs = BranchGroup.objects.filter(parent=group).select_related('parent__parent')
+    folders_qs = BranchGroup.objects.filter(parent=group).select_related('parent__parent').order_by('order')
     courses_qs = Course.objects.filter(branch_location=group).select_related('branch_location')
-    assessments_qs = Assessment.objects.filter(branch_location=group)
+    assessments_qs = Assessment.objects.filter(branch_location=group).order_by('order')
     problems_qs = Problem.objects.filter(branch_location=group)
     qs_qs = CustomQuestionDistribution.objects.filter(assigned_folder=group).annotate(num_pairs=Count('cqdpair'))
-    aq_qs = AssessmentQuestionGroup.objects.filter(branch_location=group)
+    aq_qs = AssessmentQuestionGroup.objects.filter(branch_location=group).order_by('order')
 
     # 2. Check if ANY items exist (use the simple filter results for speed)
     # We use the raw filters here because .exists() is faster than running the full optimized query
@@ -327,7 +327,10 @@ def get_folder_contents(request, group_id):
     is_protected = (
         current_path == root_sys or 
         current_path.startswith(f"{root_sys}Courses/") or 
-        current_path.startswith(f"{root_sys}Standalone Assessments/")
+        current_path.startswith(f"{root_sys}Standalone Assessments/") or
+        current_path.startswith(f"{root_sys}'Shared for Collaboration'/") or
+        current_path.startswith(f"{root_sys}Student Generated Assessments by Course/") or
+        current_path.startswith(f"{root_sys}Public/")
     )
 
     return render(request, 'assessment_tool/partials/column.html', {
@@ -392,7 +395,10 @@ def create_folder(request):
     root = f"/Users/{username}_root/"
     # Block creation inside Courses or Standalone Assessments
     if parent_full_path.startswith(f"{root}Courses/") or \
-       parent_full_path.startswith(f"{root}Standalone Assessments/"):
+       parent_full_path.startswith(f"{root}Standalone Assessments/") or \
+       parent_full_path.startswith(f"{root}Shared for Collaboration/") or \
+       parent_full_path.startswith(f"{root}Student Generated Assessments by Course/") or \
+       parent_full_path.startswith(f"{root}Public/"):
         return JsonResponse({
             'error': 'This directory is managed by the system. Sub-folders cannot be added here.'
         }, status=403)
@@ -406,6 +412,7 @@ def create_folder(request):
     # Create the folder
     new_folder = BranchGroup.objects.create(
         name=unique_name,
+        order=unique_name,
         parent=parent_folder,
         owner=request.user
     )
@@ -459,7 +466,12 @@ def delete_item(request):
     # 2. System Protection Check
     username = request.user.username
     root = f"/Users/{username}_root/"
-    protected = [f"{root}Courses/", f"{root}Standalone Assessments/", f"{root}Standalone Problems/"]
+    protected = [f"{root}Courses/", 
+                 f"{root}Standalone Assessments/", 
+                 f"{root}Standalone Problems/",
+                 f"{root}Shared for Collaboration/",
+                 f"{root}Student Generated Assessments by Course/",
+                 f"{root}Public/"]
 
     if item_full_path in protected:
         return JsonResponse({'error': 'System folders cannot be deleted.'}, status=403)
@@ -529,7 +541,10 @@ def rename_item(request):
     protected_roots = [
         f"/Users/{username}_root/Courses/",
         f"/Users/{username}_root/Standalone Assessments/",
-        f"/Users/{username}_root/Standalone Problems/"
+        f"/Users/{username}_root/Standalone Problems/",
+        f"/Users/{username}_root/Shared for Collaboration/",
+        f"/Users/{username}_root/Student Generated Assessments by Course/",
+        f"/Users/{username}_root/Public/",
     ]
 
     if item_full_path in protected_roots:

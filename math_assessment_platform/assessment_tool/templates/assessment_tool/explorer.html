@@ -85,7 +85,10 @@ async function loadFolder(folderId, level) {
         } else if (firstItem) {
             const location = firstItem.getAttribute('data-location') || "";
             if (location.startsWith(`${rootPath}Courses/`) || 
-                location.startsWith(`${rootPath}Standalone Assessments/`)) {
+                location.startsWith(`${rootPath}Standalone Assessments/`) ||
+                location.startsWith(`${rootPath}Shared for Collaboration/`) ||
+                location.startsWith(`${rootPath}Student Generated Assessments by Course/`) ||
+                location.startsWith(`${rootPath}Public/`)) {
                 isProtected = true;
             }
         }
@@ -157,7 +160,11 @@ async function createNewFolder(parentId, level) {
 
     const username = "{{ request.user.username }}";
     const rootPath = `/Users/${username}_root/`;
-    const protectedPaths = [`${rootPath}Courses/`, `${rootPath}Standalone Assessments/` ];
+    const protectedPaths = [`${rootPath}Courses/`, 
+                            `${rootPath}Standalone Assessments/`,
+                            `${rootPath}Shared for Collaboration/`,
+                            `${rootPath}Student Generated Assessments by Course/`,
+                            `${rootPath}Public/`];
 
     // 2. Block if inside protected root or it is the root itself
     if (fullPath === rootPath || protectedPaths.some(p => fullPath.startsWith(p))) {
@@ -222,13 +229,16 @@ function showContextMenu(e, id, type, name, owner, location, hasItems) {
     const coursesFolder = `${rootPath}${username}_root/Courses/`;
     const assessmentsFolder = `${rootPath}${username}_root/Standalone Assessments/`;
     const problemsFolder = `${rootPath}${username}_root/Standalone Problems/`;
+    const sharedForCollab = `${rootPath}${username}_root/Shared for Collaboration/`;
+    const studentGeneratedAssessByCourse = `${rootPath}${username}_root/Student Generated Assessments by Course/`;
+    const publicFolder = `${rootPath}${username}_root/Public/`;
 
     // 2. System Folder Check: Is the item itself one of the core folders? If so, prevent editing inside the folder.
     const isSystemFolder = name_and_path.startsWith(`${coursesFolder}`);
 
     // 3. Check for core folder
     // const isCoreFolder = [`${rootPath}`, `${coursesFolder}`, `${assessmentsFolder}`, `${problemsFolder}`].includes(location);
-    const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder].includes(name_and_path);
+    const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder, sharedForCollab, studentGeneratedAssessByCourse, publicFolder].includes(name_and_path);
 
     // alert(`${isCoreFolder} --> ${coursesFolder}`);
 

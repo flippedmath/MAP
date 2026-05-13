@@ -30,22 +30,22 @@ class Command(BaseCommand):
                     continue
 
             # 2. Check and create Sub-folders
-            default_names = [['Courses', "C"], ['Standalone Assessments', "V"], ['Standalone Problems', "h"]]
+            default_names = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public']
             for folder_name in default_names:
                 exists = BranchGroup.objects.filter(
                     owner=user, 
                     parent=root, 
-                    name=folder_name[0],
+                    name=folder_name,
                 ).exists()
                 
                 if not exists:
                     try:
                         BranchGroup.objects.create(
-                            name=folder_name[0],
+                            name=folder_name,
                             owner=user,
                             parent=root,
-                            order=folder_name[1]
+                            order=folder_name # changing to default to the folder name. Used to be folder_name[1]
                         )
-                        self.stdout.write(f"  + Added '{folder_name[0]}' to {user.username} at order {folder_name[1]}")
+                        self.stdout.write(f"  + Added '{folder_name}' to {user.username}")
                     except Exception as e:
-                        self.stdout.write(self.style.ERROR(f"  - Error adding '{folder_name[0]}': {e}"))
+                        self.stdout.write(self.style.ERROR(f"  - Error adding '{folder_name}': {e}"))

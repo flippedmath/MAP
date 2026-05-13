@@ -751,11 +751,12 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
             name=f"{instance.username}_root",
             owner=instance,
             parent=None,
+            order=f"{instance.username}_root", # default order to the name, it will cause it to sort alphabetically
         )
 
         # 2. Define the default sub-folders
         # NOTE: This should not be changed in order to conform with proper path naming restrictions
-        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems']
+        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public']
 
         # 3. Create each sub-folder nested under the root
         for folder_name in default_folders:
@@ -763,4 +764,5 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
                 name=folder_name,
                 owner=instance,
                 parent=root,
+                order=folder_name, # default order to the name, it will cause it to sort alphabetically
             )
