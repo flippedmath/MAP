@@ -3,6 +3,9 @@ from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
 from .util import get_valid_unique_name
+import json
+from django.http import JsonResponse
+from .models import BranchGroup
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -209,23 +212,20 @@ from .models import Course
 def course_list_view(request):
     user = request.user
     
-    # 1. Logic for Visibility
+    # 1. Logic for Visibility (Remains the same)
     if user.user_type == 'IT_Support':
-        # IT Support sees all courses
-        courses = Course.objects.all().select_related('owner')
+        courses = Course.objects.all().select_related('owner', 'branch_location')
     elif user.user_type == 'Teacher':
-        # Teachers see their own courses OR any template
         courses = Course.objects.filter(
             Q(owner=user) | Q(status='template')
-        ).select_related('owner')
+        ).select_related('owner', 'branch_location')
     else:
-        # Placeholder for Student view
         return render(request, 'assessment_tool/student_placeholder.html', {
             'message': "Student dashboard is coming soon!"
         })
 
     if request.method == 'POST':
-        # 2. Handling the "Create by Copying" (POST logic)
+        # 2. Handling the "Create by Copying"
         if 'copy_course' in request.POST:
             source_id = request.POST.get('source_course_id')
             source_course = get_object_or_404(Course, id=source_id)
@@ -237,24 +237,32 @@ def course_list_view(request):
                 new_status = 'active'
 
             if new_status:
-                # The model method handles the entire chain of references
                 source_course.duplicate_course(new_owner=user, new_status=new_status)
                 messages.success(request, f"Full course chain cloned as {new_status}.")
                 return redirect('course_list')
             else:
                 messages.error(request, "Permission denied for this specific copy operation.")
         
-        # HANDLE NEW DEVELOPING COURSE (IT_Support Only)
+        # 3. HANDLE NEW DEVELOPING COURSE
         elif 'create_developing' in request.POST and user.user_type == 'IT_Support':
             name = request.POST.get('course_name')
             desc = request.POST.get('short_description', '')
+            
+            # CRITICAL: Grab the image file from request.FILES
+            image_file = request.FILES.get('course_image')
+            
             if name:
-                Course.create_developing(owner=user, name=name, short_desc=desc)
+                # Pass the image_file to your updated class method
+                Course.create_developing(
+                    owner=user, 
+                    name=name, 
+                    short_desc=desc, 
+                    image_file=image_file
+                )
                 messages.success(request, f"New developing course '{name}' created.")
             else:
                 messages.error(request, "Course name is required.")
             return redirect('course_list')
-
 
     return render(request, 'assessment_tool/course_page.html', {
         'courses': courses, 
@@ -357,9 +365,6 @@ def get_item_preview(request, item_type, item_id):
         'type': item_type
     })
 
-import json
-from django.http import JsonResponse
-from .models import BranchGroup
 
 def create_folder(request):
     if request.method != 'POST':

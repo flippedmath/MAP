@@ -9,12 +9,17 @@ from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager #, PermissionsMixin
 from django.utils import timezone
 import secrets
-import random
 from datetime import timedelta
 from django.db import transaction
 from django.db.models.functions import Lower
-from django.db.models.signals import post_save
 from django.dispatch import receiver
+from imagekit.models import ProcessedImageField
+from imagekit.processors import ResizeToFill
+import os
+import uuid
+from django.core.files.base import ContentFile
+from .util import clone_node_recursive
+
 
 class MyUserManager(BaseUserManager):
     def _format_user_data(self, gender, first_name, last_name, display_name):
@@ -322,8 +327,29 @@ class ContactUs(models.Model):
         db_table = 'contact_us'
 
 
+def get_course_image_path(instance, filename):
+    """
+    Generates a unique path: media/course_images/user_<id>/<uuid>_<filename>
+    """
+    ext = filename.split('.')[-1]
+    # Use a UUID to ensure the filename itself is unique
+    unique_filename = f"{uuid.uuid4()}.{ext}"
+    # Organize by owner ID so files aren't all in one giant folder
+    return os.path.join('course_images', f"user_{instance.owner.user_id}", unique_filename)
+
+
 class Course(models.Model):
-    image = models.BinaryField(blank=True, null=True)
+    # TODO: use the ProcessedImageField, description here: https://pypi.org/project/django-imagekit/
+    # image = models.BinaryField(blank=True, null=True)
+    # ProcessedImageField will resize the image to 400x400 and compress it to 90% quality
+    image = ProcessedImageField(
+        upload_to=get_course_image_path,
+        processors=[ResizeToFill(400, 400)],
+        format='JPEG',
+        options={'quality': 90},
+        blank=True, 
+        null=True
+    )
     status = models.TextField()  # Enum for one of these: 'active', 'template', 'hidden', 'developing', 'closed', 'deleted'
     owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     short_desc = models.CharField(max_length=255, blank=True, null=True)
@@ -334,12 +360,22 @@ class Course(models.Model):
     introduction = models.JSONField(blank=True, null=True)  # This field type is a guess.
 
     @classmethod
-    def create_developing(cls, owner, name, short_desc):
+    def create_developing(cls, owner, name, short_desc, image_file=None):
         """Creates a fresh course with 'developing' status and associated folder."""
         
-        # 1. Generate random version: #.#.#.#
-        # e.g., 1.4.2.9
-        version_str = "1."+".".join(str(random.randint(0, 9)) for _ in range(3))
+        # 1. Generate correct version for the 'developing' course: #.#.#.#
+        # e.g., 6.0.0.1
+        # <subject>.<template ID>.<template version>.<course copy number>
+
+        version_str = "1.0.0.1"
+        all_developing_courses = Course.objects.filter(status="developing").values_list('version', flat=True)
+        for version in all_developing_courses:
+            print(f"version number: {version} --> {version.split('.')}")
+            first_version_number = int(version.split(".")[0])
+            lowest_starting_number = 1
+            if lowest_starting_number <= first_version_number:
+                lowest_starting_number = first_version_number + 1
+                version_str = str(lowest_starting_number) + ".0.0.1"
 
         # 2. Locate the "Courses" parent folder
         # Assuming root is /Users/username_root/ and Courses is a subfolder
@@ -372,30 +408,26 @@ class Course(models.Model):
             short_desc=short_desc,
             version=version_str,
             branch_location=new_folder,
+            image=image_file,
             creation_date=timezone.now()
         )
 
     def duplicate_course(self, new_owner, new_status):
-        """Duplicates the course and all its related assessments."""
         with transaction.atomic():
-            # Get a fresh instance of this object from the database 
-            # so we don't mess with the 'self' instance in memory
-            new_course = Course.objects.get(pk=self.pk)
-            new_course.pk = None
-            new_course.id = None
-            new_course.owner = new_owner
-            new_course.status = new_status
-            new_course.short_desc = self.short_desc
-            new_course.introduction = self.introduction
-            # new_course.version = # It's different depending on the status that it gets changed to. Incorporate later
-            new_course.course_name = f"Copy of {self.course_name}"
-            new_course.save()
-
-            # Trigger duplication for all related assessments
-            for assessment in self.assessments.all():
-                assessment.duplicate_assessment(new_course, new_owner)
+            # Start the recursive engine
+            new_root = clone_node_recursive(
+                self.branch_location, 
+                self.branch_location.parent, 
+                new_owner,
+                starter_node=True
+            )
             
-            return new_course
+            # Final touch: The recursion creates the course, we just set the status
+            new_course = new_root.course
+            new_course.status = new_status
+            new_course.save()
+        
+        return new_course
 
     class Meta:
         managed = False
@@ -796,30 +828,3 @@ class UsersInCourse(models.Model):
         unique_together = (('user', 'course'),)
         db_table_comment = 'If a user is listed in this table, then they automatically are assigned to the course. Teachers will show up as Teachers, Students will show up as Students.'
 
-
-
-@receiver(post_save, sender=UserProfile)
-def create_user_folder_structure(sender, instance, created, **kwargs):
-    if created:
-        # 1. Create the Master Root Folder
-        root = BranchGroup.objects.create(
-            name=f"{instance.username}_root",
-            owner=instance,
-            parent=None,
-            folder_type="folder",
-            order=f"{instance.username}_root", # default order to the name, it will cause it to sort alphabetically
-        )
-
-        # 2. Define the default sub-folders
-        # NOTE: This should not be changed in order to conform with proper path naming restrictions
-        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public']
-
-        # 3. Create each sub-folder nested under the root
-        for folder_name in default_folders:
-            BranchGroup.objects.create(
-                name=folder_name,
-                owner=instance,
-                parent=root,
-                folder_type="folder",
-                order=folder_name, # default order to the name, it will cause it to sort alphabetically
-            )

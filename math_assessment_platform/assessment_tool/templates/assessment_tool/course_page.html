@@ -1,4 +1,9 @@
 {% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'assessment_tool/css/course_page.css' %}">
+{% endblock %}
 
 {% block content %}
 <div class="course-container">
@@ -6,18 +11,18 @@
 
     <!-- Section: Create New from Template -->
     <div class="action-bar">
-        <form method="POST">
+        <form method="POST" autocomplete="off">
             {% csrf_token %}
             <label>Create New Course from:</label>
             <select name="source_course_id">
                 {% for course in courses %}
                     {% if user_type == 'IT_Support' and course.status == 'developing' %}
                         <option value="{{ course.id }}">
-                            [Dev] {{ course.course_name }} ({{ course.assessments.count }} Assessments)
+                            [Dev] {{ course.name }} ({{ course.assessments.count }} Assessments)
                         </option>
                     {% elif course.status == 'template' %}
                         <option value="{{ course.id }}">
-                            [Template] {{ course.course_name }} ({{ course.assessments.count }} Assessments)
+                            [Template] {{ course.name }} ({{ course.assessments.count }} Assessments)
                         </option>
                     {% endif %}
                 {% endfor %}
@@ -29,7 +34,7 @@
     {% if user.user_type == 'IT_Support' %}
     <div class="admin-panel" style="margin-bottom: 2rem; padding: 15px; border: 1px solid #e2e8f0; background: #fff; border-radius: 8px;">
         <h3 style="margin-top: 0;">IT Support: Initial Course Creation</h3>
-        <form method="POST" style="display: flex; gap: 10px; align-items: flex-end;">
+        <form method="POST" enctype="multipart/form-data" style="display: flex; gap: 10px; align-items: flex-end;" autocomplete="off">
             {% csrf_token %}
             <div>
                 <label style="display:block; font-size: 0.8rem;">Course Name</label>
@@ -39,6 +44,11 @@
                 <label style="display:block; font-size: 0.8rem;">Description (Optional)</label>
                 <input type="text" name="short_description" style="padding: 8px; border-radius: 4px; border: 1px solid #cbd5e1;">
             </div>
+            <div>
+                <label style="display:block; font-size: 0.8rem;">Course Image</label>
+                <input type="file" name="course_image" accept="image/*" style="font-size: 0.8rem;">
+            </div>
+            
             <button type="submit" name="create_developing" class="btn-create" style="background: #059669; color: white; padding: 9px 15px; border: none; border-radius: 6px; cursor: pointer;">
                 + Start Developing Course
             </button>
@@ -46,11 +56,10 @@
     </div>
     {% endif %}
 
-    <!-- Section: Course Table -->
     <table>
         <thead>
             <tr>
-                <th>Course Name</th>
+                <th>Image</th> <th>Course Name</th>
                 <th>Status</th>
                 {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
                 <th>Actions</th>
@@ -59,10 +68,19 @@
         <tbody>
             {% for course in courses %}
             <tr class="status-{{ course.status }}">
-                <td>{{ course.course_name }}</td>
-                <td><span class="badge">{{ course.status }}</span></td>
+                <td>
+                    {% if course.image %}
+                        <img src="{{ course.image.url }}" alt="{{ course.name }}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;">
+                    {% else %}
+                        <div style="width: 50px; height: 50px; background: #e2e8f0; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: #64748b;">No Image</div>
+                    {% endif %}
+                </td>
+                <td>
+                    <strong>{{ course.name }}</strong><br>
+                    <small style="color: #64748b;">v{{ course.version }}</small> </td>
+                <td><span class="badge badge-{{ course.status }}">{{ course.status }}</span></td>
                 {% if user_type == 'IT_Support' %}
-                    <td>{{ course.owner.username }}</td> <!-- -->
+                    <td>{{ course.owner.username }}</td>
                 {% endif %}
                 <td>
                     {% if course.owner == request.user or user_type == 'IT_Support' %}
