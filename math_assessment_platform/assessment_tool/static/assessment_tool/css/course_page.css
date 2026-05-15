@@ -81,3 +81,26 @@ tbody tr:hover {
     padding: 5px;
     cursor: pointer;
 }
+
+.btn-delete {
+    background: #fee2e2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-delete:hover {
+    background: #ef4444;
+    color: white;
+}
+
+.btn-edit {
+    text-decoration: none;
+    color: #2563eb;
+    font-size: 0.75rem;
+    padding: 4px 8px;
+}

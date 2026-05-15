@@ -17,8 +17,7 @@ from imagekit.models import ProcessedImageField
 from imagekit.processors import ResizeToFill
 import os
 import uuid
-from django.core.files.base import ContentFile
-from .util import clone_node_recursive
+from .util import clone_node_recursive, get_course_image_path
 
 
 class MyUserManager(BaseUserManager):
@@ -197,7 +196,7 @@ class Assessment(models.Model):
     points_weight = models.FloatField(blank=True, null=True, db_comment='This is used to make the assessment grade for all students be tilted')
     status = models.TextField(blank=True, null=True, db_comment="closed, open, locked, retake available, submitted, active, inactive, upcoming. 'null' means it's not tied to an individual (like a template course)")  # This field type is a guess.
     is_historic = models.BooleanField(db_comment="When 'true' this is used to determine if the assessment is a static, needs to be unchanged, assessment that a Student is specifically assigned to complete with a single static (with concrete, not variable, inputs) answer tied to the problems. When 'false' it determines the assessment has questions with multiple answers tied to the problems.")
-    branch_location = models.OneToOneField('BranchGroup', models.DO_NOTHING, db_column='branch_location', related_name='assessment', db_comment="Just like 'course' this points to a branch location")
+    branch_location = models.OneToOneField('BranchGroup', models.CASCADE, db_column='branch_location', related_name='assessment', db_comment="Just like 'course' this points to a branch location")
     start_time = models.DateTimeField(blank=True, null=True, db_comment="only an available option for the 'parent' assessment")
     end_time = models.DateTimeField(blank=True, null=True, db_comment="only an available option for the 'parent' assessment")
     creation_date = models.DateTimeField(blank=True, null=True)
@@ -261,7 +260,7 @@ class AssessmentQuestionGroup(models.Model):
     assessment = models.ForeignKey(Assessment, models.DO_NOTHING)
     order = models.CharField(max_length=100, blank=True, null=True)
     name = models.CharField(max_length=255, blank=True, null=True)
-    branch_location = models.OneToOneField('BranchGroup', models.DO_NOTHING, db_column='branch_location', related_name='aqg', db_comment="acts the same way as in 'assessment' and 'course' for the same field")
+    branch_location = models.OneToOneField('BranchGroup', models.CASCADE, db_column='branch_location', related_name='aqg', db_comment="acts the same way as in 'assessment' and 'course' for the same field")
 
     class Meta:
         managed = False
@@ -276,7 +275,7 @@ class BranchGroup(models.Model):
         CQD = 'cqd', 'Custom Question Distribution'
         AQG = 'aqg', 'Assessment Question Group'
     
-    parent = models.ForeignKey('self', models.DO_NOTHING, db_column='parent', blank=True, null=True)
+    parent = models.ForeignKey('self', models.CASCADE, db_column='parent', blank=True, null=True, related_name='children')
     order = models.CharField(max_length=100, blank=True, null=True)
     owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     name = models.CharField(max_length=255)
@@ -327,16 +326,6 @@ class ContactUs(models.Model):
         db_table = 'contact_us'
 
 
-def get_course_image_path(instance, filename):
-    """
-    Generates a unique path: media/course_images/user_<id>/<uuid>_<filename>
-    """
-    ext = filename.split('.')[-1]
-    # Use a UUID to ensure the filename itself is unique
-    unique_filename = f"{uuid.uuid4()}.{ext}"
-    # Organize by owner ID so files aren't all in one giant folder
-    return os.path.join('course_images', f"user_{instance.owner.user_id}", unique_filename)
-
 
 class Course(models.Model):
     # TODO: use the ProcessedImageField, description here: https://pypi.org/project/django-imagekit/
@@ -354,7 +343,7 @@ class Course(models.Model):
     owner = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='owner')
     short_desc = models.CharField(max_length=255, blank=True, null=True)
     name = models.CharField(max_length=255)
-    branch_location = models.OneToOneField(BranchGroup, models.DO_NOTHING, db_column='branch_location', related_name='course', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
+    branch_location = models.OneToOneField(BranchGroup, models.CASCADE, db_column='branch_location', related_name='course', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
     creation_date = models.DateTimeField(blank=True, null=True)
     version = models.CharField(max_length=100, blank=True, null=True)
     introduction = models.JSONField(blank=True, null=True)  # This field type is a guess.
@@ -421,7 +410,10 @@ class Course(models.Model):
                 new_owner,
                 starter_node=True
             )
-            
+            # TODO: instead of 'self.branch_location' put the course in the 
+            #       user's own root/Courses directory. They may have copied 
+            #       it from somewhere else.
+
             # Final touch: The recursion creates the course, we just set the status
             new_course = new_root.course
             new_course.status = new_status
@@ -458,7 +450,7 @@ class CqdPair(models.Model):
 
 
 class CustomQuestionDistribution(models.Model):
-    assigned_folder = models.OneToOneField(BranchGroup, on_delete=models.DO_NOTHING, db_column='assigned_folder', related_name='cqd')
+    assigned_folder = models.OneToOneField(BranchGroup, on_delete=models.CASCADE, db_column='assigned_folder', related_name='cqd')
     suggested_count = models.IntegerField()
 
     def get_unique_name(self):

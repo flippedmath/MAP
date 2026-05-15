@@ -264,6 +264,18 @@ def course_list_view(request):
                 messages.error(request, "Course name is required.")
             return redirect('course_list')
 
+        elif 'delete_course' in request.POST and user.user_type == 'IT_Support':
+            folder_id = request.POST.get('folder_id')
+            # We fetch the folder; deleting it will delete the Course 1-to-1 link
+            folder = get_object_or_404(BranchGroup, id=folder_id)
+            course_name = folder.name
+            
+            folder.delete() 
+            
+            messages.success(request, f"Course '{course_name}' and all associated data deleted.")
+            return redirect('course_list')
+
+
     return render(request, 'assessment_tool/course_page.html', {
         'courses': courses, 
         'user_type': user.user_type

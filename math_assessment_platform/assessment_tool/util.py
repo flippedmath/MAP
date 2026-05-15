@@ -1,7 +1,11 @@
 import re
-from .models import BranchGroup
+# from .models import BranchGroup
+from django.apps import apps
 from django.http import JsonResponse
 import copy
+import os
+from django.core.files.base import ContentFile
+import uuid
 
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
     # 1. Basic Validation: Alphanumeric and single internal spaces
@@ -31,6 +35,15 @@ def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='n
     
     return new_name, None
 
+def get_course_image_path(instance, filename):
+    """
+    Generates a unique path: media/course_images/user_<id>/<uuid>_<filename>
+    """
+    ext = filename.split('.')[-1]
+    # Use a UUID to ensure the filename itself is unique
+    unique_filename = f"{uuid.uuid4()}.{ext}"
+    # Organize by owner ID so files aren't all in one giant folder
+    return os.path.join('course_images', f"user_{instance.owner.user_id}", unique_filename)
 
 def clone_course_payload(old_course, new_folder, new_owner, context):
     new_course = copy.deepcopy(old_course)
@@ -38,9 +51,9 @@ def clone_course_payload(old_course, new_folder, new_owner, context):
     new_course.id = None
     new_course.owner = new_owner
     new_course.branch_location = new_folder
+    # renaming with 'copy of' is not strictly necessary, but a good thing to do anyways
     new_course.name = f"Copy of {old_course.name}"
 
-    # Your specific Version Logic
     try:
         v_parts = old_course.version.split('.')
         if len(v_parts) == 4:
@@ -111,13 +124,16 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
     if context is None:
         context = {'course': None, 'assessment': None, 'aqg': None, 'cqd': None}
 
+    # I have circular imports unless I import BranchGroup later. So this resolves my problem:
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+
     t_name = old_folder.name
     # if it's the first node, change the name, otherwise keep the name the same
     if starter_node:
         # Duplicate the BranchGroup (Folder)
         # We need a NEW folder for the NEW course to satisfy the OneToOne constraint
         t_name = f"Copy of {old_folder.name}"
-        t_name, error = get_valid_unique_name(BranchGroup, old_folder.branch_location.parent, t_name)
+        t_name, error = get_valid_unique_name(BranchGroup, new_parent, t_name)
         if error:
             return JsonResponse({'error': error}, status=400)
 
@@ -141,7 +157,9 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
 
     handler = cloner_map.get(old_folder.folder_type)
     if handler and hasattr(old_folder, old_folder.folder_type):
+        # grab the separated table that is tied to the branch_group table row
         old_payload = getattr(old_folder, old_folder.folder_type)
+
         # The handler clones the object and updates the context
         new_payload = handler(old_payload, new_folder, new_owner, context)
         

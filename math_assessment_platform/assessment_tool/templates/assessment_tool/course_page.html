@@ -87,6 +87,23 @@
                         <a href="#">Edit</a>
                     {% endif %}
                 </td>
+                <td>
+                    <div style="display: flex; gap: 10px;">
+                        {% if course.owner == request.user or user_type == 'IT_Support' %}
+                            <a href="#" class="btn-edit">Edit</a>
+                        {% endif %}
+
+                        {% if user_type == 'IT_Support' %}
+                            <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
+                                {% csrf_token %}
+                                <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
+                                <button type="submit" name="delete_course" class="btn-delete">
+                                    Delete
+                                </button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </td>
             </tr>
             {% endfor %}
         </tbody>

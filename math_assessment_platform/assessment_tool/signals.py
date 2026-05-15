@@ -69,6 +69,7 @@ def delete_course_image(sender, instance, **kwargs):
     """Deletes physical file from filesystem when Course object is deleted."""
     if instance.image:
         # 'save=False' prevents the model from trying to save itself during deletion
+        # This triggers regardless of how the Course was deleted
         instance.image.delete(save=False)
 
 
