@@ -282,6 +282,9 @@ class BranchGroup(models.Model):
     folder_type = models.CharField(max_length=20,choices=FolderType.choices,default=FolderType.FOLDER)
     creation_date = models.DateTimeField(blank=True, null=True)
     modification_date = models.DateTimeField(blank=True, null=True)
+    # Tracking fields for the Restore Engine
+    previous_parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='historical_children')
+    previous_status = models.CharField(max_length=50, null=True, blank=True)
 
     def get_parent_path(self):
         """Returns the path of the folder containing this item."""

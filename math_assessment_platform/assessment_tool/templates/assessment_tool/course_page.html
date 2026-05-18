@@ -63,6 +63,9 @@
                 <th>Status</th>
                 {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
                 <th>Actions</th>
+                {% if course.owner == request.user or user_type == 'IT_Support' %}
+                <th>Delete?</th>
+                {% endif %}
             </tr>
         </thead>
         <tbody>
@@ -89,9 +92,6 @@
                 </td>
                 <td>
                     <div style="display: flex; gap: 10px;">
-                        {% if course.owner == request.user or user_type == 'IT_Support' %}
-                            <a href="#" class="btn-edit">Edit</a>
-                        {% endif %}
 
                         {% if user_type == 'IT_Support' %}
                             <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">

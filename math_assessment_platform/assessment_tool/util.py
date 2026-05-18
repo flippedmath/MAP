@@ -1,11 +1,13 @@
 import re
-# from .models import BranchGroup
+# from .models import BranchGroup ... instead of this, use --> BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
 from django.apps import apps
 from django.http import JsonResponse
 import copy
 import os
 from django.core.files.base import ContentFile
 import uuid
+from django.db import transaction
+from django.contrib import messages
 
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
     # 1. Basic Validation: Alphanumeric and single internal spaces
@@ -174,3 +176,93 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
         clone_node_recursive(child, new_folder, new_owner, context)
 
     return new_folder
+
+def send_to_trash(folder, user):
+    """
+    Quarantines a folder tree into the user's Trash folder.
+    """
+    with transaction.atomic():
+        # 1. Find the user's Trash folder root
+        # Adjust the filter name to match how you look up your root folders
+        BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+        trash_root = BranchGroup.objects.get(
+            name='Trash', 
+            parent__name=f"{user.username}_root"
+        )
+        
+        # 2. Track history before breaking links
+        folder.previous_parent = folder.parent
+        if hasattr(folder, 'course'):
+            folder.previous_status = folder.course.status
+            
+            # 3. Mark the payload status as deleted
+            course = folder.course
+            course.status = 'deleted'
+            course.save()
+
+        # 4. Move physical directory location to Trash root
+        folder.parent = trash_root
+        folder.save()
+
+def restore_course_payload(request, folder):
+    """
+    Restores a course: rewinds status, recovers original folder placement.
+    """
+    course = folder.course
+    user = request.user
+    
+    # 1. Fallback safety check: If original parent was wiped, find the general Courses/ folder
+    target_parent = folder.previous_parent
+    if not target_parent:
+        BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+        target_parent = BranchGroup.objects.get(
+            name='Courses', 
+            parent__name=f"{user.username}_root"
+        )
+        
+    # 2. Put folder back in its place
+    folder.parent = target_parent
+    folder.previous_parent = None # Clear history hook
+    folder.save()
+    
+    # 3. Revert Course Status
+    course.status = folder.previous_status or 'developing' # Fallback default
+    folder.previous_status = None
+    course.save()
+
+# --- Placeholders for other types ---
+def restore_assessment_payload(request, folder):
+    pass
+
+def restore_aqg_payload(request, folder):
+    pass
+
+def restore_cqd_payload(request, folder):
+    pass
+
+def restore_folder_payload(request, folder):
+    pass
+
+def restore_problem_payload(request, folder):
+    pass
+
+def restore_item_from_trash(request, folder):
+    """
+    Polymorphic dispatcher to restore items from the Trash folder back to production.
+    """
+    restore_map = {
+        'course': restore_course_payload,
+        'assessment': restore_assessment_payload,
+        'aqg': restore_aqg_payload,
+        'cqd': restore_cqd_payload,
+        'folder': restore_folder_payload,
+        'problem': restore_problem_payload,
+    }
+    
+    handler = restore_map.get(folder.folder_type)
+    if handler:
+        with transaction.atomic():
+            handler(request, folder)
+            messages.success(request, f"Successfully restored '{folder.name}'.")
+    else:
+        messages.error(request, f"Unknown folder type: {folder.folder_type}\nRestore method unknown")

@@ -28,7 +28,8 @@ def sync_name_to_order(sender, instance, **kwargs):
         f"{root_path}Standalone Assessments/",
         f"{root_path}Shared for Collaboration/",
         f"{root_path}Student Generated Assessments by Course/",
-        f"{root_path}Public/",
+        f"{root_path}Public/"
+        f"{root_path}Trash/",
     ]
 
     is_protected = any(current_path.startswith(p) for p in protected_roots) if current_path else False
@@ -52,7 +53,7 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
 
         # 2. Define the default sub-folders
         # NOTE: This should not be changed in order to conform with proper path naming restrictions
-        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public']
+        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public', 'Trash']
 
         # 3. Create each sub-folder nested under the root
         for folder_name in default_folders:

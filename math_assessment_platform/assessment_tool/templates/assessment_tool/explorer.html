@@ -88,7 +88,8 @@ async function loadFolder(folderId, level) {
                 location.startsWith(`${rootPath}Standalone Assessments/`) ||
                 location.startsWith(`${rootPath}Shared for Collaboration/`) ||
                 location.startsWith(`${rootPath}Student Generated Assessments by Course/`) ||
-                location.startsWith(`${rootPath}Public/`)) {
+                location.startsWith(`${rootPath}Public/`) ||
+                location.startsWith(`${rootPath}Trash/`)) {
                 isProtected = true;
             }
         }
@@ -164,7 +165,8 @@ async function createNewFolder(parentId, level) {
                             `${rootPath}Standalone Assessments/`,
                             `${rootPath}Shared for Collaboration/`,
                             `${rootPath}Student Generated Assessments by Course/`,
-                            `${rootPath}Public/`];
+                            `${rootPath}Public/`,
+                            `${rootPath}Trash/`];
 
     // 2. Block if inside protected root or it is the root itself
     if (fullPath === rootPath || protectedPaths.some(p => fullPath.startsWith(p))) {
@@ -216,10 +218,8 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
     const menu = document.getElementById('context-menu');
     const renameOption = document.getElementById('menu-rename');
     const deleteOption = document.getElementById('menu-delete');
-    
-    // NEW: Get the element for the dynamic "Open" action
-    // Ensure you have <div id="menu-open-link"></div> in your context menu HTML
     const openLinkOption = document.getElementById('menu-open-link');
+    const restoreOption = document.getElementById('menu-restore');
     
     currentItem = { id, type, name, owner, location, hasItems, linkedId };
     const username = "{{ request.user.username }}";
@@ -231,20 +231,40 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
     const sharedForCollab = `${rootPath}${username}_root/Shared for Collaboration/`;
     const studentGeneratedAssessByCourse = `${rootPath}${username}_root/Student Generated Assessments by Course/`;
     const publicFolder = `${rootPath}${username}_root/Public/`;
+    const trashFolder = `${rootPath}${username}_root/Trash/`;
 
     const isSystemFolder = name_and_path.startsWith(`${coursesFolder}`);
-    const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder, sharedForCollab, studentGeneratedAssessByCourse, publicFolder].includes(name_and_path);
+    const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder, sharedForCollab, studentGeneratedAssessByCourse, publicFolder, trashFolder].includes(name_and_path);
 
-    let canRename = !isSystemFolder && !isCoreFolder;
-    let canDelete = !isSystemFolder && !isCoreFolder && !hasItems;
+    // Check if the file path sits squarely inside the Trash directory
+    const itemTrashed = [trashFolder].includes(location); // matches exact path
+    const isInTrash = location.startsWith(`${trashFolder}`);
+    
+    if (isInTrash && itemTrashed) {
+        // If it's in the trash, show Restore, keep Delete active (for hard-purging), hide Rename
+        restoreOption.style.display = 'block';
+        renameOption.style.display = 'none';
+        deleteOption.className = ""; // Enabled for absolute purge
+    } else if (isInTrash) {
+        // If the trashed item is a sub-item inside of the trash, then disable 'delete' and 'restore' options
+        restoreOption.style.display = 'block';
+        renameOption.style.display = 'none';
+        deleteOption.className = canDelete ? "" : "disabled";
+    } else {
+        // Normal behavior if outside trash
+        restoreOption.style.display = 'none';
+        renameOption.style.display = 'block';
+        
+        let canRename = !isSystemFolder && !isCoreFolder;
+        let canDelete = !isSystemFolder && !isCoreFolder && !hasItems;
+        if (type === 'question_selection') canRename = false;
 
-    if (type === 'question_selection') canRename = false;
+        renameOption.className = canRename ? "" : "disabled";
+        deleteOption.className = canDelete ? "" : "disabled";
+    }
 
-    renameOption.className = canRename ? "" : "disabled";
-    deleteOption.className = canDelete ? "" : "disabled";
-
-    // --- NEW: DYNAMIC LINK LOGIC ---
-    if (openLinkOption) {
+    
+    if (openLinkOption && !isInTrash) {
         if (linkedId && linkedId !== '') {
             let label = "";
             let url = "";
@@ -293,7 +313,7 @@ document.addEventListener('click', () => {
 
 async function handleDelete() {
     if (document.getElementById('menu-delete').classList.contains('disabled')) return;
-    if (!confirm(`Are you sure you want to delete "${currentItem.name}"?`)) return;
+    if (!confirm(`Are you sure you want to delete "${currentItem.name}"? This will permanently delete the item.`)) return;
 
     const element = document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
     if (!element) return;
@@ -325,6 +345,38 @@ async function handleDelete() {
     }
 }
 
+async function handleRestore() {
+    const element = document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
+    if (!element) return;
+
+    // Fetch parent mapping identifiers directly out of the browser column state
+    const parentId = element.getAttribute('data-parent-id');
+    const level = parseInt(element.closest('.finder-column').dataset.level);
+
+    if (!confirm(`Do you want to restore "${currentItem.name}" to its original location?`)) return;
+
+    try {
+        const response = await fetch('/trash/restore/', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'X-CSRFToken': getCookie('csrftoken') 
+            },
+            body: JSON.stringify({ folder_id: currentItem.id })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // Refresh this specific dynamic column so the item cleanly disappears into production
+            loadFolder(parentId, level);
+        } else {
+            alert(`Restore execution failed: ${data.error}`);
+        }
+    } catch (err) {
+        alert("A network background error occurred.");
+    }
+}
 
 async function handleRename() {
     if (document.getElementById('menu-rename').classList.contains('disabled')) return;
@@ -367,6 +419,10 @@ async function handleRename() {
     <ul>
         <li id="menu-open-link" style="display:none; border-bottom: 1px solid #eee; font-weight: 600; color: #007aff;">
             </li>
+
+        <li id="menu-restore" onclick="handleRestore()" style="display:none; font-weight: 600; color: #28a745;">
+            <i class="fas fa-undo"></i> Restore Item
+        </li>
 
         <li id="menu-rename" onclick="handleRename()">Rename</li>
         <li id="menu-delete" onclick="handleDelete()">Delete</li>

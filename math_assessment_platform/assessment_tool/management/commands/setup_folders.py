@@ -30,7 +30,7 @@ class Command(BaseCommand):
                     continue
 
             # 2. Check and create Sub-folders
-            default_names = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public']
+            default_names = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public', 'Trash']
             for folder_name in default_names:
                 exists = BranchGroup.objects.filter(
                     owner=user, 

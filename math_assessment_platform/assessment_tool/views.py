@@ -2,10 +2,21 @@ from django.shortcuts import render, redirect
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
-from .util import get_valid_unique_name
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash
 import json
 from django.http import JsonResponse
 from .models import BranchGroup
+
+from django.db import transaction
+from .forms import TeacherRegistrationForm
+from .models import EmailAuthentication
+import secrets
+from django.utils import timezone
+from datetime import timedelta
+from django.contrib import messages
+from django.db import IntegrityError
+from django.views.decorators.http import require_POST
+from django.shortcuts import get_object_or_404
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -31,15 +42,6 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
 
         return context
 
-
-from django.db import transaction
-from .forms import TeacherRegistrationForm
-from .models import EmailAuthentication
-import secrets
-from django.utils import timezone
-from datetime import timedelta
-from django.contrib import messages
-from django.db import IntegrityError
 
 def register_teacher(request):
     # If the user is already logged in, don't let them register
@@ -268,11 +270,17 @@ def course_list_view(request):
             folder_id = request.POST.get('folder_id')
             # We fetch the folder; deleting it will delete the Course 1-to-1 link
             folder = get_object_or_404(BranchGroup, id=folder_id)
-            course_name = folder.name
-            
-            folder.delete() 
-            
-            messages.success(request, f"Course '{course_name}' and all associated data deleted.")
+
+            # Safety Check: Hard-delete ONLY if it's already in the Trash and status is 'deleted'
+            if folder.course.status == 'deleted':
+                course_name = folder.name
+                folder.delete() # This triggers the real database CASCADE and physical image delete
+                messages.success(request, f"Permanently deleted '{course_name}' and all associated data.")
+            else:
+                # Step 3 Engine: Move to Trash instead
+                send_to_trash(folder, request.user)
+                messages.success(request, f"Moved '{folder.name}' to the Trash.")
+                
             return redirect('course_list')
 
 
@@ -341,7 +349,8 @@ def get_folder_contents(request, group_id):
         current_path.startswith(f"{root_sys}Standalone Assessments/") or
         current_path.startswith(f"{root_sys}Shared for Collaboration/") or
         current_path.startswith(f"{root_sys}Student Generated Assessments by Course/") or
-        current_path.startswith(f"{root_sys}Public/")
+        current_path.startswith(f"{root_sys}Public/") or 
+        current_path.startswith(f"{root_sys}Trash/")
     )
 
     return render(request, 'assessment_tool/partials/column.html', {
@@ -406,7 +415,8 @@ def create_folder(request):
        parent_full_path.startswith(f"{root}Standalone Assessments/") or \
        parent_full_path.startswith(f"{root}Shared for Collaboration/") or \
        parent_full_path.startswith(f"{root}Student Generated Assessments by Course/") or \
-       parent_full_path.startswith(f"{root}Public/"):
+       parent_full_path.startswith(f"{root}Public/") or \
+       parent_full_path.startswith(f"{root}Trash/"):
         return JsonResponse({
             'error': 'This directory is managed by the system. Sub-folders cannot be added here.'
         }, status=403)
@@ -440,25 +450,24 @@ def delete_item(request):
 
     # 1. Resolve Object & Path with strict Ownership Verification
     try:
-        if item_type == 'folder':
-            obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
+        if item_type in ['folder', 'course', 'assessment']:
+            # Allow IT Support to fetch any folder container, otherwise restrict to the owner
+            #   IT_Support users should have access to delete anything from anyone's Trash as if they owned it
+            if request.user.user_type == 'IT_Support':
+                obj = get_object_or_404(BranchGroup, id=item_id)
+            else:
+                obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
             item_full_path = obj.get_parent_path() + obj.name + "/"
-        
-        elif item_type == 'course':
-            obj = get_object_or_404(Course, id=item_id, owner=request.user)
-            loc = obj.branch_location
-            item_full_path = loc.get_parent_path() + loc.name + "/"
-
-        elif item_type == 'assessment':
-            obj = get_object_or_404(Assessment, id=item_id, owner=request.user)
-            loc = obj.branch_location
-            item_full_path = loc.get_parent_path() + loc.name + "/"
 
         elif item_type == 'problem':
             obj = get_object_or_404(Problem, id=item_id, owner=request.user)
             loc = obj.branch_location
             item_full_path = loc.get_parent_path() + loc.name + "/"
 
+        # TODO: I think I will need to add this to the ['folder', 'course', 'assessment'] list above
+        #       This will enable me to delete the folder rather than the item, which makes it easier to
+        #       encapsulate logic if I am always only deleting the folders rather than the item behind
+        #       the scenes.
         elif item_type == 'assessment_selection':
             # Note: Checking owner via the linked branch_location
             obj = get_object_or_404(AssessmentQuestionGroup, id=item_id, branch_location__owner=request.user)
@@ -469,6 +478,14 @@ def delete_item(request):
             return JsonResponse({'error': f'Unsupported item type: {item_type}'}, status=400)
             
     except Exception as e:
+        import traceback
+        print(f"The course id being queried is = {item_id}")
+        print(traceback.format_exc()) # This prints the full stack trace to your terminal console
+        return JsonResponse({
+            'error': f"Python Exception: {str(e)}",
+            'item_id_received': item_id,
+            'item_type_received': item_type
+        }, status=400)
         return JsonResponse({'error': 'Item not found or permission denied.'}, status=404)
 
     # 2. System Protection Check
@@ -479,7 +496,8 @@ def delete_item(request):
                  f"{root}Standalone Problems/",
                  f"{root}Shared for Collaboration/",
                  f"{root}Student Generated Assessments by Course/",
-                 f"{root}Public/"]
+                 f"{root}Public/",
+                 f"{root}Trash/"]
 
     if item_full_path in protected:
         return JsonResponse({'error': 'System folders cannot be deleted.'}, status=403)
@@ -501,9 +519,6 @@ def delete_item(request):
     obj.delete()
     return JsonResponse({'status': 'success'})
 
-from django.shortcuts import get_object_or_404
-from django.http import JsonResponse
-import json
 
 def rename_item(request):
     if request.method != 'POST':
@@ -553,6 +568,7 @@ def rename_item(request):
         f"/Users/{username}_root/Shared for Collaboration/",
         f"/Users/{username}_root/Student Generated Assessments by Course/",
         f"/Users/{username}_root/Public/",
+        f"/Users/{username}_root/Trash/",
     ]
 
     if item_full_path in protected_roots:
@@ -595,3 +611,21 @@ def rename_item(request):
     obj.save()
 
     return JsonResponse({'status': 'success', 'new_name': new_name})
+
+
+
+@login_required
+@require_POST
+def restore_trash_item_view(request):
+    try:
+        data = json.loads(request.body)
+        folder_id = data.get('folder_id')
+        
+        folder = get_object_or_404(BranchGroup, id=folder_id, owner=request.user)
+        
+        # Fire our polymorphic handler function from utils
+        restore_item_from_trash(request, folder)
+        
+        return JsonResponse({'status': 'success'})
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=400)
