@@ -212,6 +212,9 @@ def database_viewer(request):
 def course_list_view(request):
     user = request.user
     user_type = request.user.user_type
+
+    # Extract the optional username filter from GET arguments
+    username_filter = request.GET.get('username_filter', '').strip()
     
     # 1. Define the custom status order priority matrix
     status_priority = Case(
@@ -231,27 +234,62 @@ def course_list_view(request):
         output_field=IntegerField(),
     )
 
-    # 1. Logic for Visibility (Remains the same)
-    if user.user_type == 'IT_Support':
-        courses = (
-            Course.objects.all()
-            .select_related('branch_location', 'owner')
-            .annotate(status_order=status_priority)
-            .annotate(status_order=user_priority)
-            .order_by('status_order', 'name')
-        )
-    elif user.user_type == 'Teacher':
+    if user_type == 'IT_Support':
+        # Start with the full base queryset
+        queryset = Course.objects.all().select_related('branch_location', 'owner')
+        
+        # Apply the multi-relational filter if active
+        if username_filter:
+            # 1. Grab only the unique Course IDs that match our criteria
+            matching_ids = Course.objects.filter(
+                Q(owner__username__iexact=username_filter) |
+                Q(usersincourse__user__username__iexact=username_filter)
+            ).values_list('id', flat=True) # Extracts just a list of integers/UUIDs
+
+            # 2. Filter the main optimized queryset using those IDs (No global DISTINCT needed!)
+            queryset = queryset.filter(id__in=matching_ids)
+
+            # 3. Dynamic Sub-sorting order tailored for the searched target user
+            filter_user_priority = Case(
+                When(owner__username__iexact=username_filter, then=Value(1)), # Filtered Owner first
+                default=Value(2),                                             # Enrolled participant second
+                output_field=IntegerField(),
+            )
+            courses = queryset.annotate(
+                ownership_order=filter_user_priority,
+                status_order=status_priority
+            ).order_by('ownership_order', 'status_order', 'name')
+        else:
+            # Default sorting rules when no username filter is active
+            courses = queryset.annotate(
+                user_order=user_priority,
+                status_order=status_priority
+            ).order_by('user_order', 'status_order', 'name')
+
+    elif user_type == 'Teacher':
         courses = Course.objects.filter(
             Q(owner=user) | Q(status='template')
-        ).select_related('owner', 'branch_location').annotate(status_order=status_priority).order_by('status_order', 'name')
+        ).select_related('owner', 'branch_location').annotate(
+            status_order=status_priority
+        ).order_by('status_order', 'name')
+
     else:
-        # Student
+        # Student Base Ruleset
         courses = Course.objects.filter(
             Q(owner=user) | Q(status='active')
         ).select_related('owner', 'branch_location')
 
 
     if request.method == 'POST':
+        # Safely extract the filter during the POST thread to pass it down to redirects
+        post_username_filter = request.GET.get('username_filter', '').strip()
+
+        # Helper utility to build our sticky redirection string
+        def get_sticky_redirect():
+            if post_username_filter:
+                return redirect(f"/courses/?username_filter={post_username_filter}")
+            return redirect('course_list')
+
         if 'update_status' in request.POST:
             course_id = request.POST.get('course_id')
             new_status = request.POST.get('new_status')
@@ -260,13 +298,13 @@ def course_list_view(request):
             # Strict Role Enforcement
             if course.owner != request.user and user_type != 'IT_Support':
                 messages.error(request, "Permission Denied.")
-                return redirect('course_list')
+                return get_sticky_redirect()
 
             # Handle the special 'deleted' mutation (Triggers your Trash quarantine)
             if new_status == 'deleted':
                 send_to_trash(course.branch_location, request.user)
                 messages.success(request, f"Course '{course.name}' moved to Trash.")
-                return redirect('course_list')
+                return get_sticky_redirect()
 
             # Handle recovery out of 'deleted' back to production using your restore logic
             if new_status == 'restore_trigger' and course.status == 'deleted':
@@ -284,13 +322,13 @@ def course_list_view(request):
                         f"Cannot restore '{course.name}'. Invalid or missing historical status tracking data."
                     )
                 
-                return redirect('course_list')
+                return get_sticky_redirect()
 
             # Standard Status Update Mutations (active, closed, template, hidden)
             course.status = new_status
             course.save()
             messages.success(request, f"Updated '{course.name}' status to {new_status}.")
-            return redirect('course_list')
+            return get_sticky_redirect()
         
         # 2. Handling the "Create by Copying"
         if 'copy_course' in request.POST:
@@ -304,6 +342,7 @@ def course_list_view(request):
                 return redirect('course_list')
             except:
                 messages.error(request, "Permission denied for this specific Course copy operation or associated folder doesn't exist.")
+                return redirect('course_list')
 
         # 3. HANDLE NEW DEVELOPING COURSE
         elif 'create_developing' in request.POST and user.user_type == 'IT_Support':
@@ -324,7 +363,7 @@ def course_list_view(request):
                 messages.success(request, f"New developing course '{name}' created.")
             else:
                 messages.error(request, "Course name is required.")
-            return redirect('course_list')
+            return get_sticky_redirect()
 
         elif 'delete_course' in request.POST and user.user_type == 'IT_Support':
             folder_id = request.POST.get('folder_id')
@@ -348,12 +387,13 @@ def course_list_view(request):
 
                 messages.success(request, f"Moved '{folder.name}' to the Trash quarantine folder.")
                 
-            return redirect('course_list')
+            return get_sticky_redirect()
 
 
     return render(request, 'assessment_tool/course_page.html', {
         'courses': courses, 
-        'user_type': user_type
+        'user_type': user_type,
+        'username_filter': username_filter
     })
 
 

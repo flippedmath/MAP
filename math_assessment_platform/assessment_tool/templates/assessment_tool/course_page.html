@@ -9,6 +9,21 @@
 <div class="course-container">
     <h2>Course Management ({{ user_type }})</h2>
 
+    {% if user_type == 'IT_Support' %}
+    <div class="filter-bar" style="margin-bottom: 1.5rem; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; display: flex; align-items: center; gap: 10px;">
+        <form method="GET" style="display: flex; gap: 10px; align-items: center; width: 100%;">
+            <label style="font-size: 0.9rem; font-weight: 500; color: #334155;">Filter by Username (Owner or Enrolled):</label>
+            <input type="text" name="username_filter" value="{{ username_filter }}" placeholder="Enter username..." style="padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; min-width: 200px;">
+            
+            <button type="submit" class="btn-action-go" style="background: #475569;">Apply Filter</button>
+            
+            {% if username_filter %}
+                <a href="{% url 'course_list' %}" style="font-size: 0.85rem; color: #ef4444; text-decoration: none; margin-left: 5px;">✕ Clear Filter</a>
+            {% endif %}
+        </form>
+    </div>
+    {% endif %}
+
     <div class="table-scroll-container">
         <table>
             <thead>
@@ -53,7 +68,7 @@
                     
                     <td class="td-center">
                         {% if course.owner == request.user or user_type == 'IT_Support' %}
-                        <form method="POST" class="inline-action-form">
+                        <form method="POST" action="?username_filter={{ username_filter }}" class="inline-action-form">
                             {% csrf_token %}
                             <input type="hidden" name="course_id" value="{{ course.id }}">
                             
@@ -109,7 +124,7 @@
                         <div style="display: flex; gap: 10px;">
                             {% if user_type == 'IT_Support' %}
                                 {% if course.status == 'deleted' %}
-                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
+                                    <form method="POST" action="?username_filter={{ username_filter }}" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
                                         {% csrf_token %}
                                         <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
                                         <button type="submit" name="delete_course" class="btn-delete">
