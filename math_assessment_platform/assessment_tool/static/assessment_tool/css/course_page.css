@@ -104,3 +104,97 @@ tbody tr:hover {
     font-size: 0.75rem;
     padding: 4px 8px;
 }
+
+/* Table Layout Alignment Adjustments */
+.td-center {
+    vertical-align: middle;
+}
+
+.inline-action-form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.text-muted {
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+
+/* Status Select Override Components */
+.status-select, .copy-select {
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    background-color: #fff;
+    font-size: 0.85rem;
+    color: #334155;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+}
+
+.status-select:hover, .copy-select:hover {
+    border-color: #94a3b8;
+}
+
+/* Execution Button Core Classes */
+.btn-action-go {
+    background: #2563eb;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s ease;
+}
+
+.btn-action-go:hover:not(:disabled) {
+    background: #1d4ed8;
+}
+
+.btn-action-go:disabled {
+    background: #e2e8f0;
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+.btn-clone-go {
+    background: #0d9488;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.15s ease;
+}
+
+.btn-clone-go:hover {
+    background: #0f766e;
+}
+
+
+/* Core Scroll Window Parent Wrapper */
+.table-scroll-container {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+    
+    -webkit-overflow-scrolling: touch;  /* Smooth scrolling feel on mobile touchscreens  */
+}
+
+/* Ensure the layout engine forces the table to respect container rules */
+.table-scroll-container table {
+    width: 100%;
+    min-width: 800px; /* Adjust this value based on how wide your columns need to be to avoid cramped select dropdowns */
+    border-collapse: collapse;
+    margin: 0;
+}

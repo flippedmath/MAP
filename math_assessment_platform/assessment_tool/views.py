@@ -18,6 +18,12 @@ from django.db import IntegrityError
 from django.views.decorators.http import require_POST
 from django.shortcuts import get_object_or_404
 
+from django.contrib.auth.decorators import login_required
+from django.db.models import Q
+from django.db.models import Case, Value, When, IntegerField
+from django.apps import apps
+from django.contrib.auth.decorators import user_passes_test
+
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
 
@@ -176,9 +182,6 @@ def verify_email(request):
     })
 
 
-from django.apps import apps
-from django.contrib.auth.decorators import user_passes_test
-
 @user_passes_test(lambda u: u.is_superuser, login_url='/dashboard/')
 def database_viewer(request):
     # Get the table selection from the GET request
@@ -205,46 +208,103 @@ def database_viewer(request):
     })
 
 
-from django.shortcuts import get_object_or_404
-from django.contrib.auth.decorators import login_required
-from django.db.models import Q
-from .models import Course
-
 @login_required
 def course_list_view(request):
     user = request.user
+    user_type = request.user.user_type
     
+    # 1. Define the custom status order priority matrix
+    status_priority = Case(
+        When(status='active', then=Value(1)),
+        When(status='template', then=Value(2)),
+        When(status='hidden', then=Value(3)),
+        When(status='developing', then=Value(4)),
+        When(status='closed', then=Value(5)),
+        When(status='deleted', then=Value(6)),
+        default=Value(7),
+        output_field=IntegerField(),
+    )
+    # Show user owned courses first, then sort by other users
+    user_priority = Case(
+        When(owner=request.user, then=Value(1)),
+        default=Value(2),
+        output_field=IntegerField(),
+    )
+
     # 1. Logic for Visibility (Remains the same)
     if user.user_type == 'IT_Support':
-        courses = Course.objects.all().select_related('owner', 'branch_location')
+        courses = (
+            Course.objects.all()
+            .select_related('branch_location', 'owner')
+            .annotate(status_order=status_priority)
+            .annotate(status_order=user_priority)
+            .order_by('status_order', 'name')
+        )
     elif user.user_type == 'Teacher':
         courses = Course.objects.filter(
             Q(owner=user) | Q(status='template')
-        ).select_related('owner', 'branch_location')
+        ).select_related('owner', 'branch_location').annotate(status_order=status_priority).order_by('status_order', 'name')
     else:
-        return render(request, 'assessment_tool/student_placeholder.html', {
-            'message': "Student dashboard is coming soon!"
-        })
+        # Student
+        courses = Course.objects.filter(
+            Q(owner=user) | Q(status='active')
+        ).select_related('owner', 'branch_location')
+
 
     if request.method == 'POST':
+        if 'update_status' in request.POST:
+            course_id = request.POST.get('course_id')
+            new_status = request.POST.get('new_status')
+            course = get_object_or_404(Course, id=course_id)
+
+            # Strict Role Enforcement
+            if course.owner != request.user and user_type != 'IT_Support':
+                messages.error(request, "Permission Denied.")
+                return redirect('course_list')
+
+            # Handle the special 'deleted' mutation (Triggers your Trash quarantine)
+            if new_status == 'deleted':
+                send_to_trash(course.branch_location, request.user)
+                messages.success(request, f"Course '{course.name}' moved to Trash.")
+                return redirect('course_list')
+
+            # Handle recovery out of 'deleted' back to production using your restore logic
+            if new_status == 'restore_trigger' and course.status == 'deleted':
+                folder = course.branch_location
+                allowed_historical_states = ['closed', 'hidden', 'developing']
+
+                # Safety Check: Read directly from what Postgres tracked *before* the trash move
+                if folder.previous_status in allowed_historical_states:
+                    
+                    # Run the engine—it handles setting the status back automatically!
+                    restore_item_from_trash(request, folder)
+                else:
+                    messages.error(
+                        request, 
+                        f"Cannot restore '{course.name}'. Invalid or missing historical status tracking data."
+                    )
+                
+                return redirect('course_list')
+
+            # Standard Status Update Mutations (active, closed, template, hidden)
+            course.status = new_status
+            course.save()
+            messages.success(request, f"Updated '{course.name}' status to {new_status}.")
+            return redirect('course_list')
+        
         # 2. Handling the "Create by Copying"
         if 'copy_course' in request.POST:
             source_id = request.POST.get('source_course_id')
+            target_transition = request.POST.get('target_transition') # e.g. 'developing_to_template'
             source_course = get_object_or_404(Course, id=source_id)
-            
-            new_status = None
-            if user.user_type == 'IT_Support' and source_course.status == 'developing':
-                new_status = 'template'
-            elif source_course.status == 'template':
-                new_status = 'active'
 
-            if new_status:
-                source_course.duplicate_course(new_owner=user, new_status=new_status)
-                messages.success(request, f"Full course chain cloned as {new_status}.")
+            try:
+                source_course.duplicate_course(user=user, target_transition=target_transition)
+                messages.success(request, f"Successfully branched new course from '{source_course.name}'.")
                 return redirect('course_list')
-            else:
-                messages.error(request, "Permission denied for this specific copy operation.")
-        
+            except:
+                messages.error(request, "Permission denied for this specific Course copy operation or associated folder doesn't exist.")
+
         # 3. HANDLE NEW DEVELOPING COURSE
         elif 'create_developing' in request.POST and user.user_type == 'IT_Support':
             name = request.POST.get('course_name')
@@ -268,25 +328,32 @@ def course_list_view(request):
 
         elif 'delete_course' in request.POST and user.user_type == 'IT_Support':
             folder_id = request.POST.get('folder_id')
-            # We fetch the folder; deleting it will delete the Course 1-to-1 link
             folder = get_object_or_404(BranchGroup, id=folder_id)
+            course = folder.course  # Grab the 1-to-1 course metadata object
 
-            # Safety Check: Hard-delete ONLY if it's already in the Trash and status is 'deleted'
-            if folder.course.status == 'deleted':
+            # --- CASE 1: HARD PURGE (Only allowed if already soft-deleted) ---
+            if course.status == 'deleted':
                 course_name = folder.name
-                folder.delete() # This triggers the real database CASCADE and physical image delete
-                messages.success(request, f"Permanently deleted '{course_name}' and all associated data.")
-            else:
-                # Step 3 Engine: Move to Trash instead
+                folder.delete()  # Triggers database CASCADE and physical file deletion signals
+                messages.success(request, f"Permanently deleted '{course_name}' and all associated assessments.")
+            
+            # --- CASE 2: SOFT-DELETE QUARANTINE (For active, template, hidden, developing, closed) ---
+            else:                
+                # 1. Ship the folder structure over to the physical Trash directory tree
                 send_to_trash(folder, request.user)
-                messages.success(request, f"Moved '{folder.name}' to the Trash.")
+
+                # 2. Update the metadata payload status to reflect its quarantine state
+                course.status = 'deleted'
+                course.save()
+
+                messages.success(request, f"Moved '{folder.name}' to the Trash quarantine folder.")
                 
             return redirect('course_list')
 
 
     return render(request, 'assessment_tool/course_page.html', {
         'courses': courses, 
-        'user_type': user.user_type
+        'user_type': user_type
     })
 
 
@@ -524,93 +591,144 @@ def rename_item(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
         
-    data = json.loads(request.body)
-    item_id = data.get('id')
-    item_type = data.get('type')
-    new_name = data.get('new_name', '').strip()
+    try:
+        data = json.loads(request.body)
+        item_id = data.get('id')
+        item_type = data.get('type')
+        new_name = data.get('new_name', '').strip()
 
-    # Ensure field names match your actual model definitions
-    model_map = {
-        'folder': (BranchGroup, 'name'),
-        'course': (Course, 'name'), 
-        'assessment': (Assessment, 'name'),
-        'problem': (Problem, 'title'),
-        'assessment_selection': (AssessmentQuestionGroup, 'name'),
-        # can't rename the custom_question_group generated name from get_unique_name
-    }
+        if not new_name:
+            return JsonResponse({'error': 'Name cannot be blank.'}, status=400)
 
-    if item_type not in model_map:
-        return JsonResponse({'error': 'Unknown item type.'}, status=400)
+        # Ensure field names match your actual model definitions
+        model_map = {
+            'folder': (BranchGroup, 'name'),
+            'course': (Course, 'name'), 
+            'assessment': (Assessment, 'name'),
+            'problem': (Problem, 'title'),
+            'assessment_selection': (AssessmentQuestionGroup, 'name'),
+            # can't rename the custom_question_group generated name from get_unique_name
+        }
 
-    model_class, field_name = model_map[item_type]
-    
-    # This is where the 404 usually happens - double check ID and Owner
-    obj = get_object_or_404(model_class, id=item_id, owner=request.user)
+        if item_type not in model_map:
+            return JsonResponse({'error': 'Unknown item type.'}, status=400)
 
-    # Check to make sure the 'new_name' doesn't contain any special characters 
-    #    other than space (no '_' and '()' especially since I am going to hard code 
-    #    those in for special circumstances later)
-    new_name, error = get_valid_unique_name(BranchGroup, obj.parent, new_name)        
-    if error:
-        return JsonResponse({'error': error}, status=400)
-
-    # Path Protection Logic
-    if item_type == 'folder':
-        item_full_path = obj.get_parent_path() + obj.name + "/"
-    else:
-        item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
-
-    username = request.user.username
-    protected_roots = [
-        f"/Users/{username}_root/Courses/",
-        f"/Users/{username}_root/Standalone Assessments/",
-        f"/Users/{username}_root/Standalone Problems/",
-        f"/Users/{username}_root/Shared for Collaboration/",
-        f"/Users/{username}_root/Student Generated Assessments by Course/",
-        f"/Users/{username}_root/Public/",
-        f"/Users/{username}_root/Trash/",
-    ]
-
-    if item_full_path in protected_roots:
-        return JsonResponse({'error': 'Cannot rename system folders.'}, status=403)
-
-    if item_full_path.startswith(f"/Users/{username}_root/Courses/"):
-        return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
-
-    # Collision Check: Find the Parent/Location
-    # We need to check siblings (other items with the same parent)
-    parent = getattr(obj, 'parent', None) or getattr(obj, 'branch_location', None)
-    
-    # Automatic Suffix Incrementer Logic
-    base_name = new_name
-    counter = 1
-    
-    while True:
-        # Check if any sibling has this name
-        # We exclude the current object itself so we don't collide with our own name
-        duplicate_query = {field_name: new_name}
-        if parent:
-            if item_type == 'folder':
-                duplicate_exists = BranchGroup.objects.filter(parent=parent, **duplicate_query).exclude(id=obj.id).exists()
-            else:
-                # For items, check the specific model class in that location
-                duplicate_exists = model_class.objects.filter(branch_location=parent, **duplicate_query).exclude(id=obj.id).exists()
-        else:
-            # Root level check
-            duplicate_exists = BranchGroup.objects.filter(parent__isnull=True, owner=request.user, **duplicate_query).exclude(id=obj.id).exists()
-
-        if not duplicate_exists:
-            break
+        model_class, field_name = model_map[item_type]
+        is_it_support = (request.user.user_type == 'IT_Support')
         
-        # If exists, append/increment (n)
-        new_name = f"{base_name} ({counter})"
-        counter += 1
+        if item_type in ['folder', 'course', 'assessment']:
+            if is_it_support:
+                obj = get_object_or_404(BranchGroup, id=item_id)
+            else:
+                obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
+            item_full_path = obj.get_parent_path() + obj.name + "/"
+            parent = obj.parent
+        else:
+            # Independent items (problems, selection groups) resolve normally
+            if is_it_support:
+                obj = get_object_or_404(model_class, id=item_id)
+            else:
+                obj = get_object_or_404(model_class, id=item_id, owner=request.user)
+            item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
+            parent = obj.branch_location
 
-    # Perform Rename
-    setattr(obj, field_name, new_name)
-    obj.save()
+        # Check to make sure the 'new_name' doesn't contain any special characters 
+        #    other than space (no '_' and '()' especially since I am going to hard code 
+        #    those in for special circumstances later)
+        bg_context_node = obj if item_type == 'folder' else parent
+        new_name, error = get_valid_unique_name(BranchGroup, bg_context_node.parent if item_type == 'folder' else bg_context_node, new_name)
+        if error:
+            return JsonResponse({'error': error}, status=400)
 
-    return JsonResponse({'status': 'success', 'new_name': new_name})
+        # # Path Protection Logic
+        # if item_type == 'folder':
+        #     item_full_path = obj.get_parent_path() + obj.name + "/"
+        # else:
+        #     item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
+
+        username = request.user.username
+        protected_roots = [
+            f"/Users/{username}_root/Courses/",
+            f"/Users/{username}_root/Standalone Assessments/",
+            f"/Users/{username}_root/Standalone Problems/",
+            f"/Users/{username}_root/Shared for Collaboration/",
+            f"/Users/{username}_root/Student Generated Assessments by Course/",
+            f"/Users/{username}_root/Public/",
+            f"/Users/{username}_root/Trash/",
+        ]
+
+        if item_full_path in protected_roots:
+            return JsonResponse({'error': 'Cannot rename system folders.'}, status=403)
+
+        # Allow IT Support or owners to change names inside the Courses/ tree via this specific grid
+        if item_full_path.startswith(f"/Users/{username}_root/Courses/") and not request.resolver_match.view_name == 'course_list':
+            # Note: If you want to allow renames from the courses page but block general Explorer renames,
+            # we can skip this check if request path hits your course list, or keep it open for IT Support.
+            if not is_it_support and item_type == 'folder' and obj.name in ['Courses', 'Trash']:
+                return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
+
+        # if item_full_path.startswith(f"/Users/{username}_root/Courses/"):
+        #     return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
+
+        # Collision Check: Find the Parent/Location
+        # We need to check siblings (other items with the same parent)
+        # parent = getattr(obj, 'parent', None) or getattr(obj, 'branch_location', None)
+        
+        # Automatic Suffix Incrementer Logic
+        base_name = new_name
+        counter = 1
+        
+        while True:
+            duplicate_query = {field_name: new_name}
+            if parent:
+                if item_type in ['folder', 'course', 'assessment']:
+                    # Sibling collision check against the folder structure table
+                    duplicate_exists = BranchGroup.objects.filter(parent=parent, name=new_name).exclude(id=obj.id if item_type == 'folder' else obj.id).exists()
+                else:
+                    duplicate_exists = model_class.objects.filter(branch_location=parent, **duplicate_query).exclude(id=obj.id).exists()
+            else:
+                duplicate_exists = BranchGroup.objects.filter(parent__isnull=True, owner=obj.owner, name=new_name).exclude(id=obj.id if item_type == 'folder' else obj.id).exists()
+
+            if not duplicate_exists:
+                break
+            
+            new_name = f"{base_name} ({counter})"
+            counter += 1
+
+        # --- STEP 4: EXECUTE SYNCHRONIZED DATABASE ATOMIC WRITE ---
+        with transaction.atomic():
+            if item_type in ['course', 'assessment']:
+                # 'obj' is the BranchGroup folder. Rename the folder container:
+                obj.name = new_name
+                obj.save()
+
+                # Find and rename the connected core payload entity (e.g., Course row)
+                payload_relation_str = 'course' if item_type == 'course' else 'assessment'
+                if hasattr(obj, payload_relation_str):
+                    payload_obj = getattr(obj, payload_relation_str)
+                    setattr(payload_obj, field_name, new_name)
+                    payload_obj.save()
+                    
+            elif item_type == 'folder':
+                obj.name = new_name
+                obj.save()
+                
+                # If a regular folder maps to a course or assessment payload, sync it too
+                if hasattr(obj, 'course'):
+                    obj.course.name = new_name
+                    obj.course.save()
+                elif hasattr(obj, 'assessment'):
+                    obj.assessment.name = new_name
+                    obj.assessment.save()
+            else:
+                # Fallback for independent metadata types (problems, selections)
+                setattr(obj, field_name, new_name)
+                obj.save()
+
+        return JsonResponse({'status': 'success', 'new_name': new_name})
+    
+    except Exception as e:
+        return JsonResponse({'error': f"Rename operation failed: {str(e)}"}, status=500)
 
 
 

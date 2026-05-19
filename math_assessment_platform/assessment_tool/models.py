@@ -404,24 +404,39 @@ class Course(models.Model):
             creation_date=timezone.now()
         )
 
-    def duplicate_course(self, new_owner, new_status):
+    def duplicate_course(self, user, target_transition):
         with transaction.atomic():
-            # Start the recursive engine
-            new_root = clone_node_recursive(
+            username = user.username
+            courses_root_folder = BranchGroup.objects.get(
+                name='Courses', 
+                parent__name=f"{username}_root"
+            )
+
+            user_type = user.user_type
+
+            # Determine resulting status configuration based on transition choice
+            resulting_status = 'active'
+            if target_transition == 'developing_to_template':
+                resulting_status = 'template'
+
+            # Run your recursive duplicating logic engine setup
+            context = {'course': None, 'assessment': None, 'aqg': None, 'cqd': None}
+            
+            # 1. Duplicate Folder Structure
+            new_folder = clone_node_recursive(
                 self.branch_location, 
-                self.branch_location.parent, 
-                new_owner,
+                courses_root_folder, 
+                user, 
+                context,
                 starter_node=True
             )
-            # TODO: instead of 'self.branch_location' put the course in the 
-            #       user's own root/Courses directory. They may have copied 
-            #       it from somewhere else.
-
-            # Final touch: The recursion creates the course, we just set the status
-            new_course = new_root.course
-            new_course.status = new_status
+            
+            # 2. Update the cloned payload attributes
+            new_course = new_folder.course
+            new_course.status = resulting_status
+            new_course.name = new_folder.name #f"Copy of {self.name}"
+            new_course.owner = user
             new_course.save()
-        
         return new_course
 
     class Meta:

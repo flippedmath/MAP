@@ -20,22 +20,9 @@
     <div id="dynamic-columns" style="display: flex;"></div>
 </div>
 
+<script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+
 <script>
-function getCookie(name) {
-    let cookieValue = null;
-    if (document.cookie && document.cookie !== '') {
-        const cookies = document.cookie.split(';');
-        for (let i = 0; i < cookies.length; i++) {
-            const cookie = cookies[i].trim();
-            // Does this cookie string begin with the name we want?
-            if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                break;
-            }
-        }
-    }
-    return cookieValue;
-}
 
 // Add a level parameter to your initial call in explorer.html: 
 // onclick="loadFolder('{{ root_folder.id }}', 0)"

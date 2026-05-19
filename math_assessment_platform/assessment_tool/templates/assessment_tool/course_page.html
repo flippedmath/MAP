@@ -9,26 +9,127 @@
 <div class="course-container">
     <h2>Course Management ({{ user_type }})</h2>
 
-    <!-- Section: Create New from Template -->
-    <div class="action-bar">
-        <form method="POST" autocomplete="off">
-            {% csrf_token %}
-            <label>Create New Course from:</label>
-            <select name="source_course_id">
+    <div class="table-scroll-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Image</th> 
+                    <th>Course Name</th>
+                    <th>Status</th>
+                    {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
+                    <th>Modify Status</th>
+                    <th>Clone / Copy Option</th>
+                    <th>Permanently Delete (IT Support Only)</th>
+                </tr>
+            </thead>
+            <tbody>
                 {% for course in courses %}
-                    {% if user_type == 'IT_Support' and course.status == 'developing' %}
-                        <option value="{{ course.id }}">
-                            [Dev] {{ course.name }} ({{ course.assessments.count }} Assessments)
-                        </option>
-                    {% elif course.status == 'template' %}
-                        <option value="{{ course.id }}">
-                            [Template] {{ course.name }} ({{ course.assessments.count }} Assessments)
-                        </option>
+                <tr class="status-{{ course.status }}">
+                    <td class="td-center">
+                        {% if course.image %}
+                            <img src="{{ course.image.url }}" alt="{{ course.name }}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;">
+                        {% else %}
+                            <div style="width: 50px; height: 50px; background: #e2e8f0; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: #64748b;">No Image</div>
+                        {% endif %}
+                    </td>
+                    <td class="td-center">
+                        <strong>{{ course.name }}</strong>
+                        {% if course.owner == request.user or user_type == 'IT_Support' %}
+                            <small style="margin-left: 8px;">
+                                <a href="#" onclick="triggerInlineRename('{{ course.branch_location.id }}', '{{ course.name|escapejs }}'); return false;" style="color: #2563eb; text-decoration: none;">
+                                    ✏️
+                                </a>
+                            </small>
+                        {% endif %}
+                        <br>
+                        <small style="color: #64748b;">v{{ course.version }}</small> 
+                    </td>
+                    <td class="td-center">
+                        <span class="badge badge-{{ course.status }}">{{ course.status }}</span>
+                    </td>
+                    {% if user_type == 'IT_Support' %}
+                        <td class="td-center">{{ course.owner.username }}</td>
                     {% endif %}
+                    
+                    <td class="td-center">
+                        {% if course.owner == request.user or user_type == 'IT_Support' %}
+                        <form method="POST" class="inline-action-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="course_id" value="{{ course.id }}">
+                            
+                            <select name="new_status" class="status-select" onchange="this.form.submit_mutate.disabled = false;">
+                                <option value="" disabled selected>Change status to...</option>
+                                {% if course.status == 'active' %}
+                                    <option value="closed">closed</option>
+                                {% elif course.status == 'template' %}
+                                    <option value="hidden">hidden</option>
+                                    <option value="deleted">deleted (Trash)</option>
+                                {% elif course.status == 'hidden' %}
+                                    <option value="template">template</option>
+                                {% elif course.status == 'developing' %}
+                                    <option value="deleted">deleted (Trash)</option>
+                                {% elif course.status == 'closed' %}
+                                    <option value="deleted">deleted (Trash)</option>
+                                    <option value="active">active</option>
+                                {% elif course.status == 'deleted' %}
+                                    <option value="restore_trigger">Restore Course</option>
+                                {% endif %}
+                            </select>
+                            <button type="submit" name="update_status" id="submit_mutate" class="btn-action-go" disabled>Go</button>
+                        </form>
+                        {% else %}
+                            <span class="text-muted">Read Only</span>
+                        {% endif %}
+                    </td>
+
+                    <td class="td-center">
+                        {% if course.status == 'developing' or course.status == 'template' or course.status == 'closed' %}
+                        <form method="POST" class="inline-action-form">
+                            {% csrf_token %}
+                            <input type="hidden" name="source_course_id" value="{{ course.id }}">
+                            
+                            <select name="target_transition" class="copy-select" required>
+                                <option value="" disabled selected>Create new Course from...</option>
+                                {% if course.status == 'developing' %}
+                                    <option value="developing_to_template">Create Template from Developing</option>
+                                {% elif course.status == 'template' %}
+                                    <option value="template_to_active">Activate new Course from Template</option>
+                                {% elif course.status == 'closed' %}
+                                    <option value="closed_to_active">Activate new Course using existing Course as a Template</option>
+                                {% endif %}
+                            </select>
+                            <button type="submit" name="copy_course" class="btn-clone-go">Clone</button>
+                        </form>
+                        {% else %}
+                            <span class="text-muted">Not Cloneable</span>
+                        {% endif %}
+                    </td>
+
+                    <td class="td-center">
+                        <div style="display: flex; gap: 10px;">
+                            {% if user_type == 'IT_Support' %}
+                                {% if course.status == 'deleted' %}
+                                    <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
+                                        <button type="submit" name="delete_course" class="btn-delete">
+                                            Delete
+                                        </button>
+                                    </form>
+                                {% else %}
+                                    <span class="text-muted" style="font-size: 0.8rem; font-style: italic;">
+                                        Can only Permanently Delete a 'deleted' course
+                                    </span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
                 {% endfor %}
-            </select>
-            <button type="submit" name="copy_course" class="btn-create">Clone Selected</button>
-        </form>
+            </tbody>
+        </table>
     </div>
 
     {% if user.user_type == 'IT_Support' %}
@@ -54,59 +155,41 @@
             </button>
         </form>
     </div>
-    {% endif %}
-
-    <table>
-        <thead>
-            <tr>
-                <th>Image</th> <th>Course Name</th>
-                <th>Status</th>
-                {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
-                <th>Actions</th>
-                {% if course.owner == request.user or user_type == 'IT_Support' %}
-                <th>Delete?</th>
-                {% endif %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for course in courses %}
-            <tr class="status-{{ course.status }}">
-                <td>
-                    {% if course.image %}
-                        <img src="{{ course.image.url }}" alt="{{ course.name }}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;">
-                    {% else %}
-                        <div style="width: 50px; height: 50px; background: #e2e8f0; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: #64748b;">No Image</div>
-                    {% endif %}
-                </td>
-                <td>
-                    <strong>{{ course.name }}</strong><br>
-                    <small style="color: #64748b;">v{{ course.version }}</small> </td>
-                <td><span class="badge badge-{{ course.status }}">{{ course.status }}</span></td>
-                {% if user_type == 'IT_Support' %}
-                    <td>{{ course.owner.username }}</td>
-                {% endif %}
-                <td>
-                    {% if course.owner == request.user or user_type == 'IT_Support' %}
-                        <a href="#">Edit</a>
-                    {% endif %}
-                </td>
-                <td>
-                    <div style="display: flex; gap: 10px;">
-
-                        {% if user_type == 'IT_Support' %}
-                            <form method="POST" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
-                                {% csrf_token %}
-                                <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
-                                <button type="submit" name="delete_course" class="btn-delete">
-                                    Delete
-                                </button>
-                            </form>
-                        {% endif %}
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    {% endif %}    
 </div>
+
+<script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+
+<script>
+async function triggerInlineRename(branchGroupId, currentName) {
+    const newName = prompt(`Rename course "${currentName}" to:`, currentName);
+    if (!newName || newName.trim() === currentName) return;
+
+    try {
+        const response = await fetch('/rename-item/', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json', 
+                'X-CSRFToken': getCookie('csrftoken') // Handled by utils.js!
+            },
+            body: JSON.stringify({ 
+                id: branchGroupId, 
+                type: 'course', 
+                new_name: newName.trim() 
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // Success response triggers a localized state reload to show the name adjustment
+            window.location.reload();
+        } else {
+            alert(`Rename failed: ${data.error}`);
+        }
+    } catch (err) {
+        alert("A network system communication error occurred.");
+    }
+}
+</script>
 {% endblock %}
