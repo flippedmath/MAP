@@ -31,6 +31,7 @@
                     <th>Image</th> 
                     <th>Course Name</th>
                     <th>Status</th>
+                    <th>Info</th>
                     {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
                     <th>Modify Status</th>
                     <th>Clone / Copy Option</th>
@@ -61,6 +62,29 @@
                     </td>
                     <td class="td-center">
                         <span class="badge badge-{{ course.status }}">{{ course.status }}</span>
+                    </td>
+                    <td class="td-center" style="position: relative;">
+                        <div class="info-tooltip-wrapper">
+                            <span class="info-icon">ℹ️</span>
+                            <div class="info-tooltip-dropdown">
+                                <div class="info-display-text">
+                                    <strong>Course Short Description:</strong>
+                                    <p>{{ course.short_desc|default:"*No description provided.*" }}</p>
+                                </div>
+
+                                {% if course.owner == request.user or user_type == 'IT_Support' %}
+                                    <hr class="tooltip-divider">
+                                    <form method="POST" action="?username_filter={{ username_filter }}" style="margin: 0;">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="desc_course_id" value="{{ course.id }}">
+                                        <textarea name="short_description" rows="3" placeholder="Update description..." required>{{ course.short_desc|default_if_none:"" }}</textarea>
+                                        <button type="submit" name="update_description" class="btn-tooltip-save">
+                                            Save Changes
+                                        </button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </div>
                     </td>
                     {% if user_type == 'IT_Support' %}
                         <td class="td-center">{{ course.owner.username }}</td>

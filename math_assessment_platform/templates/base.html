@@ -40,5 +40,10 @@
 
         {% block content %}{% endblock %}
     </main>    
+    {% block extra_js %}
+        {% if user.is_authenticated and user.user_type == 'Student' %}
+            <script src="{% static 'assessment_tool/js/single_tab_enforcement.js' %}"></script>
+        {% endif %}
+    {% endblock extra_js %}
 </body>
 </html>

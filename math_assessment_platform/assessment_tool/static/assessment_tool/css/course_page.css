@@ -198,3 +198,126 @@ tbody tr:hover {
     border-collapse: collapse;
     margin: 0;
 }
+
+/*Add these stylesheet properties to `course_page.css`. 
+  This ensures the popup stays cleanly anchored relative to 
+  its table cell and doesn't get cut off by the edge of 
+  your new scrollable window wrapper.*/
+/* Tooltip Anchoring Wrapper */
+.info-tooltip-wrapper {
+    position: relative;
+    display: inline-block;
+    cursor: pointer;
+}
+
+/* Info Trigger Icon Styling */
+.info-icon {
+    font-size: 1.15rem;
+    color: #3b82f6;
+    padding: 6px;
+    user-select: none;
+    transition: color 0.2s ease;
+}
+
+.info-icon:hover {
+    color: #1d4ed8;
+}
+
+/* Popover Content Window Container (Hidden by default) */
+.info-tooltip-dropdown {
+    display: none;
+    position: absolute;
+    top: 130%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 280px;
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+    padding: 14px;
+    z-index: 1000; /* Ensures it stays stacked above table rows and containers */
+}
+
+/* Tooltip Arrow */
+.info-tooltip-dropdown::after {
+    content: "";
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    margin-left: -6px;
+    border-width: 6px;
+    border-style: solid;
+    border-color: transparent transparent #ffffff transparent;
+}
+
+/* Keep the popup visible during explicit hover or internal keyboard form focus */
+.info-tooltip-wrapper:hover .info-tooltip-dropdown,
+.info-tooltip-dropdown:focus-within {
+    display: block;
+}
+
+/* Internal Layout Typography Elements */
+.info-display-text strong {
+    font-size: 0.75rem;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: block;
+    margin-bottom: 4px;
+    text-align: left;
+}
+
+.info-display-text p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #1e293b;
+    line-height: 1.4;
+    text-align: left;
+    word-break: break-word;
+    max-height: 120px;
+    overflow-y: auto; /* Adds an internal tiny scrollbar if descriptions get massive */
+}
+
+.tooltip-divider {
+    border: 0;
+    border-top: 1px solid #f1f5f9;
+    margin: 10px 0;
+}
+
+/* Textarea styling within popup */
+.info-tooltip-dropdown textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    font-size: 0.8rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    resize: vertical;
+    font-family: inherit;
+    color: #334155;
+}
+
+.info-tooltip-dropdown textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+}
+
+/* Save button within popup */
+.btn-tooltip-save {
+    width: 100%;
+    margin-top: 8px;
+    padding: 6px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #ffffff;
+    background-color: #2563eb;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.btn-tooltip-save:hover {
+    background-color: #1d4ed8;
+}

@@ -23,6 +23,7 @@ from django.db.models import Q
 from django.db.models import Case, Value, When, IntegerField
 from django.apps import apps
 from django.contrib.auth.decorators import user_passes_test
+from django.contrib.auth import logout
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -290,7 +291,25 @@ def course_list_view(request):
                 return redirect(f"/courses/?username_filter={post_username_filter}")
             return redirect('course_list')
 
-        if 'update_status' in request.POST:
+        # HANDLE SHORT DESCRIPTION UPDATES
+        if 'update_description' in request.POST:
+            course_id = request.POST.get('desc_course_id')
+            new_desc = request.POST.get('short_description', '').strip()
+            course = get_object_or_404(Course, id=course_id)
+
+            # Strict Role & Ownership Verification Checks
+            if course.owner != request.user and user_type != 'IT_Support':
+                messages.error(request, "Permission Denied. You do not own this course.")
+                return get_sticky_redirect()
+
+            # Save clean text changes
+            course.short_desc = new_desc if new_desc else None
+            course.save()
+            
+            messages.success(request, f"Successfully updated description for '{course.name}'.")
+            return get_sticky_redirect()
+
+        elif 'update_status' in request.POST:
             course_id = request.POST.get('course_id')
             new_status = request.POST.get('new_status')
             course = get_object_or_404(Course, id=course_id)
@@ -787,3 +806,44 @@ def restore_trash_item_view(request):
         return JsonResponse({'status': 'success'})
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)
+
+from django.contrib.auth import logout, login, authenticate
+from django.contrib.auth.forms import AuthenticationForm # 🆕 Import standard login form
+from django.shortcuts import redirect, render
+from django.contrib import messages
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+def login_view(request):
+    # 1. HANDLE USERS ALREADY LOGGED IN (GET Requests)
+    if request.user.is_authenticated and request.method == 'GET':
+        if request.user.user_type == 'Student':
+            logout(request)
+            return redirect('login')
+        else:
+            return redirect('dashboard')
+
+    # 2. HANDLE AUTHENTICATION ATTEMPTS (POST Requests)
+    if request.method == 'POST':
+        if request.user.is_authenticated:
+            logout(request)
+            
+        # Initialize the standard form with post data
+        form = AuthenticationForm(request, data=request.POST)
+        if form.is_valid():
+            # Extract authenticated user records from the valid form payload
+            user = form.get_user()
+            login(request, user)
+            messages.success(request, f"Welcome back, {user.username}!")
+            return redirect('dashboard')
+        else:
+            messages.error(request, "Invalid username or password. Please try again.")
+            return redirect('login')
+
+    # 3. RENDER BLANK LOGIN FORM (GET Requests)
+    form = AuthenticationForm() # Empty form instance for the template context
+    reason = request.GET.get('reason')
+    if reason == 'multiple_tabs':
+        messages.warning(request, "You were logged out because the platform was opened in another tab.")
+        
+    return render(request, 'assessment_tool/login.html', {'form': form})
