@@ -194,6 +194,7 @@ def database_viewer(request):
         'email_authentication': EmailAuthentication,
         'course': Course,
         'branch_group': BranchGroup,
+        'users_in_course': UsersInCourse,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
@@ -342,6 +343,7 @@ def course_list_view(request):
                     )
                 
                 return get_sticky_redirect()
+
 
             # Standard Status Update Mutations (active, closed, template, hidden)
             course.status = new_status

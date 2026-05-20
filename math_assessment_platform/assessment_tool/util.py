@@ -1,5 +1,5 @@
 import re
-# from .models import BranchGroup ... instead of this, use --> BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+# from .models import BranchGroup, UsersInCourse ... instead of this, use --> BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
 from django.apps import apps
 from django.http import JsonResponse
 import copy
@@ -8,6 +8,9 @@ from django.core.files.base import ContentFile
 import uuid
 from django.db import transaction
 from django.contrib import messages
+from django.utils import timezone
+from django.db import IntegrityError
+
 
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
     # 1. Basic Validation: Alphanumeric and single internal spaces
@@ -266,3 +269,27 @@ def restore_item_from_trash(request, folder):
             messages.success(request, f"Successfully restored '{folder.name}'.")
     else:
         messages.error(request, f"Unknown folder type: {folder.folder_type}\nRestore method unknown")
+
+
+def assign_user_to_course(user, course_obj, authenticate=True):
+
+    is_active = 'active'
+    if not authenticate:
+        is_active = 'closed'
+
+    try:
+        UsersInCourse = apps.get_model('assessment_tool', 'UsersInCourse')
+        # 2. Create the entry in the users_in_course junction table
+        new_assignment = UsersInCourse.objects.create(
+            user=user,
+            course=course_obj,
+            user_access=is_active,
+            creation_date=timezone.now() # Manually setting since blank=True is on the model
+        )
+        return new_assignment
+
+    except IntegrityError:
+        # Triggers if the unique_together constraint checks out (User + Course already exists)
+        print("Notice: This user is already assigned to this course.")
+        # Optional fallback: Fetch and return the existing record instead
+        return UsersInCourse.objects.get(user=user, course=course_obj)

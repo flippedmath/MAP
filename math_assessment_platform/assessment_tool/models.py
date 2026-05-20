@@ -17,7 +17,7 @@ from imagekit.models import ProcessedImageField
 from imagekit.processors import ResizeToFill
 import os
 import uuid
-from .util import clone_node_recursive, get_course_image_path
+from .util import clone_node_recursive, get_course_image_path, assign_user_to_course
 
 
 class MyUserManager(BaseUserManager):
@@ -437,6 +437,16 @@ class Course(models.Model):
             new_course.name = new_folder.name #f"Copy of {self.name}"
             new_course.owner = user
             new_course.save()
+
+            if not (target_transition == 'developing_to_template'):
+                # if a new course was successfully made, then I need to add the 
+                #   Teacher to the users_in_course table, but only if the new
+                #   course is an 'active' course, this does not apply to 
+                #   developing -> new template
+                # This only applies to 
+                #   closed-> new active OR 
+                #   template -> new active
+                assign_user_to_course(user, new_course)
         return new_course
 
     class Meta:
