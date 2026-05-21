@@ -15,8 +15,12 @@ from django.db import IntegrityError
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
     # 1. Basic Validation: Alphanumeric and single internal spaces
     clean_name = requested_name.strip()
-    if not clean_name or not re.match(r'^[a-zA-Z0-9]+( [a-zA-Z0-9]+)*$', clean_name):
-        return None, "Names must be alphanumeric and single spaced only."
+    # I am using a negated character set here: '()_' are not allowed, 
+    #      everything else goes, but enforces single spaced words
+    # I used to be using this:
+    # re.match(r'^[a-zA-Z0-9]+( [a-zA-Z0-9]+)*$', clean_name)
+    if not clean_name or not re.match(r'^[^()_]+( [^()_]+)*$', clean_name):
+        return None, "Names must not include parenthesis or underscores and must be single spaced only."
 
     base_name = clean_name
     new_name = clean_name
@@ -137,8 +141,15 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
     if starter_node:
         # Duplicate the BranchGroup (Folder)
         # We need a NEW folder for the NEW course to satisfy the OneToOne constraint
-        t_name = f"Copy of {old_folder.name}"
+        t_name = f"{old_folder.name}"
+        # This means the name has a (1) or some other number at the end (#).
+        #  So crop it out since 'get_valid_unique_name' will add a unique combination back in
+        if '(' in t_name:
+            split_name = t_name.split()
+            t_name = " ".join(split_name[:len(split_name) - 1])
+        print(f"Before name: {t_name}")
         t_name, error = get_valid_unique_name(BranchGroup, new_parent, t_name)
+        print(f"After name: {t_name}")
         if error:
             return JsonResponse({'error': error}, status=400)
 
@@ -293,3 +304,77 @@ def assign_user_to_course(user, course_obj, authenticate=True):
         print("Notice: This user is already assigned to this course.")
         # Optional fallback: Fetch and return the existing record instead
         return UsersInCourse.objects.get(user=user, course=course_obj)
+
+
+def generate_unique_course_version(dest_status, source_course=None):
+    """
+    Generates an incremented, unique 4-part version string based on 
+    the target destination status and the source course it's copied from.
+     Optimised to run all loop iterations completely in memory via a single set-lookup.
+    """
+    apps = __import__('django.apps', fromlist=['apps']).apps
+    Course = apps.get_model('assessment_tool', 'Course')
+
+    # CASE 1: Brand new baseline tracking (No source course / Original Developing)
+    if dest_status == 'developing' and source_course is None:
+        base_parts = [1, 0, 0, 0]
+        target_index = 0  # Increment the first position (1.0.0.0 -> 2.0.0.0)
+        
+    else:
+        # We are copying from an existing course. Split its current version string.
+        try:
+            base_parts = [int(num) for num in source_course.version.split('.')]
+        except (AttributeError, ValueError):
+            base_parts = [1, 0, 0, 0]
+
+        # Determine which index position to increment based on state transitions
+        if dest_status == 'developing':
+            target_index = 0
+            base_parts[1], base_parts[2], base_parts[3] = 0, 0, 0
+        elif dest_status == 'template':
+            target_index = 1
+            base_parts[2], base_parts[3] = 0, 0
+        elif dest_status == 'active':
+            if source_course and source_course.status == 'closed':
+                target_index = 3  # Stage 4: Copied from closed (X.Y.Z.W)
+            else:
+                target_index = 2  # Stage 3: Copied from a template (X.Y.Z.0)
+                base_parts[3] = 0 
+        else:
+            target_index = 3
+
+        # 🆕 Initial increment since we are copying an existing blueprint row
+        base_parts[target_index] += 1
+
+    # ==========================================================================
+    # 🆕 IN-MEMORY OPTIMISATION STEP
+    # Query database exactly ONCE to pull a lightweight hash-set of values
+    # ==========================================================================
+    if target_index > 0:
+        # Narrow down the records by matching the static prefix parts (e.g. "4.2.")
+        prefix = ".".join(map(str, base_parts[:target_index])) + "."
+        existing_versions = set(
+            Course.objects.filter(version__startswith=prefix)
+                          .values_list('version', flat=True)
+        )
+    else:
+        # For top-level developing courses, grab all version tracking records in that bucket
+        existing_versions = set(
+            Course.objects.filter(status='developing')
+                          .values_list('version', flat=True)
+        )
+    # ==========================================================================
+
+    # Memory collision checking loop (O(1) lookups)
+    is_unique = False
+    while not is_unique:
+        potential_version = ".".join(map(str, base_parts))
+        
+        if potential_version not in existing_versions:
+            is_unique = True
+        else:
+            # Collision detected! Increment the targeted stage index and try again
+            base_parts[target_index] += 1
+
+    return potential_version
+

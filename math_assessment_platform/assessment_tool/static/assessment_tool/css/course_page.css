@@ -199,7 +199,7 @@ tbody tr:hover {
     margin: 0;
 }
 
-/*Add these stylesheet properties to `course_page.css`. 
+/*
   This ensures the popup stays cleanly anchored relative to 
   its table cell and doesn't get cut off by the edge of 
   your new scrollable window wrapper.*/
@@ -227,7 +227,7 @@ tbody tr:hover {
 .info-tooltip-dropdown {
     display: none;
     position: absolute;
-    top: 130%;
+    top: 130%; /* Spills downward by default */
     left: 50%;
     transform: translateX(-50%);
     width: 280px;
@@ -236,20 +236,38 @@ tbody tr:hover {
     border-radius: 8px;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
     padding: 14px;
-    z-index: 1000; /* Ensures it stays stacked above table rows and containers */
+    z-index: 1000; 
 }
 
-/* Tooltip Arrow */
+/* Tooltip Arrow pointing UP (Default) */
 .info-tooltip-dropdown::after {
     content: "";
     position: absolute;
-    bottom: 100%;
+    bottom: 100%; /* Sits on top of the box */
     left: 50%;
     margin-left: -6px;
     border-width: 6px;
     border-style: solid;
     border-color: transparent transparent #ffffff transparent;
 }
+
+/* ==========================================================================
+   🆕 SMART SMART FLIP FOR BOTTOM ROWS
+   Targets tooltips in the last 2 rows of the table to flip them upward 
+   ========================================================================== */
+tr:nth-last-child(-n+2) .info-tooltip-dropdown {
+    top: auto;            /* Clear the default top positioning */
+    bottom: 130%;        /* Force it to render above the row */
+    box-shadow: 0 -10px 25px -5px rgba(0, 0, 0, 0.1), 0 -8px 10px -6px rgba(0, 0, 0, 0.1); /* Reverse shadow angle */
+}
+
+/* Flip the arrow to point DOWN for bottom rows */
+tr:nth-last-child(-n+2) .info-tooltip-dropdown::after {
+    bottom: auto;
+    top: 100%;            /* Move arrow to the bottom of the box */
+    border-color: #ffffff transparent transparent transparent; /* Flip colors */
+}
+/* ========================================================================== */
 
 /* Keep the popup visible during explicit hover or internal keyboard form focus */
 .info-tooltip-wrapper:hover .info-tooltip-dropdown,
@@ -276,7 +294,7 @@ tbody tr:hover {
     text-align: left;
     word-break: break-word;
     max-height: 120px;
-    overflow-y: auto; /* Adds an internal tiny scrollbar if descriptions get massive */
+    overflow-y: auto; 
 }
 
 .tooltip-divider {

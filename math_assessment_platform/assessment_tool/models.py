@@ -17,7 +17,7 @@ from imagekit.models import ProcessedImageField
 from imagekit.processors import ResizeToFill
 import os
 import uuid
-from .util import clone_node_recursive, get_course_image_path, assign_user_to_course
+from .util import clone_node_recursive, get_course_image_path, assign_user_to_course, generate_unique_course_version
 
 
 class MyUserManager(BaseUserManager):
@@ -348,7 +348,7 @@ class Course(models.Model):
     name = models.CharField(max_length=255)
     branch_location = models.OneToOneField(BranchGroup, models.CASCADE, db_column='branch_location', related_name='course', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
     creation_date = models.DateTimeField(blank=True, null=True)
-    version = models.CharField(max_length=100, blank=True, null=True)
+    version = models.CharField(max_length=100, blank=True, null=True, unique=True)
     introduction = models.JSONField(blank=True, null=True)  # This field type is a guess.
 
     @classmethod
@@ -358,16 +358,8 @@ class Course(models.Model):
         # 1. Generate correct version for the 'developing' course: #.#.#.#
         # e.g., 6.0.0.1
         # <subject>.<template ID>.<template version>.<course copy number>
-
-        version_str = "1.0.0.1"
-        all_developing_courses = Course.objects.filter(status="developing").values_list('version', flat=True)
-        for version in all_developing_courses:
-            print(f"version number: {version} --> {version.split('.')}")
-            first_version_number = int(version.split(".")[0])
-            lowest_starting_number = 1
-            if lowest_starting_number <= first_version_number:
-                lowest_starting_number = first_version_number + 1
-                version_str = str(lowest_starting_number) + ".0.0.1"
+        name = " ".join(name.strip().split())
+        version_str = generate_unique_course_version(dest_status='developing')
 
         # 2. Locate the "Courses" parent folder
         # Assuming root is /Users/username_root/ and Courses is a subfolder
@@ -419,6 +411,7 @@ class Course(models.Model):
             if target_transition == 'developing_to_template':
                 resulting_status = 'template'
 
+
             # Run your recursive duplicating logic engine setup
             context = {'course': None, 'assessment': None, 'aqg': None, 'cqd': None}
             
@@ -428,15 +421,17 @@ class Course(models.Model):
                 courses_root_folder, 
                 user, 
                 context,
-                starter_node=True
+                starter_node=True,
             )
-            
+
             # 2. Update the cloned payload attributes
             new_course = new_folder.course
             new_course.status = resulting_status
             new_course.name = new_folder.name #f"Copy of {self.name}"
             new_course.owner = user
+            new_course.version = generate_unique_course_version(dest_status=resulting_status, source_course=self)
             new_course.save()
+
 
             if not (target_transition == 'developing_to_template'):
                 # if a new course was successfully made, then I need to add the 

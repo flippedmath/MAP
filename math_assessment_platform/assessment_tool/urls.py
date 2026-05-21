@@ -24,4 +24,5 @@ urlpatterns = [
     path('rename-item/', views.rename_item, name='rename_item'),
     path('delete-item/', views.delete_item, name='delete_item'),
     path('trash/restore/', views.restore_trash_item_view, name='restore_trash_item'),
+    path('courses/<int:course_id>/', views.course_detail_view, name='course_detail'),
 ]

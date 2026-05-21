@@ -849,3 +849,44 @@ def login_view(request):
         messages.warning(request, "You were logged out because the platform was opened in another tab.")
         
     return render(request, 'assessment_tool/login.html', {'form': form})
+
+
+@login_required
+def course_detail_view(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    user_type = request.user.user_type # Pulling from your established profile engine
+
+    # 1. Unpack html markup string safely out of the course JSON field
+    intro_html_content = ""
+    if course.introduction:
+        try:
+            # If stored field text is a string representation of JSON
+            data = json.loads(course.introduction) if isinstance(course.introduction, str) else course.introduction
+            intro_html_content = data.get('html_content', '')
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            intro_html_content = str(course.introduction)
+
+    # 2. Process Rich Text Form Updates
+    if request.method == 'POST' and 'introduction_payload' in request.POST:
+        if user_type not in ['Teacher', 'IT_Support']:
+            messages.error(request, "Unauthorized operation framework.")
+            return redirect('course_detail', course_id=course.id)
+            
+        raw_json_str = request.POST.get('introduction_payload')
+        try:
+            # Ensure incoming transmission is validated JSON structured block
+            json.loads(raw_json_str) 
+            course.introduction = raw_json_str
+            course.save()
+            messages.success(request, "Course introduction update saved successfully!")
+        except json.JSONDecodeError:
+            messages.error(request, "Failed parsing document data validation framework structure.")
+            
+        return redirect('course_detail', course_id=course.id)
+
+    context = {
+        'course': course,
+        'user_type': user_type,
+        'intro_html_content': intro_html_content
+    }
+    return render(request, 'assessment_tool/course_intro.html', context)
