@@ -275,11 +275,18 @@ def course_list_view(request):
             status_order=status_priority
         ).order_by('status_order', 'name')
 
-    else:
+    elif user_type == 'Student':
         # Student Base Ruleset
+        # 1. Look for rows in the 'course' table...
+        # 2. Where the 'usersincourse' junction table has a matching user...
+        # 3. AND the course's own status is 'active'.
         courses = Course.objects.filter(
-            Q(owner=user) | Q(status='active')
-        ).select_related('owner', 'branch_location')
+            usersincourse__user=user,
+            status='active'
+        )
+    else:
+        # forward any other users (i.e. 'Parent') to the dashboard page.
+        return redirect('dashboard')
 
 
     if request.method == 'POST':

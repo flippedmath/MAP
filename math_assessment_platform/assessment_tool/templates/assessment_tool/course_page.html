@@ -33,15 +33,19 @@
                     <th>Status</th>
                     <th>Info</th>
                     {% if user_type == 'IT_Support' %}<th>Owner</th>{% endif %}
+                    {% if user_type == 'IT_Support' or user_type == 'Teacher' %}
                     <th>Modify Status</th>
                     <th>Clone / Copy Option</th>
+                    {% endif %}
+                    {% if user_type == 'IT_Support' %}
                     <th>Permanently Delete (IT Support Only)</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
                 {% for course in courses %}
-                <tr class="status-{{ course.status }}">
-                    <td class="td-center">
+                <tr class="status-{{ course.status }} clickable-course-row">
+                    <td class="td-center" style="position: relative;">
                         {% if course.image %}
                             <img src="{{ course.image.url }}" alt="{{ course.name }}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;">
                         {% else %}
@@ -49,21 +53,25 @@
                         {% endif %}
                     </td>
                     <td class="td-center">
-                        <strong>{{ course.name }}</strong>
-                        {% if course.owner == request.user or user_type == 'IT_Support' %}
-                            <small style="margin-left: 8px;">
-                                <a href="#" onclick="triggerInlineRename('{{ course.branch_location.id }}', '{{ course.name|escapejs }}'); return false;" style="color: #2563eb; text-decoration: none;">
-                                    ✏️
-                                </a>
-                            </small>
-                        {% endif %}
-                        <br>
-                        <small style="color: #64748b;">v{{ course.version }}</small> 
+                        <div class="course-name-container">
+                            <a href="{% url 'course_detail' course.id %}" class="row-link"></a>
+                            
+                            <strong>{{ course.name }}</strong>
+                            {% if course.owner == request.user or user_type == 'IT_Support' %}
+                                <small style="margin-left: 8px;" class="control-layer">
+                                    <a href="#" onclick="triggerInlineRename('{{ course.branch_location.id }}', '{{ course.name|escapejs }}'); return false;" style="color: #2563eb; text-decoration: none;">
+                                        ✏️
+                                    </a>
+                                </small>
+                            {% endif %}
+                            <br>
+                            <small style="color: #64748b;">v{{ course.version }}</small> 
+                        </div>
                     </td>
-                    <td class="td-center">
+                    <td class="td-center control-layer">
                         <span class="badge badge-{{ course.status }}">{{ course.status }}</span>
                     </td>
-                    <td class="td-center" style="position: relative;">
+                    <td class="td-center control-layer" style="position: relative;">
                         <div class="info-tooltip-wrapper">
                             <span class="info-icon">ℹ️</span>
                             <div class="info-tooltip-dropdown">
@@ -87,81 +95,94 @@
                         </div>
                     </td>
                     {% if user_type == 'IT_Support' %}
-                        <td class="td-center">{{ course.owner.username }}</td>
+                        <td class="td-center control-layer">{{ course.owner.username }}</td>
                     {% endif %}
                     
-                    <td class="td-center">
-                        {% if course.owner == request.user or user_type == 'IT_Support' %}
-                        <form method="POST" action="?username_filter={{ username_filter }}" class="inline-action-form">
-                            {% csrf_token %}
-                            <input type="hidden" name="course_id" value="{{ course.id }}">
-                            
-                            <select name="new_status" class="status-select" onchange="this.form.submit_mutate.disabled = false;">
-                                <option value="" disabled selected>Change status to...</option>
-                                {% if course.status == 'active' %}
-                                    <option value="closed">closed</option>
-                                {% elif course.status == 'template' %}
-                                    <option value="hidden">hidden</option>
-                                {% elif course.status == 'hidden' %}
-                                    <option value="template">template</option>
-                                    <option value="deleted">deleted (Trash)</option>
-                                {% elif course.status == 'developing' %}
-                                    <option value="deleted">deleted (Trash)</option>
-                                {% elif course.status == 'closed' %}
-                                    <option value="deleted">deleted (Trash)</option>
-                                    <option value="active">active</option>
-                                {% elif course.status == 'deleted' %}
-                                    <option value="restore_trigger">Restore Course</option>
-                                {% endif %}
-                            </select>
-                            <button type="submit" name="update_status" id="submit_mutate" class="btn-action-go" disabled>Go</button>
-                        </form>
-                        {% else %}
-                            <span class="text-muted">Read Only</span>
-                        {% endif %}
-                    </td>
-
-                    <td class="td-center">
-                        {% if course.status == 'developing' or course.status == 'template' or course.status == 'closed' %}
-                        <form method="POST" class="inline-action-form">
-                            {% csrf_token %}
-                            <input type="hidden" name="source_course_id" value="{{ course.id }}">
-                            
-                            <select name="target_transition" class="copy-select" required>
-                                <option value="" disabled selected>Create new Course from...</option>
-                                {% if course.status == 'developing' %}
-                                    <option value="developing_to_template">Create Template from Developing</option>
-                                {% elif course.status == 'template' %}
-                                    <option value="template_to_active">Activate new Course from Template</option>
-                                {% elif course.status == 'closed' %}
-                                    <option value="closed_to_active">Activate new Course using existing Course as a Template</option>
-                                {% endif %}
-                            </select>
-                            <button type="submit" name="copy_course" class="btn-clone-go">Clone</button>
-                        </form>
-                        {% else %}
-                            <span class="text-muted">Not Cloneable</span>
-                        {% endif %}
-                    </td>
-
-                    <td class="td-center">
-                        <div style="display: flex; gap: 10px;">
-                            {% if user_type == 'IT_Support' %}
-                                {% if course.status == 'deleted' %}
-                                    <form method="POST" action="?username_filter={{ username_filter }}" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
-                                        {% csrf_token %}
-                                        <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
-                                        <button type="submit" name="delete_course" class="btn-delete">
-                                            Delete
-                                        </button>
-                                    </form>
-                                {% else %}
-                                    <span class="text-muted" style="font-size: 0.8rem; font-style: italic;">
-                                        Can only Permanently Delete a 'deleted' course
-                                    </span>
-                                {% endif %}
+                    {% if user_type == 'IT_Support' or user_type == 'Teacher' %}
+                        <td class="td-center control-layer">
+                            {% if course.owner == request.user or user_type == 'IT_Support' %}
+                            <form method="POST" action="?username_filter={{ username_filter }}" class="inline-action-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="course_id" value="{{ course.id }}">
+                                
+                                <select name="new_status" class="status-select" onchange="this.form.submit_mutate.disabled = false;">
+                                    <option value="" disabled selected>Change status to...</option>
+                                    {% if course.status == 'active' %}
+                                        <option value="closed">closed</option>
+                                    {% elif course.status == 'template' %}
+                                        <option value="hidden">hidden</option>
+                                    {% elif course.status == 'hidden' %}
+                                        <option value="template">template</option>
+                                        <option value="deleted">deleted (Trash)</option>
+                                    {% elif course.status == 'developing' %}
+                                        <option value="deleted">deleted (Trash)</option>
+                                    {% elif course.status == 'closed' %}
+                                        <option value="deleted">deleted (Trash)</option>
+                                        <option value="active">active</option>
+                                    {% elif course.status == 'deleted' %}
+                                        <option value="restore_trigger">Restore Course</option>
+                                    {% endif %}
+                                </select>
+                                <button type="submit" name="update_status" id="submit_mutate" class="btn-action-go" disabled>Go</button>
+                            </form>
                             {% else %}
-                                <span class="text-muted">-</span>
+                                <span class="text-muted">Read Only</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="td-center control-layer">
+                            {% if course.status == 'developing' or course.status == 'template' or course.status == 'closed' %}
+                            <form method="POST" class="inline-action-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="source_course_id" value="{{ course.id }}">
+                                
+                                <select name="target_transition" class="copy-select" required>
+                                    <option value="" disabled selected>Create new Course from...</option>
+                                    {% if course.status == 'developing' %}
+                                        <option value="developing_to_template">Create Template from Developing</option>
+                                    {% elif course.status == 'template' %}
+                                        <option value="template_to_active">Activate new Course from Template</option>
+                                    {% elif course.status == 'closed' %}
+                                        <option value="closed_to_active">Activate new Course using existing Course as a Template</option>
+                                    {% endif %}
+                                </select>
+                                <button type="submit" name="copy_course" class="btn-clone-go">Clone</button>
+                            </form>
+                            {% else %}
+                                <span class="text-muted">Not Cloneable</span>
+                            {% endif %}
+                        </td>
+                        {% if user_type == 'IT_Support' %}
+                            <td class="td-center control-layer">
+                                <div style="display: flex; gap: 10px; justify-content: center;">
+                                    {% if course.status == 'deleted' %}
+                                        <form method="POST" action="?username_filter={{ username_filter }}" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
+                                            <button type="submit" name="delete_course" class="btn-delete">
+                                                Delete
+                                            </button>
+                                        </form>
+                                    {% else %}
+                                        <span class="text-muted" style="font-size: 0.8rem; font-style: italic;">
+                                            Can only Permanently Delete a 'deleted' course
+                                        </span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        {% endif %}
+                    {% endif %}
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="8" class="empty-table-state">
+                        <div class="empty-state-wrapper">
+                            <span class="empty-state-icon">📂</span>
+                            <h3>No Active Courses Found</h3>
+                            {% if user_type == 'Student' %}
+                                <p>You aren't currently enrolled in any active courses. Please contact your instructor or administration for course registration help.</p>
+                            {% else %}
+                                <p>There are no active courses in the system. Get started by creating a new developing baseline course blueprint!</p>
                             {% endif %}
                         </div>
                     </td>
@@ -209,7 +230,7 @@ async function triggerInlineRename(branchGroupId, currentName) {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json', 
-                'X-CSRFToken': getCookie('csrftoken') // Handled by utils.js!
+                'X-CSRFToken': getCookie('csrftoken')
             },
             body: JSON.stringify({ 
                 id: branchGroupId, 
@@ -221,7 +242,6 @@ async function triggerInlineRename(branchGroupId, currentName) {
         const data = await response.json();
 
         if (response.ok) {
-            // Success response triggers a localized state reload to show the name adjustment
             window.location.reload();
         } else {
             alert(`Rename failed: ${data.error}`);
