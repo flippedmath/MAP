@@ -29,6 +29,9 @@ from django.contrib.auth import logout, login, authenticate
 from django.contrib.auth.forms import AuthenticationForm # 🆕 Import standard login form
 from django.views.decorators.csrf import csrf_exempt
 
+# import iso8601  # or use standard datetime.fromisoformat
+from django.utils import timezone
+
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -919,7 +922,8 @@ def assessment_view(request, course_id):
         'course': course,
         'user_type': user_type,
         'assessments': assessments,
-        'active_tab': 'assessments', # Ensures sidebar highlights the correct button
+        'active_tab': 'assessments', 
+        'current_time': timezone.now()
     }
     return render(request, 'assessment_tool/assessments.html', context)
 
@@ -1021,3 +1025,50 @@ def update_assessment_status_ajax(request, course_id):
     assessment.save()
     
     return JsonResponse({'success': True})
+
+
+@login_required
+@require_POST
+def update_assessment_window_ajax(request, assessment_id):
+    """
+    Saves the start_time and end_time range parameters for an isolated assessment item.
+    """
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if user_type not in ['Teacher', 'IT_Support']:
+        return JsonResponse({'error': 'Privilege authorization checkpoint mismatch.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        start_raw = data.get('start_time')
+        end_raw = data.get('end_time')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Malformed properties container framework.'}, status=400)
+
+    assessment = get_object_or_404(Assessment, id=assessment_id)
+    
+    # Process updates or strip values to None if matching disable checks
+    parsed_start = None
+    parsed_end = None
+
+    if start_raw and end_raw:
+        try:
+            # Parse localized user strings into fully timezone-aware objects
+            parsed_start = timezone.is_aware(timezone.datetime.fromisoformat(start_raw)) or timezone.make_aware(timezone.datetime.fromisoformat(start_raw))
+            parsed_end = timezone.is_aware(timezone.datetime.fromisoformat(end_raw)) or timezone.make_aware(timezone.datetime.fromisoformat(end_raw))
+        except ValueError:
+            return JsonResponse({'error': 'Invalid date string layout tracking parameters.'}, status=400)
+
+        # 🛑 Backend Validation Rule Check: Start must precede End
+        if parsed_start >= parsed_end:
+            return JsonResponse({'error': 'The start date configuration must be before the terminal target boundary.'}, status=400)
+
+    # Persist values to database
+    assessment.start_time = parsed_start
+    assessment.end_time = parsed_end
+    assessment.save()
+
+    return JsonResponse({
+        'success': True,
+        'assessment_id': assessment.id,
+        'status': assessment.status
+    })

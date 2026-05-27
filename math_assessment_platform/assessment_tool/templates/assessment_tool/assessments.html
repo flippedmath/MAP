@@ -3,52 +3,6 @@
 
 {% block course_extra_css %}
 <link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
-<style>
-    /* 📦 Dialog Overlay Modals styling dimensions */
-    .modal-overlay {
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(15, 23, 42, 0.6);
-        backdrop-filter: blur(4px);
-        display: flex; align-items: center; justify-content: center;
-        z-index: 10000; visibility: hidden; opacity: 0;
-        transition: opacity 0.2s ease, visibility 0.2s ease;
-    }
-    .modal-overlay.is-visible { visibility: visible; opacity: 1; }
-    .modal-card {
-        background: #ffffff; width: 100%; max-width: 520px;
-        border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
-        padding: 24px; border: 1px solid #e2e8f0; transform: scale(0.95);
-        transition: transform 0.2s ease;
-    }
-    .modal-overlay.is-visible .modal-card { transform: scale(1); }
-    .modal-card h3 { margin: 0 0 8px 0; color: #0f172a; font-size: 1.25rem; font-weight: 700; }
-    .modal-card p { margin: 0 0 20px 0; color: #64748b; font-size: 0.875rem; line-height: 1.4; }
-    .form-group-block { margin-bottom: 20px; }
-    .form-group-block label { display: block; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: #475569; margin-bottom: 6px; letter-spacing: 0.05em; }
-    .form-group-block input { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; font-size: 0.9rem; }
-    .form-group-block input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
-    .modal-actions-tray { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
-    .btn-modal { padding: 10px 18px; font-size: 0.875rem; font-weight: 500; border-radius: 6px; cursor: pointer; border: none; }
-    .btn-modal-cancel { background: #f1f5f9; color: #475569; }
-    .btn-modal-cancel:hover { background: #e2e8f0; }
-    .btn-modal-submit { background: #2563eb; color: #ffffff; }
-    .btn-modal-submit:hover { background: #1d4ed8; }
-
-    /* 📊 Clean Style Tuning for Inline Dropdown Selectors */
-    .status-dropdown-picker {
-        padding: 6px 10px;
-        border-radius: 6px;
-        font-size: 0.825rem;
-        font-weight: 600;
-        border: 1px solid #cbd5e1;
-        background-color: #f8fafc;
-        color: #334155;
-        cursor: pointer;
-        outline: none;
-    }
-    .status-dropdown-picker:focus { border-color: #2563eb; }
-</style>
 {% endblock %}
 
 {% block course_sub_content %}
@@ -65,7 +19,27 @@
         <thead>
             <tr>
                 <th>Assessment Name</th>
-                <th>Status</th>
+                <th class="status-header-cell">
+                    <div class="status-header-inner">
+                        <span class="status-title-text">Status</span>
+                        <span class="status-tooltip-container">
+                            <i class="fas fa-info-circle info-icon"></i>
+                            <div class="status-tooltip-dropdown">
+                                <h4>Assessment Status Meanings</h4>
+                                <ul>
+                                    <li><strong>Active:</strong> Students can see this assessment in their view but cannot open it.</li>
+                                    <li><strong>Open:</strong> Currently available for students to take assessment.</li>
+                                    <li><strong>Upcoming:</strong> Scheduled to be set as 'Open' during specified time range.</li>
+                                    <li><strong>Inactive:</strong> Hidden from students. Teachers can modify assessment.</li>
+                                    <li><strong>Locked:</strong> Hidden from students. Teachers can not edit.</li>
+                                    <li><strong>Retake Available:</strong> Allows eligible students to submit another attempt.</li>
+                                    <li><strong>Closed:</strong> Open status has passed, no more student submissions accepted.</li>
+                                    <li><strong>Submitted:</strong> Lifecycle completed and finalized.</li>
+                                </ul>
+                            </div>
+                        </span>
+                    </div>
+                </th>
                 <th>Questions</th>
                 <th>Auto-Open Window (Start - End)</th>
                 <th class="text-right">Actions</th>
@@ -97,11 +71,56 @@
                     </a>
                 </td>
                 
-                <td class="text-muted font-mono" style="font-size: 0.8rem;">
-                    {% if assessment.start_time or assessment.end_time %}
-                        {{ assessment.start_time|date:"M d, H:i" }} – {{ assessment.end_time|date:"M d, H:i" }}
-                    {% else %}
-                        <span style="color:#94a3b8; font-style: italic;">Manual Activation Only</span>
+                {% load tz %}
+                {% now "Y-m-d\TH:i" as current_time_str %}
+
+                <td class="auto-open-cell {% if assessment.status != 'upcoming' %}status-not-upcoming{% endif %}" 
+                    data-assessment-id="{{ assessment.id }}">
+                    
+                    <div class="datetime-range-wrapper {% if assessment.start_time and assessment.end_time %}{% if current_time >= assessment.start_time and current_time <= assessment.end_time %}window-active{% elif assessment.start_time > current_time %}window-future{% elif assessment.end_time < current_time %}window-past{% endif %}{% endif %}">
+                        
+                        <div class="datetime-inputs-grid">
+                            <div class="input-block">
+                                <label>Start:</label>
+                                <input type="datetime-local" 
+                                    class="window-input start-time-picker" 
+                                    value="{{ assessment.start_time|date:'Y-m-d\TH:i' }}"
+                                    {% if not assessment.start_time %}disabled{% endif %}>
+                            </div>
+                            <div class="input-block">
+                                <label>End:</label>
+                                <input type="datetime-local" 
+                                    class="window-input end-time-picker" 
+                                    value="{{ assessment.end_time|date:'Y-m-d\TH:i' }}"
+                                    {% if not assessment.end_time %}disabled{% endif %}>
+                            </div>
+                        </div>
+
+                        <div class="datetime-control-footer" style="display: flex; justify-content: space-between; align-items: center;">
+                            <label class="checkbox-toggle-label">
+                                <input type="checkbox" class="disable-window-checkbox" {% if assessment.start_time and assessment.end_time %}checked{% endif %}>
+                                <span>Lock time</span>
+                            </label>
+
+                            <span class="window-status-countdown" style="font-size: 0.75rem; font-weight: 600;">
+                                {% if assessment.status == 'upcoming' and assessment.start_time and assessment.end_time %}
+                                    {% if current_time < assessment.start_time %}
+                                        {# Calculated using Django template filters #}
+                                        Starts in: {{ assessment.start_time|timeuntil:current_time }}
+                                    {% elif current_time >= assessment.start_time and current_time <= assessment.end_time %}
+                                        <span style="color: #10b981;">CURRENTLY OPEN</span>
+                                    {% endif %}
+                                {% elif assessment.status != 'upcoming' %}
+                                    <span style="color: #6fadbb;">Not in affect unless 'status' = 'upcoming'</span>
+                                {% endif %}
+                            </span>
+                        </div>
+                    </div>
+                    
+                    {% if user_type == 'Teacher' and assessment.status == 'upcoming' and not assessment.start_time or not assessment.end_time %}
+                        <div class="assessment-window-error-msg">
+                            <i class="fas fa-exclamation-triangle"></i> Window timestamps must be configured for upcoming assessments.
+                        </div>
                     {% endif %}
                 </td>
                 
@@ -140,29 +159,35 @@
     </div>
 </div>
 
-<script>
-    document.addEventListener("DOMContentLoaded", function() {
-        const modal = document.getElementById('create-assessment-modal');
-        const triggerBtn = document.getElementById('trigger-create-modal');
-        const closeBtn = document.getElementById('btn-close-modal');
-        const commitBtn = document.getElementById('btn-commit-creation');
-        const inputField = document.getElementById('new-assessment-name');
+{% endblock %}
 
-        // Layout interactive toggles
+{% block extra_js %}
+{{ block.super }}
+<script src="{% static 'assessment_tool/js/assessments_table.js' %}"></script>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const modal = document.getElementById('create-assessment-modal');
+    const triggerBtn = document.getElementById('trigger-create-modal');
+    const closeBtn = document.getElementById('btn-close-modal');
+    const commitBtn = document.getElementById('btn-commit-creation');
+    const inputField = document.getElementById('new-assessment-name');
+
+    if (triggerBtn) {
         triggerBtn.addEventListener('click', () => {
             modal.classList.add('is-visible');
             inputField.value = '';
             inputField.focus();
         });
-        
-        closeBtn.addEventListener('click', () => modal.classList.remove('is-visible'));
-        
-        // Handle background masking exits safely
+    }
+    if (closeBtn) closeBtn.addEventListener('click', () => modal.classList.remove('is-visible'));
+    if (modal) {
         modal.addEventListener('click', (e) => {
             if(e.target === modal) modal.classList.remove('is-visible');
         });
+    }
 
-        // Perform Asynchronous AJAX Node Insertion
+    if (commitBtn) {
         commitBtn.addEventListener('click', async function() {
             const nameValue = inputField.value.trim();
             if(!nameValue) { alert('A valid title designation is required.'); return; }
@@ -182,61 +207,58 @@
                 
                 const data = await response.json();
                 if(response.ok && data.success) {
-                    // Force clean state refresh to display the newly linked folder annotations
                     window.location.reload();
                 } else {
-                    alert(data.error || 'Server rejected folder transaction block schema requirements.');
+                    alert(data.error || 'Server rejected creation requirements.');
                     commitBtn.disabled = false;
                     commitBtn.innerText = "Create Blueprint";
                 }
             } catch(err) {
-                alert('A systemic network delivery system fault block triggered.');
+                alert('A systemic network delivery fault occurred.');
                 commitBtn.disabled = false;
                 commitBtn.innerText = "Create Blueprint";
             }
         });
+    }
 
-        // Prompt confirmation changes before transitioning structural assessment states
-        document.querySelectorAll('.status-dropdown-picker').forEach(dropdown => {
-            dropdown.addEventListener('change', async function() {
-                const assessmentId = this.getAttribute('data-assessment-id');
-                const previousState = this.getAttribute('data-previous');
-                const targetState = this.value;
-                
-                const confirmChoice = confirm(`Are you certain you want to change this evaluation engine lifecycle state directly from [${previousState}] to [${targetState}]?`);
-                
-                if (!confirmChoice) {
-                    this.value = previousState; // Roll back the UI element view selection
-                    return;
-                }
+    // 🔄 Asynchronous Status Dropdown Listener Pipeline 
+    document.querySelectorAll('.status-dropdown-picker').forEach(dropdown => {
+        dropdown.addEventListener('change', async function() {
+            const assessmentId = this.getAttribute('data-assessment-id');
+            const previousState = this.getAttribute('data-previous');
+            const targetState = this.value;
 
-                try {
-                    const response = await fetch("{% url 'update_assessment_status_ajax' course.id %}", {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRFToken': '{{ csrf_token }}'
-                        },
-                        body: JSON.stringify({
-                            assessment_id: assessmentId,
-                            status: targetState
-                        })
-                    });
+            try {
+                const response = await fetch("{% url 'update_assessment_status_ajax' course.id %}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({
+                        assessment_id: assessmentId,
+                        status: targetState
+                    })
+                });
+                
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    this.setAttribute('data-previous', targetState);
                     
-                    const data = await response.json();
-                    if (response.ok && data.success) {
-                        // Confirm state change and track the update locally
-                        this.setAttribute('data-previous', targetState);
-                    } else {
-                        alert(data.error || 'Failed committing state modification to cloud infrastructure.');
-                        this.value = previousState;
+                    // Runs the inline visual grey-out transition flawlessly
+                    if (typeof handleStatusFieldMutation === 'function') {
+                        handleStatusFieldMutation(assessmentId, targetState);
                     }
-                } catch(err) {
-                    alert('Communication connection fault encountered while changing lifecycle properties.');
+                } else {
+                    alert(data.error || 'Failed saving status update.');
                     this.value = previousState;
                 }
-            });
+            } catch(err) {
+                alert('Connection fault encountered while changing status.');
+                this.value = previousState;
+            }
         });
     });
+});
 </script>
 {% endblock %}

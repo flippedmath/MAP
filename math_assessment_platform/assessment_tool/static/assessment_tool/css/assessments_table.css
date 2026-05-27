@@ -1,3 +1,49 @@
+    /* 📦 Dialog Overlay Modals styling dimensions */
+    .modal-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(15, 23, 42, 0.6);
+        backdrop-filter: blur(4px);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 10000; visibility: hidden; opacity: 0;
+        transition: opacity 0.2s ease, visibility 0.2s ease;
+    }
+    .modal-overlay.is-visible { visibility: visible; opacity: 1; }
+    .modal-card {
+        background: #ffffff; width: 100%; max-width: 520px;
+        border-radius: 12px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1);
+        padding: 24px; border: 1px solid #e2e8f0; transform: scale(0.95);
+        transition: transform 0.2s ease;
+    }
+    .modal-overlay.is-visible .modal-card { transform: scale(1); }
+    .modal-card h3 { margin: 0 0 8px 0; color: #0f172a; font-size: 1.25rem; font-weight: 700; }
+    .modal-card p { margin: 0 0 20px 0; color: #64748b; font-size: 0.875rem; line-height: 1.4; }
+    .form-group-block { margin-bottom: 20px; }
+    .form-group-block label { display: block; font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: #475569; margin-bottom: 6px; letter-spacing: 0.05em; }
+    .form-group-block input { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; font-size: 0.9rem; }
+    .form-group-block input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+    .modal-actions-tray { display: flex; justify-content: flex-end; gap: 12px; margin-top: 8px; }
+    .btn-modal { padding: 10px 18px; font-size: 0.875rem; font-weight: 500; border-radius: 6px; cursor: pointer; border: none; }
+    .btn-modal-cancel { background: #f1f5f9; color: #475569; }
+    .btn-modal-cancel:hover { background: #e2e8f0; }
+    .btn-modal-submit { background: #2563eb; color: #ffffff; }
+    .btn-modal-submit:hover { background: #1d4ed8; }
+
+    /* 📊 Clean Style Tuning for Inline Dropdown Selectors */
+    .status-dropdown-picker {
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 0.825rem;
+        font-weight: 600;
+        border: 1px solid #cbd5e1;
+        background-color: #f8fafc;
+        color: #334155;
+        cursor: pointer;
+        outline: none;
+    }
+    .status-dropdown-picker:focus { border-color: #2563eb; }
+
+
 /* 🏷️ Header Configuration Group */
 .assessments-pane-header {
     display: flex;
@@ -144,3 +190,234 @@
     color: #64748b;
     font-size: 0.85rem;
 }
+
+/* 📊 Restores the true table cell behavior so it stretches and matches neighboring cells */
+.status-header-cell {
+    padding: 0; /* Remove default padding so the inner flex container can fill it fully */
+    vertical-align: middle;
+}
+
+/* 🎯 Inner wrapper handles alignment and padding perfectly */
+.status-header-inner {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start; /* Aligns contents left, matching your other headers */
+    gap: 6px;
+    padding: 12px 16px; /* Matches the standard padding of your neighboring th elements */
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    white-space: nowrap;
+}
+
+.status-title-text {
+    font-weight: 600;
+}
+
+/* 🎯 Tooltip Container Layout Wrapper */
+.status-tooltip-container {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* ℹ️ Information Icon Base Theme */
+.info-icon {
+    color: #64748b; /* Soft slate color */
+    cursor: help;
+    font-size: 0.85rem;
+    transition: color 0.15s ease;
+    padding: 2px;
+}
+
+/* 📂 The Hover Definition Dropdown Panel (The Popup) */
+.status-tooltip-container .status-tooltip-dropdown {
+    display: none;
+    position: absolute;
+    top: 130%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 280px;
+    background-color: #0f172a; /* Rich Dark Slate Theme */
+    color: #cbd5e1;
+    text-align: left;
+    padding: 14px 16px;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -4px rgba(0, 0, 0, 0.3);
+    z-index: 999;
+    
+    white-space: normal; 
+    line-height: 1.4;
+}
+
+/* Dropdown Content Typography */
+.status-tooltip-dropdown h4 {
+    margin: 0 0 8px 0;
+    color: #f8fafc;
+    font-size: 0.85rem;
+    font-weight: 600;
+    border-bottom: 1px solid #334155;
+    padding-bottom: 4px;
+}
+
+.status-tooltip-dropdown ul {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+}
+
+.status-tooltip-dropdown ul li {
+    font-size: 0.75rem;
+    margin-bottom: 6px;
+}
+
+.status-tooltip-dropdown ul li:last-child {
+    margin-bottom: 0;
+}
+
+.status-tooltip-dropdown ul li strong {
+    color: #38bdf8;
+}
+
+/* 📐 Micro Top-Pointing Triangle Indicator Arrow */
+.status-tooltip-dropdown::before {
+    content: "";
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 6px;
+    border-style: solid;
+    border-color: transparent transparent #0f172a transparent;
+}
+
+/* ✨ THE HOVER MECHANISM ENGINE */
+.info-icon:hover + .status-tooltip-dropdown,
+.status-tooltip-dropdown:hover {
+    display: block;
+}
+
+.status-tooltip-container:hover .info-icon {
+    color: #2563eb; /* Changes the icon color to blue upon hover entry */
+}
+
+
+/* 🛠️ Main Datetime Cell Isolation Frame */
+.auto-open-cell {
+    position: relative;
+    vertical-align: middle;
+    min-width: 260px;
+}
+
+/* 🔒 Greyed Out Rule for Statuses other than 'upcoming' */
+.auto-open-cell.status-not-upcoming .datetime-inputs-grid,
+.auto-open-cell.status-not-upcoming .checkbox-toggle-label {
+    opacity: 0.45;
+    filter: grayscale(40%);
+    transition: opacity 0.2s ease;
+}
+
+/* Keep inputs fully readable and actionable even when parent frame container is faded */
+.auto-open-cell .window-input {
+    opacity: 1 !important;
+    filter: none !important;
+}
+
+/* 📦 Range Box Boundaries & Status Colors */
+.datetime-range-wrapper {
+    background-color: #f8fafc;
+    border: 2px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: all 0.2s ease;
+}
+
+/* 🟢 Active Window State (Current time inside range) */
+.datetime-range-wrapper.window-active {
+    border-color: #10b981;
+    background-color: #f0fdf4;
+}
+.datetime-range-wrapper.window-active label { color: #065f46; }
+
+/* 🔵 Future Window State (Start time is after current time) */
+.datetime-range-wrapper.window-future {
+    border-color: #3b82f6;
+    background-color: #eff6ff;
+}
+.datetime-range-wrapper.window-future label { color: #1e40af; }
+
+/* 🔴 Past Window State (End time is before current time) */
+.datetime-range-wrapper.window-past {
+    border-color: #ef4444;
+    background-color: #fef2f2;
+}
+.datetime-range-wrapper.window-past label { color: #991b1b; }
+
+/* 🎛️ Input Alignment Elements */
+.datetime-inputs-grid {
+    display: flex;
+    gap: 8px;
+}
+
+.datetime-inputs-grid .input-block {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.datetime-inputs-grid label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #475569;
+}
+
+.window-input {
+    width: 80%;
+    padding: 5px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-family: inherit;
+    color: #1e293b;
+    background-color: #ffffff;
+}
+
+.window-input:disabled {
+    background-color: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+/* 📌 Control Footer styles */
+.datetime-control-footer {
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+    padding-top: 6px;
+}
+
+.checkbox-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: #64748b;
+    cursor: pointer;
+    user-select: none;
+}
+
+/* ⚠️ Teacher Warning Callouts */
+.assessment-window-error-msg {
+    margin-top: 6px;
+    background-color: #fff1f2;
+    border: 1px solid #fecdd3;
+    color: #be123c;
+    font-size: 0.72rem;
+    padding: 6px 8px;
+    border-radius: 4px;
+    line-height: 1.3;
+    font-weight: 500;
+}
+

@@ -28,4 +28,5 @@ urlpatterns = [
     path('course/<int:course_id>/assessments/', views.assessment_view, name='assessment_view'),
     path('course/<int:course_id>/assessments/create/', views.create_assessment_ajax, name='create_assessment_ajax'),
     path('course/<int:course_id>/assessments/update-status/', views.update_assessment_status_ajax, name='update_assessment_status_ajax'),
+    path('courses/api/assessment/<int:assessment_id>/update-window/', views.update_assessment_window_ajax, name='update_assessment_window_ajax'),
 ]
