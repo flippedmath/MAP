@@ -2,6 +2,7 @@ from django.shortcuts import render, redirect
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
+from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash
 import json
 from django.http import JsonResponse
@@ -23,7 +24,11 @@ from django.db.models import Q
 from django.db.models import Case, Value, When, IntegerField
 from django.apps import apps
 from django.contrib.auth.decorators import user_passes_test
-from django.contrib.auth import logout
+
+from django.contrib.auth import logout, login, authenticate
+from django.contrib.auth.forms import AuthenticationForm # 🆕 Import standard login form
+from django.views.decorators.csrf import csrf_exempt
+
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -195,6 +200,7 @@ def database_viewer(request):
         'course': Course,
         'branch_group': BranchGroup,
         'users_in_course': UsersInCourse,
+        'assessment': Assessment,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
@@ -424,8 +430,6 @@ def course_list_view(request):
         'username_filter': username_filter
     })
 
-
-from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup
 
 @login_required
 @user_passes_test(lambda u: u.user_type in ['Teacher', 'IT_Support'], login_url='/dashboard/')
@@ -816,12 +820,6 @@ def restore_trash_item_view(request):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)
 
-from django.contrib.auth import logout, login, authenticate
-from django.contrib.auth.forms import AuthenticationForm # 🆕 Import standard login form
-from django.shortcuts import redirect, render
-from django.contrib import messages
-from django.views.decorators.csrf import csrf_exempt
-
 @csrf_exempt
 def login_view(request):
     # 1. HANDLE USERS ALREADY LOGGED IN (GET Requests)
@@ -897,3 +895,129 @@ def course_detail_view(request, course_id):
         'intro_html_content': intro_html_content
     }
     return render(request, 'assessment_tool/course_intro.html', context)
+
+
+@login_required
+def assessment_view(request, course_id):
+    # 1. Grab the current course structure context
+    course = get_object_or_404(Course, id=course_id)
+    
+    # 2. Extract current user type session flags from user request profile if needed
+    user_type = getattr(request.user, 'user_type', 'Student')
+
+    # 3. Fetch master assessment templates linked to this course track
+    assessments = (
+        Assessment.objects.filter(
+            course=course,
+            parent_assessment__isnull=True,
+            user__isnull=True
+        )
+        .order_by('order', 'creation_date')
+    )
+
+    context = {
+        'course': course,
+        'user_type': user_type,
+        'assessments': assessments,
+        'active_tab': 'assessments', # Ensures sidebar highlights the correct button
+    }
+    return render(request, 'assessment_tool/assessments.html', context)
+
+
+
+
+@login_required
+@require_POST
+def create_assessment_ajax(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    
+    # Permission verification
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if user_type not in ['Teacher', 'IT_Support']:
+        return JsonResponse({'error': 'Unauthorized framework privilege clearance.'}, status=403)
+        
+    try:
+        data = json.loads(request.body)
+        assessment_name = data.get('name', '').strip()
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid payload data structure.'}, status=400)
+        
+    if not assessment_name:
+        return JsonResponse({'error': 'Assessment name is a required identifier.'}, status=400)
+        
+    try:
+        with transaction.atomic():
+            # 1. Discover the parent folder for this course structure.
+            # We locate the BranchGroup node whose folder_type is 'course' and points to this course id.
+            parent_folder = BranchGroup.objects.filter(
+                course=course,
+                folder_type='course'
+            ).first()
+            
+            # Fallback pathing resolution if explicit link mapping isn't fully bound yet
+            if not parent_folder:
+                return JsonResponse({'error': 'Course parent is required.'}, status=400)
+            
+                # TODO: assessments are allowed to be present without a course, if so, save it in the Asessments root folder instead
+                #.      Come back to this later to implement
+                # parent_folder = BranchGroup.objects.filter(
+                #     owner=course.owner if hasattr(course, 'owner') else request.user,
+                #     name='Courses',
+                #     folder_type='folder'
+                # ).first()
+
+            # 2. Allocate the brand new structural BranchGroup folder block
+            assessment_folder = BranchGroup.objects.create(
+                name=assessment_name,
+                owner=parent_folder.owner if parent_folder else request.user,
+                parent=parent_folder,
+                folder_type='assessment',
+                order=assessment_name # Alphabetical string sorting alignment
+            )
+            
+            # 3. Provision the master Assessment template model schema
+            new_assessment = Assessment.objects.create(
+                course=course,
+                name=assessment_name,
+                branch_location=assessment_folder,
+                status='inactive',  # Default baseline initialization fallback
+                is_historic=False,   # Master template starts variable/algorithmic
+                points_weight=1.0,   # 100% normal weight multiplier assignment
+                order=assessment_name
+            )
+            
+            return JsonResponse({
+                'success': True,
+                'assessment_id': new_assessment.id,
+                'name': new_assessment.name,
+                'status': new_assessment.status
+            })
+            
+    except Exception as e:
+        return JsonResponse({'error': f'Failed executing database transaction block: {str(e)}'}, status=500)
+    
+@login_required
+@require_POST
+def update_assessment_status_ajax(request, course_id):
+    """Updates status for an assessment after safety confirmation checks pass."""
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if user_type not in ['Teacher', 'IT_Support']:
+        return JsonResponse({'error': 'Privilege check failed.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        assessment_id = data.get('assessment_id')
+        new_status = data.get('status')
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Malformed parameters.'}, status=400)
+
+    # Valid options from your enum definition
+    valid_statuses = ['closed', 'open', 'locked', 'retake_available', 'submitted', 'active', 'inactive', 'upcoming']
+    if new_status not in valid_statuses:
+        return JsonResponse({'error': 'Target lifecycle flag is not registered inside status enum.'}, status=400)
+
+    assessment = get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
+    assessment.status = new_status
+    assessment.save()
+    
+    return JsonResponse({'success': True})

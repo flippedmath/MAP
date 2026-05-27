@@ -15,14 +15,16 @@
         </div>
         
         <nav class="sidebar-nav">
-            <a href="?tab=introduction" class="nav-item {% if active_tab == 'introduction' %}active{% endif %}">
+            <a href="{% url 'course_detail' course.id %}" class="nav-item {% if active_tab == 'introduction' %}active{% endif %}">
                 <span class="nav-icon">📖</span>
                 <span class="nav-label">Introduction</span>
             </a>
-            <a href="#" class="nav-item {% if active_tab == 'assessments' %}active{% endif %} disabled-placeholder">
+            
+            <a href="{% url 'assessment_view' course.id %}" class="nav-item {% if active_tab == 'assessments' %}active{% endif %}">
                 <span class="nav-icon">📝</span>
                 <span class="nav-label">Assessments</span>
             </a>
+            
             <a href="#" class="nav-item {% if active_tab == 'management' %}active{% endif %} disabled-placeholder">
                 <span class="nav-icon">📊</span>
                 <span class="nav-label">Course Management</span>

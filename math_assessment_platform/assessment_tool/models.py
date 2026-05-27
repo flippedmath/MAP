@@ -349,7 +349,7 @@ class Course(models.Model):
     branch_location = models.OneToOneField(BranchGroup, models.CASCADE, db_column='branch_location', related_name='course', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
     creation_date = models.DateTimeField(blank=True, null=True)
     version = models.CharField(max_length=100, blank=True, null=True, unique=True)
-    introduction = models.JSONField(blank=True, null=True)  # This field type is a guess.
+    introduction = models.TextField(blank=True, null=True)
 
     @classmethod
     def create_developing(cls, owner, name, short_desc, image_file=None):

@@ -1,0 +1,146 @@
+/* 🏷️ Header Configuration Group */
+.assessments-pane-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    gap: 16px;
+}
+
+.assessments-pane-header h2 {
+    margin: 0 0 4px 0;
+    color: #0f172a;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.assessments-pane-header .subtitle {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.9rem;
+}
+
+/* ➕ Call-to-action Action Item Button */
+.btn-create-assessment {
+    background-color: #2563eb;
+    color: #ffffff;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-weight: 500;
+    text-decoration: none;
+    font-size: 0.9rem;
+    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.15);
+    transition: background 0.15s ease;
+}
+
+.btn-create-assessment:hover {
+    background-color: #1d4ed8;
+}
+
+/* 📊 Grid Datatable Wrapper frame */
+.table-responsive-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.dashboard-data-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 0.9rem;
+}
+
+.dashboard-data-table th {
+    background-color: #f8fafc;
+    color: #475569;
+    font-weight: 600;
+    padding: 14px 16px;
+    border-bottom: 1px solid #e2e8f0;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+}
+
+.dashboard-data-table td {
+    padding: 16px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #334155;
+    vertical-align: middle;
+}
+
+.dashboard-data-table tr:last-child td {
+    border-bottom: none;
+}
+
+.dashboard-data-table tr:hover td {
+    background-color: #f8fafc;
+}
+
+/* 🔗 Element Typography Links */
+.assessment-link-title {
+    color: #2563eb;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.assessment-link-title:hover {
+    text-decoration: underline;
+}
+
+.font-semibold { font-weight: 600; }
+.font-mono { font-family: monospace; font-size: 0.95rem; }
+.text-right { text-align: right; }
+.text-muted { color: #64748b; font-size: 0.85rem; }
+.text-muted-flat { color: #94a3b8; font-size: 0.85rem; }
+
+/* 🏷️ Strategy Classification Tags */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    gap: 4px;
+}
+.badge-strategy-static { background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; }
+.badge-strategy-variable { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
+
+/* 🛠️ Floating Control Actions Grid */
+.action-btn {
+    text-decoration: none;
+    margin-left: 10px;
+    display: inline-block;
+    opacity: 0.6;
+    transition: opacity 0.1s ease, transform 0.1s ease;
+}
+.action-btn:hover { 
+    opacity: 1; 
+    transform: scale(1.1);
+}
+
+/* 📭 Empty State View panel fallback */
+.empty-table-state {
+    text-align: center !important;
+    padding: 64px 16px !important;
+}
+
+.empty-table-state .empty-icon {
+    font-size: 2.5rem;
+    margin-bottom: 12px;
+}
+
+.empty-table-state h3 {
+    margin: 0 0 6px 0;
+    color: #1e293b;
+}
+
+.empty-table-state p {
+    margin: 0;
+    color: #64748b;
+    font-size: 0.85rem;
+}

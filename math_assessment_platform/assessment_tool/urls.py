@@ -25,4 +25,7 @@ urlpatterns = [
     path('delete-item/', views.delete_item, name='delete_item'),
     path('trash/restore/', views.restore_trash_item_view, name='restore_trash_item'),
     path('courses/<int:course_id>/', views.course_detail_view, name='course_detail'),
+    path('course/<int:course_id>/assessments/', views.assessment_view, name='assessment_view'),
+    path('course/<int:course_id>/assessments/create/', views.create_assessment_ajax, name='create_assessment_ajax'),
+    path('course/<int:course_id>/assessments/update-status/', views.update_assessment_status_ajax, name='update_assessment_status_ajax'),
 ]
