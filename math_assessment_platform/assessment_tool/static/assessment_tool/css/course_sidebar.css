@@ -122,3 +122,76 @@
     display: inline-block;
 }
 
+/* ==========================================================================\n   📱 RESPONSIVE MOBILE & TABLET BOTTOM FIXED NAVIGATION\n   ========================================================================== */
+@media (max-width: 768px) {
+    /* 1. Stack the main layout vertically and ensure full content width */
+    .course-layout-container {
+        flex-direction: column;
+        gap: 16px;
+        margin-bottom: 80px; /* Prevent the fixed bottom bar from covering content */
+    }
+
+    /* 2. Reposition the sidebar container to anchor rigidly to the viewport floor */
+    .course-sidebar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-width: 100%;
+        border-radius: 12px 12px 0 0; /* Rounded corners only on top */
+        z-index: 1000; /* Ensure it floats over text and tables */
+        padding: 12px 16px;
+        margin: 0;
+        box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.15);
+        display: flex;
+        flex-direction: row; /* Horizontal alignment for mobile elements */
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    /* 3. Hide the descriptive header and version text to save screen real estate */
+    .sidebar-header {
+        display: none !important;
+    }
+
+    /* 4. Spread navigation list out horizontally across the bar width */
+    .sidebar-nav {
+        display: flex !important;
+        flex-direction: row !important;
+        width: 100%;
+        justify-content: space-around;
+        gap: 8px;
+    }
+
+    /* 5. Optimize the layout of individual navigation block buttons */
+    .nav-item {
+        flex: 1;
+        flex-direction: column; /* Stack emoji above text for a clean app-like look */
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        padding: 6px 4px !important;
+        font-size: 0.75rem; /* Slightly more compact font */
+        gap: 4px;
+    }
+
+    /* Override the rigid width limits you have on icons so they scale natively */
+    .nav-item .nav-icon {
+        margin: 0 !important;
+        width: auto !important;
+        min-width: auto !important;
+        max-width: auto !important;
+        font-size: 1.7rem;
+    }
+
+    /* 6. Expand the content work area to utilize the full width of mobile screens */
+    .course-content-pane {
+        width: 100%;
+        min-height: auto;
+        padding: 16px;
+        box-sizing: border-box;
+    }
+}
+
