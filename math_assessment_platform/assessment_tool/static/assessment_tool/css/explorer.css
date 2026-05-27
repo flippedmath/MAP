@@ -5,6 +5,12 @@
     background: #f5f5f7;
     border: 1px solid #d1d1d6;
     border-radius: 10px;
+    overflow-x: auto;              /* Allows columns to scroll horizontally if you traverse deep */
+    overflow-y: hidden;            /* Prevents the entire outer frame from scrolling downwards */
+}
+#dynamic-columns {
+    display: flex;
+    height: 100%;                  /* Forces internal columns to match the container restriction */
 }
 .finder-column {
     display: flex;
@@ -13,7 +19,36 @@
     border-right: 1px solid #d1d1d6;
     background: white;
     padding: 10px 0;
+
+    /* 1. Define a fixed or maximum height context */
+    height: 100%;                  /* Or a fixed height like 400px, max-height: 80vh, etc. */
+    
+    /* 2. Control the overflow behaviors behavior */
+    overflow-y: auto;              /* Automatically shows a vertical scrollbar only when items overflow */
+    overflow-x: hidden;            /* Prevents annoying horizontal shifts or jittering */
+    
+    /* 3. Optional layout safety properties */
+    flex-direction: column;
+    box-sizing: border-box;        /* Ensures padding doesn't distort height calculations */
 }
+/* Optional: Clean up scrollbar aesthetics on WebKit browsers (Chrome, Safari, Edge) */
+.finder-column::-webkit-scrollbar {
+    width: 6px;
+}
+
+.finder-column::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.finder-column::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.15);
+    border-radius: 10px;
+}
+
+.finder-column::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
 .add-folder-container {
     margin-top: auto;       /* The "Magic" property */
     padding: 10px;
