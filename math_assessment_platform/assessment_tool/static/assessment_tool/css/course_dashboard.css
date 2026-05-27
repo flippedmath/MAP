@@ -265,3 +265,28 @@
 .ql-editor .ql-size-huge {
     font-size: 2.5em !important;
 }
+
+/* ==========================================================================
+   🎯 QUILL CONTENT MATHEMATICAL FORMULAS (DISPLAY & READ MODE)
+   ========================================================================== */
+.ql-editor-output .ql-formula,
+.ql-editor .ql-formula {
+    font-family: "Times New Roman", Times, serif;
+    background-color: #f1f5f9;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #0f172a;
+    display: inline-block;
+    margin: 0 2px;
+}
+
+/* ==========================================================================
+   🎯 QUILL CONTENT MATHEMATICAL FORMULAS (DISPLAY & READ MODE)
+   ========================================================================== */
+.ql-editor-output .ql-formula,
+.ql-editor .ql-formula {
+    display: inline-block;
+    margin: 0 4px;
+    overflow: visible !important;
+}
+
