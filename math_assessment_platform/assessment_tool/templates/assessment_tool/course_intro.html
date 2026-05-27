@@ -1,13 +1,10 @@
-{% extends "base.html" %}
+{% extends "assessment_tool/components/course_sidebar.html" %}
 {% load static %}
 
-{% block extra_css %}
+{% block course_extra_css %}
 <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.core.css" rel="stylesheet">
 <link href="{% static 'assessment_tool/css/course_dashboard.css' %}" rel="stylesheet">
-{% endblock %}
-
-{% block content %}
-{% include "assessment_tool/components/course_sidebar.html" with active_tab="introduction" %}
 {% endblock %}
 
 {% block course_sub_content %}
@@ -15,11 +12,15 @@
     <div class="intro-header-actions">
         <h2>Course Introduction</h2>
         {% if user_type == 'Teacher' or user_type == 'IT_Support' %}
-            <button id="edit-intro-btn" class="btn-action-outline" onclick="toggleIntroEditor(true)">Edit Content</button>
+            <button id="edit-intro-btn" class="btn-action-outline">Edit Content</button>
         {% endif %}
     </div>
 
     <hr class="section-divider">
+
+    <div id="intro-raw-source" style="display: none;">
+        {% if intro_html_content %}{{ intro_html_content|safe }}{% endif %}
+    </div>
 
     <div id="intro-display-view" class="ql-editor-output">
         {% if intro_html_content %}
@@ -39,7 +40,7 @@
             <div id="quill-editor-container"></div>
 
             <div class="editor-control-footer">
-                <button type="button" class="btn-cancel" onclick="toggleIntroEditor(false)">Cancel</button>
+                <button type="button" class="btn-cancel" id="cancel-intro-btn">Cancel</button>
                 <button type="submit" class="btn-save">Save Content Structure</button>
             </div>
         </form>
@@ -50,58 +51,10 @@
 
 {% block extra_js %}
 {{ block.super }}
+
 {% if user_type == 'Teacher' or user_type == 'IT_Support' %}
 <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
-<script>
-    let quillInstance = null;
-    const initialRawContent = `{{ intro_html_content|safe|escapejs }}`;
-
-    function toggleIntroEditor(showEditor) {
-        const displayDiv = document.getElementById('intro-display-view');
-        const editorDiv = document.getElementById('intro-editor-view');
-        const editBtn = document.getElementById('edit-intro-btn');
-
-        if (showEditor) {
-            displayDiv.style.display = 'none';
-            editorDiv.style.display = 'block';
-            if (editBtn) editBtn.style.display = 'none';
-
-            // Lazy initialize Quill engine instance
-            if (!quillInstance) {
-                quillInstance = new Quill('#quill-editor-container', {
-                    theme: 'snow',
-                    modules: {
-                        toolbar: [
-                            [{ 'font': [] }, { 'size': [] }],
-                            ['bold', 'italic', 'underline', 'strike'],
-                            [{ 'color': [] }, { 'background': [] }],
-                            [{ 'list': 'ordered'}, { 'list': 'bullet' }],
-                            [{ 'indent': '-1'}, { 'indent': '+1' }, { 'align': [] }],
-                            ['link', 'image'],
-                            ['clean']
-                        ]
-                    }
-                });
-                // Seed editor layout frame with existing string data
-                quillInstance.clipboard.dangerouslyPasteHTML(initialRawContent);
-            }
-        } else {
-            displayDiv.style.display = 'block';
-            editorDiv.style.display = 'none';
-            if (editBtn) editBtn.style.display = 'inline-block';
-        }
-    }
-
-    // Intercept form submission to bundle layout HTML context safely inside JSON target string
-    document.getElementById('intro-save-form')?.addEventListener('submit', function(e) {
-        if (quillInstance) {
-            const htmlOutput = quillInstance.getSemanticHTML();
-            
-            // Package payload as an explicit JSON string block
-            const jsonPayload = JSON.stringify({ html_content: htmlOutput });
-            document.getElementById('id_introduction_payload').value = jsonPayload;
-        }
-    });
-</script>
 {% endif %}
+
+<script src="{% static 'assessment_tool/js/course_intro.js' %}"></script>
 {% endblock %}

@@ -1,0 +1,124 @@
+/* ==========================================================================
+   ✨ MODERN SLATE/DARK DASHBOARD SIDEBAR THEME
+   ========================================================================== */
+.course-layout-container {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    margin-top: 1rem;
+}
+
+/* 🏢 Sidebar Container Base Frame */
+.course-sidebar {
+    width: 260px;
+    background-color: #0f172a; /* Deep elegant slate dark background */
+    color: #cbd5e1; /* Soft neutral foreground text */
+    padding: 24px 16px;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+
+/* 🏷️ Header Block: Title & Version Layout */
+.sidebar-header {
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid #1e293b; /* Subtle interior dark border line */
+}
+
+.sidebar-header h3 {
+    margin: 0 0 6px 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #f8fafc; /* Crisp clean white text for title */
+    line-height: 1.3;
+}
+
+.course-code {
+    display: inline-block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #64748b; /* Sleek muted gray version label */
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* 🧭 Navigation Menu System */
+.sidebar-nav {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;    /* Forces links to stretch uniformly */
+    width: 100% !important;             /* Takes up 100% of the available inner width */
+    box-sizing: border-box !important;  /* 🎯 CRITICAL: Keeps calculation strictly inside padding rules */
+    gap: 6px;                           /* Tight vertical layout rhythm */
+}
+
+/* Base Nav Item Links */
+.nav-item {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important; 
+    width: auto !important;             /* 🎯 CHANGED: Allows flex-stretch to determine width safely */
+    box-sizing: border-box !important;  /* 🎯 CRITICAL: Keeps link padding from expanding over the border edge */
+    gap: 12px !important;                 
+    padding: 10px 14px;
+    color: #94a3b8;
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border-radius: 8px;
+    text-align: left !important;           
+    transition: all 0.15s ease-in-out;
+}
+
+/* Muted icon alignment scaling */
+.nav-icon {
+    font-size: 1.1rem;
+    display: inline-block !important;      /* Changes row tracking into an inline structural block */
+    width: 24px !important;                /* 🎯 CRITICAL: Sets a rigid, uniform column boundary size */
+    min-width: 24px !important;            /* 🎯 CRITICAL: Hard locks the minimum width column size */
+    max-width: 24px !important;            /* 🎯 CRITICAL: Stops irregular glyphs from stretching the box */
+    text-align: center !important;         /* Centers the variable emoji shapes within their 24px slot */
+}
+
+/* Hover State Interaction */
+.nav-item:hover:not(.disabled-placeholder) {
+    background-color: #1e293b; /* Premium slate highlight block */
+    color: #f8fafc;
+}
+
+/* Active Highlight State Link */
+.nav-item.active {
+    background-color: #2563eb; /* Platform brand signature royal blue accent */
+    color: #ffffff !important;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
+
+/* 🔒 Disabled Placeholder Adjustments */
+.nav-item.disabled-placeholder {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* 💻 Main Right Content Area Work Pane Base */
+.course-content-pane {
+    flex-grow: 1;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 24px;
+    min-height: 70vh;
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+    box-sizing: border-box;
+}
+
+/* 🎯 Explicit text label constraints to block external centering cascades */
+.nav-label {
+    text-align: left !important;
+    flex-grow: 1;                 /* Forces the text container to occupy all available row space */
+    display: inline-block;
+}
+

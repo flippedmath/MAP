@@ -1,22 +1,35 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link href="{% static 'assessment_tool/css/course_sidebar.css' %}" rel="stylesheet">
+{% block course_extra_css %}{% endblock %}
+{% endblock %}
+
+{% block content %}
 <div class="course-layout-container">
     <aside class="course-sidebar">
         <div class="sidebar-header">
             <h3>{{ course.name }}</h3>
-            <span class="course-code">{{ course.code|default:"MT-101" }}</span>
+            <span class="course-code">version {{ course.code|default:course.version }}</span>
         </div>
         
         <nav class="sidebar-nav">
             <a href="?tab=introduction" class="nav-item {% if active_tab == 'introduction' %}active{% endif %}">
-                <span class="nav-icon">📖</span> Introduction
+                <span class="nav-icon">📖</span>
+                <span class="nav-label">Introduction</span>
             </a>
             <a href="#" class="nav-item {% if active_tab == 'assessments' %}active{% endif %} disabled-placeholder">
-                <span class="nav-icon">📝</span> Assessments
-            </a>
-            <a href="#" class="nav-item {% if active_tab == 'settings' %}active{% endif %} disabled-placeholder">
-                <span class="nav-icon">⚙️</span> Course Settings
+                <span class="nav-icon">📝</span>
+                <span class="nav-label">Assessments</span>
             </a>
             <a href="#" class="nav-item {% if active_tab == 'management' %}active{% endif %} disabled-placeholder">
-                <span class="nav-icon">📊</span> Course Management
+                <span class="nav-icon">📊</span>
+                <span class="nav-label">Course Management</span>
+            </a>
+            <a href="#" class="nav-item {% if active_tab == 'settings' %}active{% endif %} disabled-placeholder">
+                <span class="nav-icon">⚙️</span>
+                <span class="nav-label">Course Settings</span>
             </a>
         </nav>
     </aside>
@@ -25,3 +38,4 @@
         {% block course_sub_content %}{% endblock %}
     </main>
 </div>
+{% endblock %}

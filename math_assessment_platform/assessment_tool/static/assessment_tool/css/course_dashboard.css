@@ -1,83 +1,267 @@
-/* Layout Alignment Structure Grid */
-.course-layout-container {
-    display: flex;
-    min-height: calc(100vh - 70px);
-    background-color: #f8fafc;
-}
-
-/* Sidebar Styling */
-.course-sidebar {
-    width: 260px;
-    background-color: #ffffff;
-    border-right: 1px solid #e2e8f0;
-    padding: 24px 16px;
-    box-sizing: border-box;
-}
-
-.sidebar-header h3 {
-    margin: 0 0 4px 0;
-    font-size: 1.2rem;
-    color: #0f172a;
-}
-
-.course-code {
-    font-size: 0.8rem;
-    color: #64748b;
-    font-weight: 600;
-    text-transform: uppercase;
-}
-
-.sidebar-nav {
-    margin-top: 32px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.nav-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    text-decoration: none;
-    color: #475569;
+/* ==========================================================================
+   📊 RICH-TEXT EDITOR TABLE STYLING FALLBACKS
+   ========================================================================== */
+.ql-editor-output table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1.5rem 0;
     font-size: 0.95rem;
-    font-weight: 500;
-    border-radius: 6px;
-    transition: all 0.15s ease;
 }
 
-.nav-item:hover:not(.disabled-placeholder) {
-    background-color: #f1f5f9;
+.ql-editor-output table td, 
+.ql-editor-output table th {
+    border: 1px solid #cbd5e1; /* Subtle slate border */
+    padding: 10px 14px;
+    text-align: left;
+    min-width: 50px;
+}
+
+.ql-editor-output table th {
+    background-color: #f8fafc; /* Subtle grey background header tint */
+    font-weight: 600;
     color: #1e293b;
 }
 
-.nav-item.active {
-    background-color: #e0f2fe;
-    color: #0369a1;
+/* Light zebra striping for saved long form data sets */
+.ql-editor-output table tr:nth-child(even) {
+    background-color: #fdfdfd;
 }
 
-.disabled-placeholder {
-    opacity: 0.5;
-    cursor: not-allowed;
+
+
+
+
+
+/* ==========================================================================
+   🎯 QUILL VISUAL TABLE CONTEXT SELECTION OVERLAYS
+   ========================================================================== */
+.ql-table-ui {
+    position: absolute;
+    z-index: 1000 !important;
+    background-color: #2563eb !important; /* Premium Blue Handle */
+    border: 1px solid #1d4ed8 !important;
+    border-radius: 4px;
+    cursor: pointer;
 }
 
-/* Active Main Dashboard Sheet Pane */
-.course-content-pane {
-    flex-grow: 1;
-    padding: 40px;
-    box-sizing: border-box;
+/* Visual operations context picker menu adjustments */
+.ql-table-operations {
+    background-color: #ffffff !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1) !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 6px !important;
+    padding: 6px 0 !important;
+    font-family: inherit !important;
 }
 
-.intro-page-wrapper {
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 8px;
-    padding: 32px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+.ql-table-operations button {
+    background: transparent !important;
+    color: #334155 !important;
+    padding: 6px 14px !important;
+    text-align: left !important;
+    width: 100% !important;
+    font-size: 0.85rem !important;
+    border-radius: 0px !important;
+    transition: background-color 0.1s ease !important;
 }
 
-.intro-header-actions {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+.ql-table-operations button:hover {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+/* ==========================================================================
+   🎯 NATIVE QUILL 2.x VISUAL TABLE OPERATIONS CONTEXT MENU
+   ========================================================================== */
+.ql-ctx-menu {
+    position: absolute;
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1) !important;
+    border-radius: 6px !important;
+    padding: 6px 0 !important;
+    z-index: 2000 !important;
+}
+
+.ql-ctx-menu-item {
+    background: transparent !important;
+    color: #334155 !important;
+    padding: 8px 16px !important;
+    font-size: 0.85rem !important;
+    cursor: pointer;
+    text-align: left;
+    display: block;
+    width: 100%;
+    border: none;
+    transition: background-color 0.1s ease;
+}
+
+.ql-ctx-menu-item:hover {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+/* Ensure absolute-positioned menus inside the editor are never hidden behind parent wrappers */
+#intro-editor-view, 
+#intro-save-form,
+.ql-container {
+    overflow: visible !important;
+}
+
+/* Force context panels to sit cleanly on top of text components */
+.ql-ctx-menu,
+.ql-table-operations {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    z-index: 99999 !important;
+}
+
+/* Prevent absolute operational menus from clipping behind theme bounds */
+.ql-container, .ql-editor, #quill-editor-container {
+    overflow: visible !important;
+}
+
+/* ==========================================================================
+   🎯 INTERACTIVE CUSTOM TABLE MANIPULATION CONTEXT MENU
+   ========================================================================== */
+.custom-ql-context-menu {
+    position: absolute;
+    display: none;
+    background: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1) !important;
+    border-radius: 8px !important;
+    padding: 6px 0 !important;
+    z-index: 999999 !important;
+    min-width: 190px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.custom-ql-context-menu .menu-item {
+    padding: 8px 14px !important;
+    font-size: 0.85rem !important;
+    color: #334155 !important;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.1s ease;
+}
+
+.custom-ql-context-menu .menu-item:hover {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+.custom-ql-context-menu .menu-item-danger {
+    color: #dc2626 !important;
+}
+
+.custom-ql-context-menu .menu-item-danger:hover {
+    background-color: #fef2f2 !important;
+    color: #991b1b !important;
+}
+
+.custom-ql-context-menu .menu-divider {
+    height: 1px;
+    background-color: #e2e8f0;
+    margin: 4px 0;
+}
+
+/* ==========================================================================
+   🎯 TABLE EDITING VISUAL CUES & HELPERS
+   ========================================================================== */
+
+/* Container wrapper during edit mode */
+#quill-editor-container table {
+    position: relative;
+    transition: border-color 0.2s ease;
+}
+
+/* Highlight the table container slightly on hover to show interactivity */
+#quill-editor-container table:hover {
+    border: 1px dashed #3b82f6 !important; /* Soft blue dashed boundary guide */
+}
+
+/* Inject a small, elegant hint badge at the top right of the table on hover */
+#quill-editor-container table:hover::after {
+    content: "🖱️ Right-click cells for row/column options";
+    position: absolute;
+    top: -22px;
+    right: 0;
+    background-color: #1e293b; /* Dark slate matching your theme */
+    color: #f8fafc;
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    pointer-events: none; /* Prevents intercepting mouse clicks */
+    z-index: 10;
+    white-space: nowrap;
+}
+
+
+/* ==========================================================================
+   🙈 INVISIBLE TABLE BORDER STYLING SUITE
+   ========================================================================== */
+
+/* 1. Saved Display View & Student Reading Mode Layouts */
+.ql-editor-output table.no-border,
+.ql-editor-output table.no-border tr,
+.ql-editor-output table.no-border td,
+.ql-editor-output table.no-border th,
+.ql-editor table.no-border,
+.ql-editor table.no-border tr,
+.ql-editor table.no-border td,
+.ql-editor table.no-border th {
+    border: none !important;
+}
+
+/* 2. Inside the Active Workspace Editor (Maintain subtle design boundaries for the builder) */
+#quill-editor-container table.no-border td,
+#quill-editor-container table.no-border th {
+    border: 1px dashed #cbd5e1 !important; /* Soft dashed grid lines so layout remains manageable */
+    background-color: rgba(248, 250, 252, 0.5) !important; /* Faint background tint layout tracker */
+}
+
+
+/* ==========================================================================
+   🎯 QUILL CONTENT ALIGNMENT CORE RULES (DISPLAY VIEW)
+   ========================================================================== */
+.ql-editor-output .ql-align-center,
+.ql-editor .ql-align-center {
+    text-align: center !important;
+}
+
+.ql-editor-output .ql-align-right,
+.ql-editor .ql-align-right {
+    text-align: right !important;
+}
+
+.ql-editor-output .ql-align-justify,
+.ql-editor .ql-align-justify {
+    text-align: justify !important;
+}
+
+.ql-editor-output .ql-align-left,
+.ql-editor .ql-align-left {
+    text-align: left !important;
+}
+
+/* ==========================================================================
+   🎯 QUILL CONTENT FONT SIZING SYSTEM (DISPLAY VIEW)
+   ========================================================================== */
+.ql-editor-output .ql-size-small,
+.ql-editor .ql-size-small {
+    font-size: 0.75em !important;
+}
+
+.ql-editor-output .ql-size-large,
+.ql-editor .ql-size-large {
+    font-size: 1.5em !important;
+}
+
+.ql-editor-output .ql-size-huge,
+.ql-editor .ql-size-huge {
+    font-size: 2.5em !important;
+}
