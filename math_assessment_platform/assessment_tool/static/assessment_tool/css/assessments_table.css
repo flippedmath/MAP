@@ -87,10 +87,20 @@
 .table-responsive-wrapper {
     width: 100%;
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch; /* Ensures smooth, momentum-based swiping on iOS devices */
+    margin-bottom: 1.5rem;
+
     border: 1px solid #e2e8f0;
     border-radius: 12px;
     background: #ffffff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+/* Ensure the underlying table respects the width constraints of its parent wrapper */
+#assessments-datatable {
+    width: 100%;
+    min-width: 800px;            /* 🧱 CRITICAL: Prevents columns from compressing or squishing too tight on mobile */
+    border-collapse: collapse;
+    border: none;                /* Clears table outline since the parent wrapper handles the frame border now */
 }
 
 .dashboard-data-table {

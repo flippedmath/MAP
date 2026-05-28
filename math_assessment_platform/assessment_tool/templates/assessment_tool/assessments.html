@@ -102,25 +102,16 @@
                                 <span>Lock time</span>
                             </label>
 
-                            <span class="window-status-countdown" style="font-size: 0.75rem; font-weight: 600;">
-                                {% if assessment.status == 'upcoming' and assessment.start_time and assessment.end_time %}
-                                    {% if current_time < assessment.start_time %}
-                                        {# Calculated using Django template filters #}
-                                        Starts in: {{ assessment.start_time|timeuntil:current_time }}
-                                    {% elif current_time >= assessment.start_time and current_time <= assessment.end_time %}
-                                        <span style="color: #10b981;">CURRENTLY OPEN</span>
-                                    {% endif %}
-                                {% elif assessment.status != 'upcoming' %}
-                                    <span style="color: #6fadbb;">Not in affect unless 'status' = 'upcoming'</span>
-                                {% endif %}
-                            </span>
+                            <span class="window-status-countdown" style="font-size: 0.75rem; font-weight: 600;"></span>
                         </div>
                     </div>
                     
-                    {% if user_type == 'Teacher' and assessment.status == 'upcoming' and not assessment.start_time or not assessment.end_time %}
-                        <div class="assessment-window-error-msg">
-                            <i class="fas fa-exclamation-triangle"></i> Window timestamps must be configured for upcoming assessments.
-                        </div>
+                    {% if user_type == 'Teacher' and assessment.status == 'upcoming' %}
+                        {% if not assessment.start_time or not assessment.end_time %}
+                            <div class="assessment-window-error-msg">
+                                <i class="fas fa-exclamation-triangle"></i> Window timestamps must be configured for upcoming assessments.
+                            </div>
+                        {% endif %}
                     {% endif %}
                 </td>
                 

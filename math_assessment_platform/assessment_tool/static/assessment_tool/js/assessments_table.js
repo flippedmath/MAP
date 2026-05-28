@@ -34,24 +34,31 @@ function updateCountdownLabel(cell) {
     const countdownSpan = cell.querySelector('.window-status-countdown');
     if (!countdownSpan) return;
 
-    // Clear previous string track
+    // Clear previous state
     countdownSpan.innerHTML = "";
 
-    // If the assessment is grayed out or not 'upcoming', exit out early
-    if (cell.classList.contains('status-not-upcoming')) return;
+    // 1️⃣ Match your extra HTML elif block: If the cell is NOT upcoming, show the blue message
+    if (cell.classList.contains('status-not-upcoming')) {
+        countdownSpan.innerHTML = '<span style="color: #6fadbb;">Not in effect unless \'status\' = \'upcoming\'</span>';
+        return;
+    }
 
     const startInput = cell.querySelector('.start-time-picker');
     const endInput = cell.querySelector('.end-time-picker');
-    if (!startInput || !endInput || !startInput.value || !endInput.value) return;
+    
+    // If it IS upcoming but the dates haven't been selected yet
+    if (!startInput || !endInput || !startInput.value || !endInput.value) {
+        countdownSpan.innerHTML = '<span style="color: #ef4444;">Missing Window Schedule</span>';
+        return;
+    }
 
     const now = new Date();
     const startDate = new Date(startInput.value);
     const endDate = new Date(endInput.value);
 
-    // Scenario A: Start date is in the future
+    // 2️⃣ Scenario A: Start date is in the future
     if (startDate > now) {
         const diffMs = startDate - now;
-        
         const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
         const diffHours = Math.floor((diffMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
         const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
@@ -61,12 +68,12 @@ function updateCountdownLabel(cell) {
         if (diffHours > 0 || diffDays > 0) timeString += `${diffHours}h `;
         timeString += `${diffMinutes}m`;
 
-        countdownSpan.style.color = "#475569"; // Slate gray font color
+        countdownSpan.style.color = "#475569";
         countdownSpan.innerText = timeString;
     } 
-    // Scenario B: Start date is in the past, End date is in the future
+    // 3️⃣ Scenario B: Start date is in the past, End date is in the future
     else if (startDate <= now && endDate >= now) {
-        countdownSpan.innerHTML = '<span style="color: #10b981;">OPEN</span>'; // Green font color
+        countdownSpan.innerHTML = '<span style="color: #10b981;">CURRENTLY OPEN</span>';
     }
 }
 
