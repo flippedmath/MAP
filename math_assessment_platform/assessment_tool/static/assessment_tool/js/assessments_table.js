@@ -175,4 +175,107 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         return cookieValue;
     }
+
+    document.querySelectorAll('.btn-trash-assessment').forEach(button => {
+        button.addEventListener('click', async function(e) {
+            e.preventDefault();
+            
+            const assessmentId = this.getAttribute('data-assessment-id');
+            const branchGroupId = this.getAttribute('data-branch-group-id');
+            const targetedRow = this.closest('tr');
+
+            const userConfirmed = confirm("Are you sure you want to delete this assessment? This will move its structural files to the Trash folder and remove it from your active dashboard.");
+            if (!userConfirmed) return;
+
+            try {
+                const response = await fetch(`/courses/api/assessment/${assessmentId}/trash/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({}) // No need to manually forward branch_group_id anymore!
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    // Smoothly slide out and remove the row from the viewport without breaking focus
+                    targetedRow.style.transition = "all 0.4s ease";
+                    targetedRow.style.opacity = "0";
+                    targetedRow.style.transform = "translateX(-20px)";
+                    
+                    setTimeout(() => {
+                        targetedRow.remove();
+                        
+                        // If no assessments are left visible, reload to display your native empty state placeholder
+                        const remainingRows = document.querySelectorAll('#assessments-datatable tbody tr:not(#empty-state-row)');
+                        if (remainingRows.length === 0) {
+                            window.location.reload();
+                        }
+                    }, 400);
+                } else {
+                    alert(data.error || "An error occurred while attempting to remove this assessment blueprint.");
+                }
+            } catch (err) {
+                console.error("Communication failure running trash modification routine:", err);
+                alert("Connection link failure encountered while moving item to Trash.");
+            }
+        });
+    });
+
+
+    const tableBody = document.querySelector('#assessments-datatable tbody');
+    if (tableBody) {
+        // Initialize Drag & Drop targeting the handles exclusively
+        new Sortable(tableBody, {
+            handle: '.drag-handle', // Only trigger drag via the ☰ icon cell
+            animation: 150,
+            ghostClass: 'sortable-ghost', // Styling hook for the moving row placeholder
+            
+            onEnd: async function (evt) {
+                const movedRow = evt.item;
+                const assessmentId = movedRow.getAttribute('data-id');
+                
+                // Look up neighboring elements relative to the DOM row container after movement drops
+                const prevRow = movedRow.previousElementSibling;
+                const nextRow = movedRow.nextElementSibling;
+                
+                const prevId = prevRow ? prevRow.getAttribute('data-id') : null;
+                const nextId = nextRow ? nextRow.getAttribute('data-id') : null;
+                
+                // Extract the course ID from your existing page scope architecture configuration context url
+                const currentUrl = window.location.pathname; 
+                const courseIdMatch = currentUrl.match(/\/course\/(\d+)\//);
+                if (!courseIdMatch) return;
+                const courseId = courseIdMatch[1];
+
+                try {
+                    const response = await fetch(`/courses/api/course/${courseId}/reorder-assessments/`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken')
+                        },
+                        body: JSON.stringify({
+                            assessment_id: assessmentId,
+                            prev_id: prevId,
+                            next_id: nextId
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (response.ok && data.success) {
+                        // Update data-order attribute dynamically on the row elements
+                        movedRow.setAttribute('data-order', data.new_order);
+                    } else {
+                        alert(data.error || "Failed to save position modifications.");
+                    }
+                } catch (err) {
+                    console.error("Sorting transaction error across endpoint link channels:", err);
+                    alert("Connection link failure encountered while tracking item placement.");
+                }
+            }
+        });
+    }
 });

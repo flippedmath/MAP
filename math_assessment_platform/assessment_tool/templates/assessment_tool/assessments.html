@@ -18,6 +18,9 @@
     <table class="dashboard-data-table" id="assessments-datatable">
         <thead>
             <tr>
+                {% if user_type == 'Teacher' or user_type == 'IT_Support' %}
+                    <th style="width: 40px; text-align: center;"></th>
+                {% endif %}
                 <th>Assessment Name</th>
                 <th class="status-header-cell">
                     <div class="status-header-inner">
@@ -33,8 +36,8 @@
                                     <li><strong>Inactive:</strong> Hidden from students. Teachers can modify assessment.</li>
                                     <li><strong>Locked:</strong> Hidden from students. Teachers can not edit.</li>
                                     <li><strong>Retake Available:</strong> Allows eligible students to submit another attempt.</li>
-                                    <li><strong>Closed:</strong> Open status has passed, no more student submissions accepted.</li>
-                                    <li><strong>Submitted:</strong> Lifecycle completed and finalized.</li>
+                                    <li><strong>Closed:</strong> Open status has passed, no more student submissions accepted. Grading has come to a close.</li>
+                                    <li><strong>Submitted:</strong> Phase for students submitting answers has passed, teacher has not graded yet.</li>
                                 </ul>
                             </div>
                         </span>
@@ -48,6 +51,11 @@
         <tbody>
             {% for assessment in assessments %}
             <tr data-id="{{ assessment.id }}">
+                {% if user_type == 'Teacher' or user_type == 'IT_Support' %}
+                <td class="drag-handle" style="cursor: grab; text-align: center; color: #cbd5e1; width: 40px;">                    
+                    <i class="fas fa-bars"></i>
+                </td>
+                {% endif %}
                 <td class="font-semibold text-slate-900">
                     <span class="assessment-display-title">{{ assessment.name }}</span>
                 </td>
@@ -115,9 +123,20 @@
                     {% endif %}
                 </td>
                 
-                <td class="text-right action-cell">
-                    <a href="#" class="action-btn edit-action" title="Configure Core Options/Defaults">⚙️ Options</a>
-                    <a href="#" class="action-btn delete-action" title="Drop Blueprint Structure">🗑️</a>
+                <td style="padding: 1rem; border-bottom: 1px solid #e2e8f0; text-align: center; white-space: nowrap;">
+                    <div style="display: flex; gap: 0.5rem; justify-content: center;">
+                        <button class="btn-option-settings" data-assessment-id="{{ assessment.id }}" style="cursor: pointer; background: none; border: none; color: #64748b; font-size: 1rem; padding: 0.25rem;">
+                            <i class="fas fa-cog"></i>
+                        </button>
+                        
+                        <button class="btn-trash-assessment" 
+                            data-assessment-id="{{ assessment.id }}" 
+                            data-branch-group-id="{{ assessment.branch_location.id }}" 
+                            title="Move to Trash" 
+                            style="cursor: pointer; background: none; border: none; color: #ef4444; font-size: 1rem; padding: 0.25rem;">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                    </div>
                 </td>
             </tr>
             {% empty %}
@@ -155,6 +174,8 @@
 {% block extra_js %}
 {{ block.super }}
 <script src="{% static 'assessment_tool/js/assessments_table.js' %}"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.min.js"></script>
 
 <script>
 document.addEventListener("DOMContentLoaded", function() {

@@ -246,7 +246,41 @@ def restore_course_payload(request, folder):
 
 # --- Placeholders for other types ---
 def restore_assessment_payload(request, folder):
-    pass
+    """
+    Polymorphic sub-handler to restore an assessment folder out of Trash
+    and flip its dashboard status back to 'upcoming'.
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    # 1. Trace up to find the logged-in user's top-level root directory node
+    user_root = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
+    
+    if user_root:
+        # 2. Locate the default 'Courses' subfolder provisioned for this user by signals.py
+        courses_folder = BranchGroup.objects.filter(
+            parent=user_root,
+            name='Courses',
+            folder_type='folder'
+        ).first()
+        
+        # 3. Move the assessment's folder back under 'Courses' (or fallback to the user root)
+        folder.parent = courses_folder if courses_folder else user_root
+        folder.save()
+
+    # 4. 🎯 RE-ACTIVATE DASHBOARD ROW (FIXED LOOKUP)
+    try:
+        # Query the Assessment directly using the current folder's ID
+        Assessment = apps.get_model('assessment_tool', 'Assessment')
+        assessment = Assessment.objects.filter(branch_location=folder).first()
+        
+        if assessment:
+            assessment.status = 'locked'
+            assessment.save()
+        else:
+            raise ValueError(f"No matching Assessment record found tracking folder ID {folder.id}.")
+            
+    except Exception as e:
+        raise ValueError(f"Failed to synchronize assessment lifecycle status: {str(e)}")
+    
 
 def restore_aqg_payload(request, folder):
     pass
@@ -377,4 +411,36 @@ def generate_unique_course_version(dest_status, source_course=None):
             base_parts[target_index] += 1
 
     return potential_version
+
+
+def calculate_midpoint_order(prev="", next=""):
+    """
+    Generates a lexicographical midpoint string between prev and next strings.
+    Adapted from the project's sort_by_string.py algorithm.
+    """
+
+    ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    CHAR_TO_INT = {char: i for i, char in enumerate(ALPHABET)}
+    BASE = len(ALPHABET)
+
+    if next and prev >= next:
+        raise ValueError(f"Invalid range: {prev} is not less than {next}")
+
+    res = []
+    i = 0
+    while True:
+        p_val = CHAR_TO_INT[prev[i]] if i < len(prev) else -1
+        n_val = CHAR_TO_INT[next[i]] if (next and i < len(next)) else BASE
+        
+        # If there is a gap of at least 2, we can fit a character in between
+        if n_val - p_val > 1:
+            mid_val = (p_val + n_val) // 2
+            res.append(ALPHABET[mid_val])
+            break
+        
+        # If no gap exists (e.g., between 'A' and 'B')
+        res.append(ALPHABET[max(0, p_val)])
+        i += 1
+        
+    return "".join(res)
 

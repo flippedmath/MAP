@@ -3,7 +3,7 @@ from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
 from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order
 import json
 from django.http import JsonResponse
 from .models import BranchGroup
@@ -906,7 +906,7 @@ def assessment_view(request, course_id):
     course = get_object_or_404(Course, id=course_id)
     
     # 2. Extract current user type session flags from user request profile if needed
-    user_type = getattr(request.user, 'user_type', 'Student')
+    user_type = getattr(request.user, 'user_type', 'Student') # pretends the 'user_type' is 'Student' if 'user_type' didn't return anything
 
     # 3. Fetch master assessment templates linked to this course track
     assessments = (
@@ -914,8 +914,9 @@ def assessment_view(request, course_id):
             course=course,
             parent_assessment__isnull=True,
             user__isnull=True
-        )
-        .order_by('order', 'creation_date')
+        ).exclude(
+        status='deleted'
+        ).select_related('branch_location').order_by('order', 'creation_date')
     )
 
     context = {
@@ -1072,3 +1073,102 @@ def update_assessment_window_ajax(request, assessment_id):
         'assessment_id': assessment.id,
         'status': assessment.status
     })
+
+@login_required
+@require_POST
+def trash_assessment_ajax(request, assessment_id):
+    try:
+        # 1. Use select_related to bring down the correct relationship path safely
+        assessment = Assessment.objects.select_related('branch_location').get(id=assessment_id)
+        
+        # 🎯 SCOPED PERMISSION CHECK: Verify the user is registered as a Teacher for THIS specific course
+        is_teacher_in_course = UsersInCourse.objects.filter(
+            user=request.user,
+            course=assessment.course,
+            user__user_type='Teacher'
+        ).exists()
+        if is_teacher_in_course:
+            return JsonResponse({'success': False, 'error': 'Unauthorized modification request.'}, status=403)
+            
+        # 2. Flag assessment status to 'deleted'
+        assessment.status = 'deleted'
+        assessment.save()
+
+        # 3. Relocate the linked branch_location into the default system 'Trash' directory folder
+        if assessment.branch_location:
+            try:
+                branch_group = assessment.branch_location
+                
+                # Trace up to find the user's top-level root folder wrapper
+                user_root = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
+                
+                if user_root:
+                    # Locate the default 'Trash' sub-folder provisioned by signals.py
+                    trash_folder = BranchGroup.objects.filter(
+                        parent=user_root,
+                        name='Trash',
+                        folder_type='folder'
+                    ).first()
+                    
+                    if trash_folder:
+                        branch_group.parent = trash_folder
+                        branch_group.save()
+            except Exception as e:
+                pass  # Fall back safely if there are folder assignment structural rules
+
+        return JsonResponse({'success': True, 'message': 'Assessment relocated to Trash.'})
+
+    except Assessment.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Assessment tracking record not found.'}, status=404)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+@login_required
+@require_POST
+def reorder_assessment_ajax(request, course_id):
+    # Verify Permissions
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if user_type not in ['Teacher', 'IT_Support'] and not request.user.is_staff:
+        return JsonResponse({'success': False, 'error': 'Unauthorized modification request.'}, status=403)
+        
+    try:
+        data = json.loads(request.body)
+        assessment_id = data.get('assessment_id')
+        prev_id = data.get('prev_id')  # ID of the item row now above it
+        next_id = data.get('next_id')  # ID of the item row now below it
+        
+        # Pull down the assessment along with its branch folder location relation cleanly
+        assessment = get_object_or_404(
+            Assessment.objects.select_related('branch_location'), 
+            id=assessment_id, 
+            course_id=course_id
+        )
+        
+        prev_order = ""
+        next_order = ""
+        
+        if prev_id:
+            prev_order = Assessment.objects.get(id=prev_id).order or ""
+        if next_id:
+            next_order = Assessment.objects.get(id=next_id).order or ""
+            
+        # Compute the new lexicographical midpoint string using your string algorithm
+        new_order = calculate_midpoint_order(prev_order, next_order)
+        
+        # 🎯 SYNCHRONIZED TRANSACTION BLOCK
+        with transaction.atomic():
+            # 1. Update the dashboard order string
+            assessment.order = new_order
+            assessment.save()
+            
+            # 2. Update the folder node's order string to keep the explorer completely in sync
+            if assessment.branch_location:
+                folder = assessment.branch_location
+                folder.order = new_order
+                folder.save()
+        
+        return JsonResponse({'success': True, 'new_order': new_order})
+        
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)

@@ -29,4 +29,6 @@ urlpatterns = [
     path('course/<int:course_id>/assessments/create/', views.create_assessment_ajax, name='create_assessment_ajax'),
     path('course/<int:course_id>/assessments/update-status/', views.update_assessment_status_ajax, name='update_assessment_status_ajax'),
     path('courses/api/assessment/<int:assessment_id>/update-window/', views.update_assessment_window_ajax, name='update_assessment_window_ajax'),
+    path('courses/api/assessment/<int:assessment_id>/trash/', views.trash_assessment_ajax, name='trash_assessment_ajax'),
+    path('courses/api/course/<int:course_id>/reorder-assessments/', views.reorder_assessment_ajax, name='reorder_assessment_ajax'),
 ]
