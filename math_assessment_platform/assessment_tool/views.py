@@ -895,7 +895,8 @@ def course_detail_view(request, course_id):
     context = {
         'course': course,
         'user_type': user_type,
-        'intro_html_content': intro_html_content
+        'intro_html_content': intro_html_content,
+        'active_tab': 'introduction', 
     }
     return render(request, 'assessment_tool/course_intro.html', context)
 
