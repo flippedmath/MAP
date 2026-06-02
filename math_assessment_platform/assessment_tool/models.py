@@ -657,7 +657,7 @@ class PermissionGroup(models.Model):
 class Problem(models.Model):
     aqg = models.ForeignKey(AssessmentQuestionGroup, models.DO_NOTHING, blank=True, null=True, db_comment='If aqg_id is not null, then it points to the assessment_question_group that is part of an assessment')
     cqd = models.ForeignKey(CustomQuestionDistribution, models.DO_NOTHING, blank=True, null=True, db_comment='if cqd_id is not null, then it points to the custom_question_distribution that contains a list of problems that it will randomize from')
-    branch_location = models.ForeignKey(BranchGroup, models.DO_NOTHING, db_column='branch_location', null=False, db_comment="Will always have a branch location. If 'aqg_id' is null, then it's an isolated problem, if 'aqg_id' is not null, then it's part of a course->problem branch")
+    branch_location = models.OneToOneField('BranchGroup', models.CASCADE, db_column='branch_location', related_name='problem', db_comment="Will always have a branch location. The problem gets copied to any location it is sent to")
     problem_status = models.TextField()  # This field type is a guess.
     title = models.CharField(max_length=255)
 

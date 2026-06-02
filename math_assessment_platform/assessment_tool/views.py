@@ -1301,7 +1301,7 @@ def rename_aqg_ajax(request, course_id, assessment_id):
 
     try:
         data = json.loads(request.body)
-        aqg_id = data.get('aqg_id')
+        aqg_id = data.get('id')
         raw_name = data.get('name', '').strip()
         
         clean_name = re.sub(r'\s+', ' ', raw_name)
