@@ -12,53 +12,61 @@
         {% define group.cqd.id as linked_id %}
     {% elif group.folder_type == 'aqg' %}
         {% define group.aqg.id as linked_id %}
+    {# 🎯 NEW: Bind the primary key of the OneToOne linked Problem model record #}
+    {% elif group.problem %}
+        {% define group.problem.id as linked_id %}
     {% else %}
         {% define '' as linked_id %}
     {% endif %}
 
-    {# Every row in 'folders' is a BranchGroup, but we style it based on folder_type #}
-    <div class="item"
-        data-id="{{ group.id }}" 
-        data-type="{{ group.folder_type }}" 
-        data-location="{{ group.get_parent_path }}"
-        data-parent-id="{{ parent_id }}"
-        onclick="selectItem(this); loadFolder('{{ group.id }}', {{ level|default:1|add:1 }})" 
-        oncontextmenu="showContextMenu(event, '{{ group.id }}', '{{ group.folder_type }}', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', {{ group.branchgroup_set.exists|yesno:'true,false' }}, '{{ linked_id }}')">
-        
-        {# Dynamic Icons based on the Enum #}
-        {% if group.folder_type == 'course' %}
-            <i class="fas fa-graduation-cap icon-course"></i>
-        {% elif group.folder_type == 'assessment' %}
-            <i class="fas fa-file-signature icon-assessment"></i>
-        {% elif group.folder_type == 'cqd' %}
-            <i class="fas fa-random icon-customquestiondist"></i>
-        {% elif group.folder_type == 'aqg' %}
-            <i class="fas fa-list-ol icon-assessmentquest"></i>
-        {% else %}
-            <i class="fas fa-folder icon-folder"></i>
-        {% endif %}
+    {# Every row in 'folders' is a BranchGroup, but we bifurcate behavior if it has a linked problem relation #}
+    {% if group.problem %}
+        {# 📄 TERMINAL FILE ROW: This represents an explicit item node rather than an openable container directory #}
+        <div class="item item-file" 
+            data-id="{{ group.problem.id }}"
+            data-type="problem"
+            data-location="{{ group.get_parent_path }}"
+            data-parent-id="{{ parent_id }}"
+            onclick="selectItem(this); loadPreview('{{ group.problem.id }}', 'problem', {{ level|add:1 }})" 
+            oncontextmenu="showContextMenu(event, '{{ group.id }}', 'problem', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', false, '{{ linked_id }}')">
+            
+            <i class="fas fa-question-circle icon-problem"></i>
+            <span>{{ group.name }}</span>
+            {# No chevron right arrow is rendered here because it cannot drill open further columns #}
+        </div>
+    {% else %}
+        {# 📁 DIRECTORY CONTAINER ROW: Keep your standard folder/course/assessment/aqg/cqd workflow intact #}
+        <div class="item"
+            data-id="{{ group.id }}" 
+            data-type="{{ group.folder_type }}" 
+            data-location="{{ group.get_parent_path }}"
+            data-parent-id="{{ parent_id }}"
+            onclick="selectItem(this); loadFolder('{{ group.id }}', {{ level|default:1|add:1 }})" 
+            oncontextmenu="showContextMenu(event, '{{ group.id }}', '{{ group.folder_type }}', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', {{ group.branchgroup_set.exists|yesno:'true,false' }}, '{{ linked_id }}')">
+            
+            {# Dynamic Icons based on the Enum #}
+            {% if group.folder_type == 'course' %}
+                <i class="fas fa-graduation-cap icon-course"></i>
+            {% elif group.folder_type == 'assessment' %}
+                <i class="fas fa-file-signature icon-assessment"></i>
+            {% elif group.folder_type == 'cqd' %}
+                <i class="fas fa-random icon-customquestiondist"></i>
+            {% elif group.folder_type == 'aqg' %}
+                <i class="fas fa-list-ol icon-assessmentquest"></i>
+            {% else %}
+                <i class="fas fa-folder icon-folder"></i>
+            {% endif %}
 
-        <span>{{ group.name }}</span>
-        <i class="fas fa-chevron-right arrow"></i>
-    </div>
+            <span>{{ group.name }}</span>
+            <i class="fas fa-chevron-right arrow"></i>
+        </div>
+    {% endif %}
 {% endfor %}
 
-{# Problems remain separate as they are not BranchGroup rows #}
-{# passing empty string for linked_id #}
-{% for problem in contents.problems %}
-<div class="item" 
-    data-id="{{ problem.id }}"
-    data-type="problem"
-    onclick="selectItem(this); loadPreview('{{ problem.id }}', 'problem', {{ level|add:1 }})" 
-    oncontextmenu="showContextMenu(event, '{{ problem.id }}', 'problem', 'Problem #{{ problem.id }}', '{{ problem.owner.username }}', '{{ problem.get_parent_path }}', false, '')">
-    <i class="fas fa-question-circle icon-problem"></i>
-    <span>Problem #{{ problem.id }}</span>
-    <i class="fas fa-chevron-right arrow"></i>
-</div>
-{% endfor %}
+{# 🎯 REMOVED: Old standalone contents.problems loop is completely gone #}
 
 {# Empty state check - simplified #}
-{% if not contents.folders and not contents.problems %}
+{% if not contents.folders %}
 <div style="padding: 20px; color: #8e8e93; font-style: italic;">
     Empty Folder
 </div>

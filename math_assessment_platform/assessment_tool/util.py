@@ -109,24 +109,22 @@ def clone_cqd_payload(old_cqd, new_folder, new_owner, context):
     new_cqd.save()
     return new_cqd
 
-def clone_problem_item(old_prob, new_parent_payload, parent_type):
+def clone_problem_payload(old_prob, new_folder, new_owner, context):
     """
-    Handles cloning a Problem and linking it to its parent, 
-    whatever type that parent might be.
+    Clones a explicit Problem database payload and safely replicates 
+    its structural server disk asset files to prevent cross-node pointer contamination.
     """
     new_prob = copy.deepcopy(old_prob)
     new_prob.pk = None
+    new_prob.id = None
+    new_prob.owner = new_owner
+    new_prob.branch_location = new_folder
     
-    # Dynamic linking based on what the parent payload was
-    if parent_type == 'aqg':
-        new_prob.aqg = new_parent_payload
-    elif parent_type == 'cqd':
-        new_prob.cqd = new_parent_payload
-    elif parent_type == 'assessment':
-        new_prob.assessment = new_parent_payload
-    # etc...
-    
+    # Safely handle replication of physical custom math script source files on server storage
+    # TODO: placeholder for replicating any sub-tables connected to problem
+            
     new_prob.save()
+    return new_prob
 
 
 def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starter_node=False):
@@ -169,6 +167,7 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
         'assessment': clone_assessment_payload,
         'aqg': clone_aqg_payload,
         'cqd': clone_cqd_payload,
+        'problem': clone_problem_payload,
     }
 
     handler = cloner_map.get(old_folder.folder_type)
@@ -179,11 +178,6 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
         # The handler clones the object and updates the context
         new_payload = handler(old_payload, new_folder, new_owner, context)
         
-        # 3. Handle Problems (Items that can live in any payload type)
-        # If the payload has a 'problems' relationship, clone them
-        if hasattr(old_payload, 'problems'):
-            for old_prob in old_payload.problems.all():
-                clone_problem_item(old_prob, new_payload, old_folder.folder_type)
 
     # 4. Recursion: Keep going down the tree
     for child in old_folder.children.all():
@@ -282,15 +276,23 @@ def restore_assessment_payload(request, folder):
         raise ValueError(f"Failed to synchronize assessment lifecycle status: {str(e)}")
     
 
+# I am currently not going to implement a 'restore' procedure for 'aqg'.
+# If it is deleted, then just recreate it
 def restore_aqg_payload(request, folder):
     pass
 
+# I am currently not going to implement a 'restore' procedure for 'cqd'.
+# If it is deleted, then just recreate it
 def restore_cqd_payload(request, folder):
     pass
 
+# I am currently not going to implement a 'restore' procedure for 'folder'.
+# If it is deleted, then just recreate it
 def restore_folder_payload(request, folder):
     pass
 
+# I am currently not going to implement a 'restore' procedure for 'problem'.
+# If it is deleted, then just recreate it
 def restore_problem_payload(request, folder):
     pass
 

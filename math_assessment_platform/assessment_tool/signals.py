@@ -1,7 +1,8 @@
 from django.contrib.auth.signals import user_logged_in
 from django.db.models.signals import pre_save, post_delete, post_save
 from django.dispatch import receiver
-from .models import BranchGroup, UserProfile, Course
+from .models import BranchGroup, UserProfile, Course, Problem
+
 
 @receiver(user_logged_in)
 def on_user_logged_in(sender, request, user, **kwargs):
@@ -95,3 +96,16 @@ def delete_old_image_on_change(sender, instance, **kwargs):
     new_file = instance.image
     if old_file and old_file != new_file:
         old_file.delete(save=False)
+
+
+@receiver(post_delete, sender=Problem)
+def clear_orphaned_problem_branch_node(sender, instance, **kwargs):
+    """
+    Ensures that if a Problem row is purged directly from outside the file manager interface,
+    (such as a direct database query?), its accompanying BranchGroup tracking node is dropped along with it.
+    """
+    if instance.branch_location:
+        try:
+            instance.branch_location.delete()
+        except Exception:
+            pass

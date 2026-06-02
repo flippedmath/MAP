@@ -463,24 +463,24 @@ from django.db.models import Count
 def get_folder_contents(request, group_id):
     group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
 
-    # 1. Define folders_qs with prefetch_related
-    # This grabs the linked objects for ALL folders in this column in one go.
+    # 1. Update query to select/prefetch 'problem' alongside other types
+    # Problems now live inside this single unified query as unique BranchGroup leaves!
     folders_qs = BranchGroup.objects.filter(parent=group)\
         .select_related('parent__parent')\
-        .prefetch_related('course', 'assessment', 'cqd', 'aqg')\
+        .prefetch_related('course', 'assessment', 'cqd', 'aqg', 'problem')\
         .order_by('order')
 
-    problems_qs = Problem.objects.filter(branch_location=group).order_by('title')
+    # 2. This old lookup can be completely removed or set to empty since 
+    # problems are no longer orphans floating inside a directory container row.
+    problems_qs = Problem.objects.none() 
 
-    # 2. Check if items exist
-    has_items = folders_qs.exists() or problems_qs.exists()
+    # 3. Check if items exist (now safely driven by folders_qs)
+    has_items = folders_qs.exists()
 
-    # 3. Package contents
-    # We no longer need to pass separate lists for courses/assessments 
-    # because they are now "attached" to the objects in folders_qs.
+    # 4. Package contents
     contents = {
         'folders': folders_qs,
-        'problems': problems_qs,
+        'problems': problems_qs, # Kept as empty queryset for backwards compatibility with column.html until Part 2
         'has_items': has_items,
     }
 
@@ -598,12 +598,11 @@ def delete_item(request):
         if item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection', 'problem']:
             if item_type in ['folder', 'course', 'assessment']:
                 # Allow IT Support to fetch any folder container, otherwise restrict to the owner
-                #   IT_Support users should have access to delete anything from anyone's Trash as if they owned it
                 if request.user.user_type == 'IT_Support':
                     obj = get_object_or_404(BranchGroup, id=item_id)
                 else:
                     obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
-                item_full_path = obj.get_parent_path() + obj.name + "/"
+                # 🎯 REMOVED: Redundant inner item_full_path string assignment taken care of below
 
             elif item_type == 'assessment_selection':
                 aqg_item = get_object_or_404(AssessmentQuestionGroup.objects.select_related('branch_location', 'assessment__course'), id=item_id)
@@ -616,25 +615,26 @@ def delete_item(request):
                     obj = aqg_item.branch_location
                 else:
                     return JsonResponse({'error': f'User not authenticated to delete: {item_type}'}, status=400)
+                    
             elif item_type == 'question_selection':
                 if request.user.user_type == 'IT_Support':
                     cqd_item = get_object_or_404(CustomQuestionDistribution, id=item_id)
                 else:
                     cqd_item = get_object_or_404(CustomQuestionDistribution, id=item_id, assigned_folder__owner=request.user)
                 obj = cqd_item.assigned_folder
+                
             elif item_type == 'problem':
                 problem_item = get_object_or_404(Problem, id=item_id, owner=request.user)
                 
                 # TODO: Placeholder here for removing any sub-problem data in other tables 
                 #       before I lose the reference to them
-                    
-                # Point 'obj' to the folder so it calculates the tracking path and deletes the directory
+                
                 obj = problem_item.branch_location
 
             if not obj:
                 return JsonResponse({'error': 'Target branch directory location tracking error.'}, status=400)
 
-            # ✅ Perfectly scoped for ALL types inside the main validation wrapper block
+            # ✅ Scoped perfectly for ALL item types inside the wrapper validation block
             item_full_path = obj.get_parent_path() + obj.name + "/"
 
         else:
@@ -642,14 +642,13 @@ def delete_item(request):
             
     except Exception as e:
         import traceback
-        print(f"The course id being queried is = {item_id}")
-        print(traceback.format_exc()) # This prints the full stack trace to your terminal console
+        print(f"The item id being queried is = {item_id}")
+        print(traceback.format_exc()) 
         return JsonResponse({
             'error': f"Python Exception: {str(e)}",
             'item_id_received': item_id,
             'item_type_received': item_type
         }, status=400)
-        return JsonResponse({'error': 'Item not found or permission denied.'}, status=404)
 
     # 2. System Protection Check
     username = request.user.username
@@ -667,11 +666,12 @@ def delete_item(request):
 
     # 3. Empty Check for Folders
     if item_type == 'folder':
+        # 🎯 FIXED: Removed Problem table check line. Standard directories contain 
+        # the problem's companion BranchGroup node as a child, caught via parent=obj.
         has_content = (
             BranchGroup.objects.filter(parent=obj).exists() or
             Course.objects.filter(branch_location=obj).exists() or
             Assessment.objects.filter(branch_location=obj).exists() or
-            Problem.objects.filter(branch_location=obj).exists() or
             AssessmentQuestionGroup.objects.filter(branch_location=obj).exists() or
             CustomQuestionDistribution.objects.filter(assigned_folder=obj).exists()
         )
@@ -684,7 +684,8 @@ def delete_item(request):
             # Deleting the BranchGroup here runs a clean cascade down to clear the item tables automatically
             obj.delete()
         else:
-            return JsonResponse({f'error': 'What kind of object am I tryig to delete?: {item_type}.'}, status=403)
+            return JsonResponse({'error': f'Unsupported purge routing requested for type: {item_type}.'}, status=403)
+            
     return JsonResponse({'status': 'success'})
 
 
