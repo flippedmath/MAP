@@ -12,6 +12,13 @@ def on_user_logged_in(sender, request, user, **kwargs):
 
 @receiver(pre_save, sender=BranchGroup)
 def sync_name_to_order(sender, instance, **kwargs):
+
+    # 🛑 FIX: If this folder belongs to an Assessment Question Group, 
+    # BAIL OUT IMMEDIATELY. Do not overwrite its midpoint order code or touch its path!
+    # Only implement this logic with 'course' folder_type
+    if instance.folder_type == 'aqg':
+        return
+
     # 1. Logic for protection
     username = instance.owner.username
     root_path = f"/Users/{username}_root/"

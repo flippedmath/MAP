@@ -31,6 +31,8 @@ from django.views.decorators.csrf import csrf_exempt
 
 # import iso8601  # or use standard datetime.fromisoformat
 from django.utils import timezone
+import re
+from django.template.loader import render_to_string
 
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
@@ -204,6 +206,9 @@ def database_viewer(request):
         'branch_group': BranchGroup,
         'users_in_course': UsersInCourse,
         'assessment': Assessment,
+        'aqg': AssessmentQuestionGroup,
+        'cqd': CustomQuestionDistribution,
+        'problem': Problem,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
@@ -579,8 +584,6 @@ def create_folder(request):
 
     return JsonResponse({'status': 'success', 'id': new_folder.id})
 
-from django.http import JsonResponse
-import json
 
 def delete_item(request):
     if request.method != 'POST':
@@ -592,29 +595,47 @@ def delete_item(request):
 
     # 1. Resolve Object & Path with strict Ownership Verification
     try:
-        if item_type in ['folder', 'course', 'assessment']:
-            # Allow IT Support to fetch any folder container, otherwise restrict to the owner
-            #   IT_Support users should have access to delete anything from anyone's Trash as if they owned it
-            if request.user.user_type == 'IT_Support':
-                obj = get_object_or_404(BranchGroup, id=item_id)
-            else:
-                obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
+        if item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection', 'problem']:
+            if item_type in ['folder', 'course', 'assessment']:
+                # Allow IT Support to fetch any folder container, otherwise restrict to the owner
+                #   IT_Support users should have access to delete anything from anyone's Trash as if they owned it
+                if request.user.user_type == 'IT_Support':
+                    obj = get_object_or_404(BranchGroup, id=item_id)
+                else:
+                    obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
+                item_full_path = obj.get_parent_path() + obj.name + "/"
+
+            elif item_type == 'assessment_selection':
+                aqg_item = get_object_or_404(AssessmentQuestionGroup.objects.select_related('branch_location', 'assessment__course'), id=item_id)
+                is_course_teacher = UsersInCourse.objects.filter(
+                    course=aqg_item.assessment.course,
+                    user=request.user,
+                    user__user_type='Teacher'
+                ).exists()
+                if is_course_teacher or request.user.user_type == 'IT_Support':
+                    obj = aqg_item.branch_location
+                else:
+                    return JsonResponse({'error': f'User not authenticated to delete: {item_type}'}, status=400)
+            elif item_type == 'question_selection':
+                if request.user.user_type == 'IT_Support':
+                    cqd_item = get_object_or_404(CustomQuestionDistribution, id=item_id)
+                else:
+                    cqd_item = get_object_or_404(CustomQuestionDistribution, id=item_id, assigned_folder__owner=request.user)
+                obj = cqd_item.assigned_folder
+            elif item_type == 'problem':
+                problem_item = get_object_or_404(Problem, id=item_id, owner=request.user)
+                
+                # TODO: Placeholder here for removing any sub-problem data in other tables 
+                #       before I lose the reference to them
+                    
+                # Point 'obj' to the folder so it calculates the tracking path and deletes the directory
+                obj = problem_item.branch_location
+
+            if not obj:
+                return JsonResponse({'error': 'Target branch directory location tracking error.'}, status=400)
+
+            # ✅ Perfectly scoped for ALL types inside the main validation wrapper block
             item_full_path = obj.get_parent_path() + obj.name + "/"
-
-        elif item_type == 'problem':
-            obj = get_object_or_404(Problem, id=item_id, owner=request.user)
-            loc = obj.branch_location
-            item_full_path = loc.get_parent_path() + loc.name + "/"
-
-        # TODO: I think I will need to add this to the ['folder', 'course', 'assessment'] list above
-        #       This will enable me to delete the folder rather than the item, which makes it easier to
-        #       encapsulate logic if I am always only deleting the folders rather than the item behind
-        #       the scenes.
-        elif item_type == 'assessment_selection':
-            # Note: Checking owner via the linked branch_location
-            obj = get_object_or_404(AssessmentQuestionGroup, id=item_id, branch_location__owner=request.user)
-            loc = obj.branch_location
-            item_full_path = loc.get_parent_path() + loc.name + "/"
 
         else:
             return JsonResponse({'error': f'Unsupported item type: {item_type}'}, status=400)
@@ -658,7 +679,12 @@ def delete_item(request):
             return JsonResponse({'error': 'Folder is not empty.'}, status=400)
 
     # 4. Execute
-    obj.delete()
+    with transaction.atomic():
+        if item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection', 'problem']:
+            # Deleting the BranchGroup here runs a clean cascade down to clear the item tables automatically
+            obj.delete()
+        else:
+            return JsonResponse({f'error': 'What kind of object am I tryig to delete?: {item_type}.'}, status=403)
     return JsonResponse({'status': 'success'})
 
 
@@ -1173,3 +1199,172 @@ def reorder_assessment_ajax(request, course_id):
         
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=400)
+
+
+@login_required
+def assessment_setup_view(request, course_id, assessment_id):
+    # 🎯 SCOPED PERMISSION CHECK: Verify username matching across the usersincourse set
+    is_teacher = Course.objects.filter(
+        id=course_id,
+        usersincourse__user=request.user,
+        usersincourse__user__user_type='Teacher'
+    ).exists()
+    
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        messages.error(request, "You do not have access to manage this assessment configuration.")
+        return redirect('course_dashboard', course_id=course_id)
+
+    course = get_object_or_404(Course, id=course_id)
+    assessment = get_object_or_404(Assessment.objects.select_related('branch_location'), id=assessment_id, course=course)
+    
+    # Retrieve current question groups in lexicographical order
+    aqg_groups = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order')
+
+    context = {
+        'course': course,
+        'assessment': assessment,
+        'aqg_groups': aqg_groups,
+        'user_type': user_type if user_type == 'IT_Support' else 'Teacher'
+    }
+    return render(request, 'assessment_tool/assessment_setup.html', context)
+
+
+@login_required
+@require_POST
+def create_aqg_ajax(request, course_id, assessment_id):
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+    
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        raw_name = data.get('name', '').strip()
+        
+        clean_name = re.sub(r'\s+', ' ', raw_name)
+        if not clean_name:
+            return JsonResponse({'success': False, 'error': 'Section name cannot be empty.'}, status=400)
+
+        assessment = get_object_or_404(Assessment.objects.select_related('branch_location'), id=assessment_id, course_id=course_id)
+        
+        last_aqg = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order').last()
+        prev_order = last_aqg.order if last_aqg else ""
+        new_order = calculate_midpoint_order(prev_order, "")
+
+        with transaction.atomic():
+            folder = BranchGroup.objects.create(
+                name=clean_name,
+                owner=request.user,
+                parent=assessment.branch_location,
+                folder_type='aqg',
+                order=new_order
+            )
+
+            aqg = AssessmentQuestionGroup.objects.create(
+                assessment=assessment,
+                name=clean_name,
+                order=new_order,
+                branch_location=folder
+            )
+
+            html_snippet = render_to_string('assessment_tool/components/aqg_card.html', {'group': aqg})
+
+        return JsonResponse({
+            'success': True,
+            'html': html_snippet,
+            'id': aqg.id,
+            'name': aqg.name,
+            'order': aqg.order
+        })
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)
+
+
+@login_required
+@require_POST
+def rename_aqg_ajax(request, course_id, assessment_id):
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+    
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        aqg_id = data.get('aqg_id')
+        raw_name = data.get('name', '').strip()
+        
+        clean_name = re.sub(r'\s+', ' ', raw_name)
+        if not clean_name:
+            return JsonResponse({'success': False, 'error': 'Section name cannot be empty.'}, status=400)
+
+        aqg = get_object_or_404(AssessmentQuestionGroup.objects.select_related('branch_location'), id=aqg_id, assessment_id=assessment_id)
+
+        with transaction.atomic():
+            aqg.name = clean_name
+            aqg.save()
+
+            if aqg.branch_location:
+                aqg.branch_location.name = clean_name
+                aqg.branch_location.save()
+
+        return JsonResponse({'success': True, 'name': clean_name})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)
+
+
+@login_required
+@require_POST
+def reorder_aqg_ajax(request, course_id, assessment_id):
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+    
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        aqg_id = data.get('aqg_id')
+        prev_id = data.get('prev_id')
+        next_id = data.get('next_id')
+
+        aqg = get_object_or_404(AssessmentQuestionGroup.objects.select_related('branch_location'), id=aqg_id, assessment_id=assessment_id)
+
+        prev_order = ""
+        next_order = ""
+
+        if prev_id:
+            prev_order = AssessmentQuestionGroup.objects.get(id=prev_id).order or ""
+        if next_id:
+            next_order = AssessmentQuestionGroup.objects.get(id=next_id).order or ""
+
+        new_order = calculate_midpoint_order(prev_order, next_order)
+
+        with transaction.atomic():
+            aqg.order = new_order
+            aqg.save()
+
+            if aqg.branch_location:
+                aqg.branch_location.order = new_order
+                aqg.branch_location.save()
+
+        return JsonResponse({'success': True, 'new_order': new_order})
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)
+
+
+

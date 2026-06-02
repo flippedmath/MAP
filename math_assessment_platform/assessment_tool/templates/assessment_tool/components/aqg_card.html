@@ -1,0 +1,16 @@
+<div class="aqg-section-card" data-id="{{ group.id }}" data-order="{{ group.order }}">
+    <div class="aqg-card-header">
+        <div class="header-left-side">
+            <div class="aqg-drag-handle"><i class="fas fa-grip-lines"></i></div>
+            <input type="text" class="aqg-title-input" value="{{ group.name }}" data-previous="{{ group.name }}" placeholder="Enter section name...">
+            <span class="save-status-indicator" style="display: none;"><i class="fas fa-check"></i> Saved</span>
+        </div>
+        <div class="header-right-side" style="display: flex; gap: 8px;">
+            <button class="btn-add-problem" style="cursor: pointer; border: 1px solid #cbd5e1; background: #ffffff; padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; color: #475569;">+ Add Problem</button>
+            <button class="btn-delete-aqg" style="cursor: pointer; background: none; border: none; color: #94a3b8;"><i class="fas fa-trash"></i></button>
+        </div>
+    </div>
+    <div class="aqg-problems-body" style="padding: 16px; background: #fafafa; min-height: 50px; color: #94a3b8; font-size: 0.9rem; text-align: center;">
+        No problems added to this section yet. Click "+ Add Problem" to start building.
+    </div>
+</div>

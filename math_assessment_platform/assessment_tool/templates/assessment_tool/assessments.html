@@ -43,7 +43,9 @@
                         </span>
                     </div>
                 </th>
+                {% if user_type == 'Teacher' or user_type == 'IT_Support' %}
                 <th>Questions</th>
+                {% endif %}
                 <th>Auto-Open Window (Start - End)</th>
                 <th class="text-right">Actions</th>
             </tr>
@@ -73,11 +75,13 @@
                     </select>
                 </td>
                 
+                {% if user_type == 'Teacher' or user_type == 'IT_Support' %}
                 <td>
-                    <a href="#" class="assessment-link-title font-semibold" style="font-size:0.85rem;">
-                        ⚙️ Edit Questions ({{ assessment.problem_count|default:"0" }})
+                    <a href="{% url 'assessment_setup' course.id assessment.id %}" class="btn-manage-questions" style="color: #af52de; font-weight: 600; text-decoration: none;">
+                        <i class="fas fa-layer-group"></i> Setup Questions
                     </a>
                 </td>
+                {% endif %}
                 
                 {% load tz %}
                 {% now "Y-m-d\TH:i" as current_time_str %}
