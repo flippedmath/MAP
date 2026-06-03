@@ -822,6 +822,16 @@ def rename_item(request):
                 elif hasattr(obj, 'assessment'):
                     obj.assessment.name = new_name
                     obj.assessment.save()
+            # 🎯 NEW: SYNCHRONIZED WRITE FOR PROBLEMS
+            elif item_type == 'problem':
+                # 'obj' is the Problem instance. Update its title field:
+                setattr(obj, field_name, new_name)  # sets obj.title = new_name
+                obj.save()
+
+                # Safely reach out and sync the companion structural BranchGroup file node name
+                if obj.branch_location:
+                    obj.branch_location.name = new_name
+                    obj.branch_location.save()
             else:
                 # Fallback for independent metadata types (problems, selections)
                 setattr(obj, field_name, new_name)
@@ -1368,4 +1378,89 @@ def reorder_aqg_ajax(request, course_id, assessment_id):
         return JsonResponse({'success': False, 'error': str(e)}, status=400)
 
 
+@require_POST
+@login_required
+def add_problem_to_aqg_ajax(request, course_id, assessment_id):
+    """
+    Creates a new sequential Problem child item inside an Assessment Question Group.
+    Provisions a companion identity BranchGroup node nested securely within the target location frame.
+    """
+    # 1. Authority Guard: Enforce strict role-access permissions
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+    
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'error': 'Unauthorized deployment verification state access failed.'}, status=403)
 
+    try:
+        data = json.loads(request.body)
+        aqg_id = data.get('aqg_id')
+        
+        # 2. Fetch the target parent AssessmentQuestionGroup layer container location framework
+        aqg = get_object_or_404(
+            AssessmentQuestionGroup.objects.select_related('branch_location'), 
+            id=aqg_id, 
+            assessment_id=assessment_id
+        )
+        parent_directory = aqg.branch_location
+
+        if not parent_directory:
+            return JsonResponse({'error': 'Target base group context mapping location identity mismatch error.'}, status=400)
+
+        # 3. Handle sequential layout naming definitions
+        # Trace current child problem structural nodes to determine starting title index string
+        existing_problem_nodes = BranchGroup.objects.filter(parent=parent_directory, folder_type='problem')
+        problem_count = existing_problem_nodes.count() + 1
+        requested_item_name = f"Problem {problem_count}"
+
+        # Resolve unique naming contexts cleanly using your existing utility script
+        final_item_name, name_err = get_valid_unique_name(
+            model_class=BranchGroup,
+            parent_obj=parent_directory,
+            requested_name=requested_item_name
+            # Keeps item_type='folder' implicitly to verify parent sibling contexts cleanly!
+        )
+        if name_err:
+            return JsonResponse({'error': name_err}, status=400)
+
+        # Determine structural lexicographical midpoint sorting strings
+        last_problem_node = existing_problem_nodes.order_by('order').last()
+        prev_order_val = last_problem_node.order if last_problem_node else ""
+        
+        new_order = calculate_midpoint_order(prev_order_val, "")
+
+        # 4. Synchronized Database Atomic Transaction Block
+        with transaction.atomic():
+            # A. Provision the silent structural BranchGroup identity tracker node
+            problem_branch_node = BranchGroup.objects.create(
+                owner=request.user,
+                name=final_item_name,
+                parent=parent_directory,
+                folder_type='problem',
+                order=new_order
+            )
+
+            # B. Allocate the companion concrete math problem payload row layer
+            new_problem_item = Problem.objects.create(
+                branch_location=problem_branch_node,  # Coordinates link
+                title=final_item_name,                # Suffix incremented calculated name
+                aqg=aqg,                              # Assessment structural layout frame hook
+                problem_status='draft'                # Status = 'draft' or 'complete
+            )
+
+        return JsonResponse({
+            'status': 'success',
+            'branch_id': problem_branch_node.id,
+            'problem_id': new_problem_item.id,
+            'allocated_name': final_item_name
+        }, status=201)
+
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return JsonResponse({'error': f"Operation failed: {str(e)}"}, status=400)
+    

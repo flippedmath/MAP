@@ -50,6 +50,19 @@
         visibility: visible !important; 
         opacity: 1 !important; 
     }
+
+    .problem-title-input:hover {
+        background: #f8fafc !important;
+        border-color: #cbd5e1 !important;
+        cursor: pointer;
+    }
+
+    .problem-title-input:focus {
+        background: #ffffff !important;
+        border-color: #3b82f6 !important;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        cursor: text;
+    }
 </style>
 {% endblock %}
 
@@ -105,7 +118,8 @@
     window.AQG_CONFIG = {
         createUrl: "{% url 'create_aqg_ajax' course.id assessment.id %}",
         renameUrl: "{% url 'rename_aqg_ajax' course.id assessment.id %}",
-        reorderUrl: "{% url 'reorder_aqg_ajax' course.id assessment.id %}"
+        reorderUrl: "{% url 'reorder_aqg_ajax' course.id assessment.id %}",
+        addProblemUrl: "{% url 'add_problem_to_aqg_ajax' course.id assessment.id %}"
     };
 </script>
 <script src="{% static 'assessment_tool/js/assessment_setup.js' %}"></script>

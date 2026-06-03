@@ -35,4 +35,5 @@ urlpatterns = [
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/create-aqg/', views.create_aqg_ajax, name='create_aqg_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/rename-aqg/', views.rename_aqg_ajax, name='rename_aqg_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/reorder-aqg/', views.reorder_aqg_ajax, name='reorder_aqg_ajax'),
+    path('course/<int:course_id>/assessment/<int:assessment_id>/setup/add-problem/', views.add_problem_to_aqg_ajax, name='add_problem_to_aqg_ajax'),
 ]

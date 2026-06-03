@@ -17,7 +17,7 @@ def sync_name_to_order(sender, instance, **kwargs):
     # 🛑 FIX: If this folder belongs to an Assessment Question Group, 
     # BAIL OUT IMMEDIATELY. Do not overwrite its midpoint order code or touch its path!
     # Only implement this logic with 'course' folder_type
-    if instance.folder_type == 'aqg':
+    if instance.folder_type in ['aqg', 'problem']:
         return
 
     # 1. Logic for protection
