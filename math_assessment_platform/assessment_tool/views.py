@@ -602,7 +602,6 @@ def delete_item(request):
                     obj = get_object_or_404(BranchGroup, id=item_id)
                 else:
                     obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
-                # 🎯 REMOVED: Redundant inner item_full_path string assignment taken care of below
 
             elif item_type == 'assessment_selection':
                 aqg_item = get_object_or_404(AssessmentQuestionGroup.objects.select_related('branch_location', 'assessment__course'), id=item_id)
@@ -623,8 +622,14 @@ def delete_item(request):
                     cqd_item = get_object_or_404(CustomQuestionDistribution, id=item_id, assigned_folder__owner=request.user)
                 obj = cqd_item.assigned_folder
                 
+            # 🎯 FIXED: PROBLEM OWNERSHIP VALIDATION LOOP
             elif item_type == 'problem':
-                problem_item = get_object_or_404(Problem, id=item_id, owner=request.user)
+                # First fetch the problem safely via select_related to cache the structural node
+                problem_item = get_object_or_404(Problem.objects.select_related('branch_location'), id=item_id)
+                
+                # Verify permission against the underlying virtual file node's owner
+                if request.user.user_type != 'IT_Support' and problem_item.branch_location.owner != request.user:
+                    return JsonResponse({'error': 'Permission Denied: You do not own this resource.'}, status=403)
                 
                 # TODO: Placeholder here for removing any sub-problem data in other tables 
                 #       before I lose the reference to them
@@ -666,8 +671,6 @@ def delete_item(request):
 
     # 3. Empty Check for Folders
     if item_type == 'folder':
-        # 🎯 FIXED: Removed Problem table check line. Standard directories contain 
-        # the problem's companion BranchGroup node as a child, caught via parent=obj.
         has_content = (
             BranchGroup.objects.filter(parent=obj).exists() or
             Course.objects.filter(branch_location=obj).exists() or
@@ -1452,11 +1455,20 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
                 problem_status='draft'                # Status = 'draft' or 'complete
             )
 
+        # 5. 🎯 NEW: Render the problem_card component into a raw HTML string snippet
+        # This matches the exact variable scope context ('prob') expected by problem_card.html
+        problem_html = render_to_string(
+            'assessment_tool/components/problem_card.html', 
+            {'prob': new_problem_item}, 
+            request=request
+        )
+
         return JsonResponse({
             'status': 'success',
             'branch_id': problem_branch_node.id,
             'problem_id': new_problem_item.id,
-            'allocated_name': final_item_name
+            'allocated_name': final_item_name,
+            'html': problem_html  # 🎯 Send the complete pre-rendered component string to the UI
         }, status=201)
 
     except Exception as e:
