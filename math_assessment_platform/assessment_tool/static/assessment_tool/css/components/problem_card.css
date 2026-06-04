@@ -1,0 +1,18 @@
+/* math_assessment_platform/static/assessment_tool/css/components/problem_card.css */
+
+.problem-title-input:hover {
+    background: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+    cursor: pointer;
+}
+
+.problem-title-input:focus {
+    background: #ffffff !important;
+    border-color: #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    cursor: text;
+}
+
+.btn-delete-problem:hover {
+    color: #ef4444 !important; /* Elegant Tailwind-matching red color */
+}
