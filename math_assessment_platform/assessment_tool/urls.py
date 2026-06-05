@@ -38,4 +38,6 @@ urlpatterns = [
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/reorder-aqg/', views.reorder_aqg_ajax, name='reorder_aqg_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/add-problem/', views.add_problem_to_aqg_ajax, name='add_problem_to_aqg_ajax'),
     path('add-cqd-ajax/', views.add_cqd_to_aqg_ajax, name='add_cqd_ajax'),
+    path('update-cqd-count-ajax/', views.update_cqd_count_ajax, name='update_cqd_count_ajax'),
+    path('course/api/setup/reorder-nested-item/', views.reorder_nested_item_ajax, name='reorder_nested_item_ajax'),
 ]

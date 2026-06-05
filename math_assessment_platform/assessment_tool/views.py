@@ -1540,3 +1540,85 @@ def add_cqd_to_aqg_ajax(request):
         
     except Exception as e:
         return JsonResponse({'error': f"Internal Server Exception Process Fault: {str(e)}"}, status=500)
+
+
+@login_required
+def update_cqd_count_ajax(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+        
+    try:
+        data = json.loads(request.body)
+        cqd_id = data.get('cqd_id')
+        suggested_count = data.get('suggested_count')
+
+        # Clean validation conversion safeguard
+        try:
+            new_count = int(suggested_count)
+            if new_count <= 0:
+                new_count = 1
+        except (TypeError, ValueError):
+            new_count = 1
+
+        # Locate the record and confirm ownership against the virtual folder owner field
+        if request.user.user_type == 'IT_Support':
+            cqd_item = get_object_or_404(CustomQuestionDistribution, id=cqd_id)
+        else:
+            cqd_item = get_object_or_404(CustomQuestionDistribution, id=cqd_id, assigned_folder__owner=request.user)
+
+        # Update and save the model state
+        cqd_item.suggested_count = new_count
+        cqd_item.save(update_fields=['suggested_count'])
+
+        return JsonResponse({
+            'status': 'success',
+            'new_count': cqd_item.suggested_count
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f"Database Write Operation Failure: {str(e)}"}, status=500)
+    
+
+@login_required
+@require_POST
+def reorder_nested_item_ajax(request):
+    # Determine permission scopes across Teacher/IT parameters
+    # Note: If your system uses a course context here, you can extract context validation checks 
+    # but checking for BranchGroup ownership offers an intuitive fallback layout baseline safety layer.
+    
+    try:
+        data = json.loads(request.body)
+        branch_id = data.get('branch_id')
+        prev_branch_id = data.get('prev_branch_id')
+        next_branch_id = data.get('next_branch_id')
+
+        if not branch_id:
+            return JsonResponse({'success': False, 'error': 'Missing targets.'}, status=400)
+
+        # 1. Fetch target node with ownership validation rules
+        if request.user.user_type == 'IT_Support' or request.user.is_staff:
+            target_node = get_object_or_404(BranchGroup, id=branch_id)
+        else:
+            target_node = get_object_or_404(BranchGroup, id=branch_id, owner=request.user)
+
+        prev_order = ""
+        next_order = ""
+
+        # 2. Extract companion midpoint string sequences out of adjacent sibling nodes
+        if prev_branch_id:
+            prev_order = BranchGroup.objects.get(id=prev_branch_id).order or ""
+        if next_branch_id:
+            next_order = BranchGroup.objects.get(id=next_branch_id).order or ""
+
+        # 3. Calculate position using your established midpoint algorithm function loop string builder
+        new_order = calculate_midpoint_order(prev_order, next_order)
+
+        # 4. Atomic write transaction execution state loop
+        with transaction.atomic():
+            target_node.order = new_order
+            target_node.save(update_fields=['order', 'modification_date'])
+
+        return JsonResponse({'success': True, 'new_order': new_order})
+        
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': f"Sorting Matrix Runtime Failure: {str(e)}"}, status=400)

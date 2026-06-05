@@ -9,8 +9,8 @@
     </div>
     
     <div style="display: flex; align-items: center; gap: 12px;">
-        <div class="cqd-count-indicator" style="font-size: 0.75rem; background: #eff6ff; border: 1px solid #bfdbfe; padding: 2px 8px; border-radius: 20px; color: #1e40af; font-weight: 600;">
-            Randomly chooses {{ cqd.suggested_count }} from problem group
+        <div class="cqd-count-indicator cqd-clickable-count" data-cqd-id="{{ cqd.id }}" style="font-size: 0.75rem; background: #eff6ff; border: 1px solid #bfdbfe; padding: 2px 8px; border-radius: 20px; color: #1e40af; font-weight: 600; cursor: pointer; transition: background 0.15s ease;" onmouseover="this.style.background='#dbeafe'" onmouseout="this.style.background='#eff6ff'">
+            Randomly chooses <span class="count-number-display">{{ cqd.suggested_count }}</span> from problem group
         </div>
         
         <button class="btn-delete-item" data-type="question_selection" title="Delete Problem Group" style="cursor: pointer; background: none; border: none; color: #94a3b8; transition: color 0.15s ease; padding: 2px 6px;">

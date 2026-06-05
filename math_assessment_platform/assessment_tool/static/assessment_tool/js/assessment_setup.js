@@ -329,6 +329,54 @@ document.addEventListener("DOMContentLoaded", function() {
                 }
             }
         });
+
+        // -------------------------------------------------------------
+        // SortableJS: Nested Problem & CQD Drag-and-Drop Handling Logic
+        // -------------------------------------------------------------
+        const problemLists = document.querySelectorAll('.problems-list-wrapper');
+        problemLists.forEach(listContainer => {
+            Sortable.create(listContainer, {
+                animation: 150,
+                ghostClass: 'sortable-ghost',
+                // You can add a handle attribute here if you choose to include drag handles later, 
+                // otherwise dragging anywhere on the problem/cqd card row handles it.
+                onEnd: async function(evt) {
+                    const movedCard = evt.item;
+                    // Grab the underlying tracking branch node identifier
+                    const branchId = movedCard.getAttribute('data-branch-id');
+                    
+                    const prevCard = movedCard.previousElementSibling;
+                    const nextCard = movedCard.nextElementSibling;
+                    
+                    const prevBranchId = prevCard ? prevCard.getAttribute('data-branch-id') : null;
+                    const nextBranchId = nextCard ? nextCard.getAttribute('data-branch-id') : null;
+
+                    try {
+                        const response = await fetch('/course/api/setup/reorder-nested-item/', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': getCookie('csrftoken')
+                            },
+                            body: JSON.stringify({
+                                branch_id: branchId,
+                                prev_branch_id: prevBranchId,
+                                next_branch_id: nextBranchId
+                            })
+                        });
+
+                        const data = await response.json();
+                        if (!response.ok || !data.success) {
+                            alert(data.error || "Failed to persist nested structural positioning modification layouts.");
+                            // Optional: Reload or revert DOM if synchronization fails
+                        }
+                    } catch (err) {
+                        console.error("Nested sorting channel transaction linkage error:", err);
+                        alert("A transmission linkage failure occurred while resetting problem item sequences.");
+                    }
+                }
+            });
+        });
     }
 
     // -------------------------------------------------------------
@@ -551,6 +599,56 @@ document.addEventListener("DOMContentLoaded", function() {
                     }
                 }
                 return;
+            }
+
+            // -------------------------------------------------------------
+            // CQD Count Indicator: Click to Modify Suggested Count
+            // -------------------------------------------------------------            
+            const countBadge = e.target.closest('.cqd-clickable-count');
+            if (!countBadge) return;
+
+            e.preventDefault();
+            
+            const cqdId = countBadge.getAttribute('data-cqd-id');
+            const displaySpan = countBadge.querySelector('.count-number-display');
+            const currentCount = displaySpan.innerText.trim();
+
+            // 1. Prompt the user for input
+            let userInput = prompt("Enter the number of problems to randomly choose from this group:", currentCount);
+            
+            // If the user hits cancel, exit early
+            if (userInput === null) return;
+
+            // 2. Enforce rules: Parse and validate positive integers
+            let parsedCount = parseInt(userInput, 10);
+            if (isNaN(parsedCount) || parsedCount <= 0 || String(parsedCount) !== userInput.trim()) {
+                parsedCount = 1; // Default fallback for invalid entries
+            }
+
+            try {
+                const response = await fetch('/update-cqd-count-ajax/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({
+                        cqd_id: cqdId,
+                        suggested_count: parsedCount
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // 3. Fluidly update the frontend visual text container row
+                    displaySpan.innerText = data.new_count;
+                } else {
+                    alert(`Failed to save configuration: ${data.error}`);
+                }
+            } catch (err) {
+                console.error(err);
+                alert("A transmission exception blocked saving the updated question selection parameters.");
             }
         });
     }
