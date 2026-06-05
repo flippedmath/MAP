@@ -45,3 +45,37 @@
     visibility: visible !important; 
     opacity: 1 !important; 
 }
+
+/* Interactive hover styles for selection items */
+.menu-option-item:hover:not([disabled]) {
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+/* Let caret adjust smoothly if needed */
+.btn-trigger-problems-menu:hover {
+    background: #f8fafc !important;
+    border-color: #94a3b8 !important;
+}
+
+.problems-menu-overlay {
+    display: none; 
+    position: absolute; 
+    
+    /* 🎯 THE FIX: Align perfectly with the button bottom edge */
+    top: 100%; 
+    right: 0; 
+    
+    /* 🎯 THE FIX: Create an invisible hover safety bridge */
+    padding-top: 6px !important;
+    margin-top: 0px !important; 
+    
+    background: #ffffff; 
+    border: 1px solid #cbd5e1; 
+    border-radius: 6px; 
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08); 
+    min-width: 210px; 
+    z-index: 50; 
+    flex-direction: column; 
+    gap: 2px;
+}

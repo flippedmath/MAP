@@ -477,10 +477,32 @@ class CustomQuestionDistribution(models.Model):
     suggested_count = models.IntegerField()
 
     def get_unique_name(self):
-        # Check if 'num_pairs' was already calculated by the view
-        # if not (e.g., in the admin panel), fall back to a standard count
-        num = getattr(self, 'num_pairs', self.cqdpair.count())
+        # 🎯 FIX: Explicitly check for the view-attached attribute first.
+        # This completely skips evaluating the fallback expression if num_pairs exists.
+        if hasattr(self, 'num_pairs'):
+            num = self.num_pairs
+        else:
+            try:
+                # Fall back to your database relation (using standard reverse naming layout)
+                num = self.cqdpair.count()
+            except (AttributeError, ValueError):
+                # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
+                num = 0
+                
         return f"ID ({self.id}) - Count = {num}"
+    
+    def get_display_name(self):
+        if hasattr(self, 'num_pairs'):
+            num = self.num_pairs
+        else:
+            try:
+                # Fall back to your database relation (using standard reverse naming layout)
+                num = self.cqdpair.count()
+            except (AttributeError, ValueError):
+                # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
+                num = 0
+        return f"Problem Set Count = {num}"
+                
 
     class Meta:
         managed = False

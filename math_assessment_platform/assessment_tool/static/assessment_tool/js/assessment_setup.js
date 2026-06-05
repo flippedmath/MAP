@@ -463,6 +463,134 @@ document.addEventListener("DOMContentLoaded", function() {
                 }
                 return;
             }
+
+            // --- HANDLER BRANCH C: "ADD NEW PROBLEM GROUP" INTERACTION ---
+            const addCqdBtn = e.target.closest('.btn-add-cqd');
+            if (addCqdBtn) {
+                const card = addCqdBtn.closest('.aqg-section-card');
+                const aqgId = card.getAttribute('data-id');
+                const problemsBody = card.querySelector('.aqg-problems-body');
+                const dropdownMenu = addCqdBtn.closest('.problems-menu-overlay');
+
+                // Dismiss selection menu layer instantly
+                if (dropdownMenu) dropdownMenu.style.display = 'none';
+
+                try {
+                    // Update this endpoint string to reference your newly established tracking route configuration setup
+                    const response = await fetch('/add-cqd-ajax/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken')
+                        },
+                        body: JSON.stringify({ aqg_id: aqgId })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        let listWrapper = problemsBody.querySelector('.problems-list-wrapper');
+                        const emptyPlaceholder = problemsBody.querySelector('.empty-problems-placeholder');
+                        
+                        // Clear placeholders or empty dashboard structural cards out of the canvas viewport block layout
+                        if (emptyPlaceholder) emptyPlaceholder.remove();
+                        if (problemsBody.innerText.includes("No problems added to this section yet")) {
+                            problemsBody.innerHTML = '';
+                        }
+                        
+                        if (!listWrapper) {
+                            listWrapper = document.createElement('div');
+                            listWrapper.className = 'problems-list-wrapper';
+                            listWrapper.style.display = 'flex';
+                            listWrapper.style.flexDirection = 'column';
+                            listWrapper.style.gap = '8px';
+                            problemsBody.appendChild(listWrapper);
+                        }
+
+                        // Inject pre-rendered server layout snippet structure fluidly
+                        listWrapper.insertAdjacentHTML('beforeend', data.html);
+
+                    } else {
+                        alert(`Failed to add problem group collection: ${data.error}`);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("A critical networking transmission failure occurred while trying to append the item distribution row.");
+                }
+                return;
+            }
+        });
+    }
+
+    // -------------------------------------------------------------
+    // Menu Overlay: Click To Show Selection Overlay Menu (Flicker-Free)
+    // -------------------------------------------------------------
+    if (canvasList) {
+        canvasList.addEventListener('click', function(e) {
+            const triggerBtn = e.target.closest('.btn-trigger-problems-menu');
+            if (!triggerBtn) return;
+            
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const container = triggerBtn.closest('.add-problems-dropdown-container');
+            const menuOverlay = container.querySelector('.problems-menu-overlay');
+            
+            // Toggle menu view layout display state safely
+            if (menuOverlay.style.display === 'none' || menuOverlay.style.display === '') {
+                menuOverlay.style.display = 'flex';
+                
+                // If a listener isn't already active on this container, bind it
+                if (!container.dataset.hasMouseListener) {
+                    container.dataset.hasMouseListener = 'true';
+                    
+                    // Handle Mouse Leaving the Dropdown Area
+                    const handleMouseLeave = function() {
+                        // Start a tiny timer before hiding (gives the user time to cross gaps)
+                        container.dataset.leaveTimeout = setTimeout(() => {
+                            menuOverlay.style.display = 'none';
+                            cleanUpListeners();
+                        }, 150); // 150ms buffer window
+                    };
+                    
+                    // Handle Mouse Re-entering the Dropdown Area
+                    const handleMouseEnter = function() {
+                        // If they re-enter before the timer runs out, cancel the closing animation!
+                        if (container.dataset.leaveTimeout) {
+                            clearTimeout(parseInt(container.dataset.leaveTimeout));
+                            container.removeAttribute('data-leave-timeout');
+                        }
+                    };
+                    
+                    // Helper to clean up memory footprints cleanly
+                    const cleanUpListeners = function() {
+                        container.removeAttribute('data-has-mouse-listener');
+                        if (container.dataset.leaveTimeout) {
+                            clearTimeout(parseInt(container.dataset.leaveTimeout));
+                            container.removeAttribute('data-leave-timeout');
+                        }
+                        container.removeEventListener('mouseleave', handleMouseLeave);
+                        container.removeEventListener('mouseenter', handleMouseEnter);
+                    };
+
+                    // Bind tracking handlers to the parent dropdown box unit
+                    container.addEventListener('mouseleave', handleMouseLeave);
+                    container.addEventListener('mouseenter', handleMouseEnter);
+                }
+            } else {
+                menuOverlay.style.display = 'none';
+            }
+        });
+
+        // Dismiss menu when an option is selected
+        canvasList.addEventListener('click', function(e) {
+            const menuOption = e.target.closest('.menu-option-item');
+            if (menuOption && !menuOption.disabled) {
+                const menuOverlay = menuOption.closest('.problems-menu-overlay');
+                if (menuOverlay) {
+                    menuOverlay.style.display = 'none';
+                }
+            }
         });
     }
 });

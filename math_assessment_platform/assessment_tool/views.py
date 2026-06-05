@@ -2,7 +2,7 @@ from django.shortcuts import render, redirect
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
-from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup
+from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup, CustomQuestionDistribution
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order
 import json
 from django.http import JsonResponse
@@ -1475,4 +1475,67 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': f"Operation failed: {str(e)}"}, status=400)
-    
+
+
+@login_required
+def add_cqd_to_aqg_ajax(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+        
+    try:
+        data = json.loads(request.body)
+        aqg_id = data.get('aqg_id')
+        
+        if not aqg_id:
+            return JsonResponse({'error': 'Missing section group identifier constraint.'}, status=400)
+            
+        # Fetch the active section group component context container
+        aqg = get_object_or_404(AssessmentQuestionGroup.objects.select_related('branch_location'), id=aqg_id)
+        parent_directory = aqg.branch_location
+        
+        # Calculate sequential ordering positions inside the folder layout tree branch
+        last_child = BranchGroup.objects.filter(parent=parent_directory).order_by('order').last()
+        prev_order = last_child.order if last_child else " "
+        new_order = calculate_midpoint_order(prev_order, "z")
+        
+        # Generation identity config fields
+        final_item_name = f"A placeholder name"
+        
+        with transaction.atomic():
+            # 1. Provision the structural BranchGroup framework node container
+            cqd_branch_node = BranchGroup.objects.create(
+                owner=request.user,
+                name=final_item_name,
+                parent=parent_directory,
+                folder_type='cqd',  # Ties into your choices Enum layout parameter matrix
+                order=new_order,
+                creation_date=timezone.now(),
+                modification_date=timezone.now()
+            )
+            
+            # 2. Allocate the concrete CustomQuestionDistribution database payload row layer
+            new_cqd_item = CustomQuestionDistribution.objects.create(
+                assigned_folder=cqd_branch_node,
+                suggested_count=1  # Baseline default structural configuration initialization choice
+            )
+            
+            # Set a temporary query attribute variable hook to reflect 0 initialization sub-pairs safely inside get_unique_name
+            new_cqd_item.num_pairs = 0
+
+            cqd_branch_node.name = new_cqd_item.get_unique_name()
+            cqd_branch_node.save(update_fields=['name', 'modification_date']) # Optimization: save only the target tracking fields
+        
+        # 3. Pre-compile the standalone component template context snapshot layout fragment string snippet
+        cqd_html = render_to_string(
+            'assessment_tool/components/cqd_card.html',
+            {'cqd': new_cqd_item},
+            request=request
+        )
+        
+        return JsonResponse({
+            'status': 'success',
+            'html': cqd_html
+        }, status=201)
+        
+    except Exception as e:
+        return JsonResponse({'error': f"Internal Server Exception Process Fault: {str(e)}"}, status=500)

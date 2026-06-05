@@ -5,24 +5,62 @@
             <input type="text" class="aqg-title-input" value="{{ group.name }}" data-previous="{{ group.name }}" placeholder="Enter section name...">
             <span class="save-status-indicator" style="display: none;"><i class="fas fa-check"></i> Saved</span>
         </div>
-        <div class="header-right-side" style="display: flex; gap: 8px;">
-            <button class="btn-add-problem" style="cursor: pointer; border: 1px solid #cbd5e1; background: #ffffff; padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; color: #475569;">+ Add Problem</button>
-            <button class="btn-delete-aqg" style="cursor: pointer; background: none; border: none; color: #94a3b8;"><i class="fas fa-trash"></i></button>
+        <div class="header-right-side" style="display: flex; align-items: center; gap: 8px;">
+            
+            <div class="add-problems-dropdown-container" style="position: relative; display: inline-block;">
+                <button class="btn-trigger-problems-menu" style="cursor: pointer; border: 1px solid #cbd5e1; background: #ffffff; padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; font-weight: 600; color: #475569;">
+                    + Add Problems <i class="fas fa-caret-down" style="margin-left: 4px; font-size: 0.75rem;"></i>
+                </button>
+                
+                <div class="problems-menu-overlay" style="display: none; position: absolute; top: 100%; right: 0; margin-top: 4px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); min-width: 210px; z-index: 50; padding: 4px; flex-direction: column; gap: 2px;">
+                    
+                    <button class="btn-add-problem menu-option-item" style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; padding: 6px 10px; text-align: left; font-size: 0.85rem; font-weight: 500; color: #334155; border-radius: 4px; cursor: pointer; transition: background 0.15s ease;">
+                        <i class="fas fa-plus" style="color: #64748b; font-size: 0.8rem; width: 14px;"></i> Make New Problem
+                    </button>
+                    
+                    <button class="btn-add-cqd menu-option-item" style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; padding: 6px 10px; text-align: left; font-size: 0.85rem; font-weight: 500; color: #334155; border-radius: 4px; cursor: pointer; transition: background 0.15s ease;">
+                        <i class="fas fa-folder-plus" style="color: #64748b; font-size: 0.8rem; width: 14px;"></i> Add New Problem Group
+                    </button>
+                    
+                    <button class="menu-option-item option-placeholder" disabled style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; padding: 6px 10px; text-align: left; font-size: 0.85rem; font-weight: 500; color: #94a3b8; border-radius: 4px; cursor: not-allowed;">
+                        <i class="fas fa-file-upload" style="color: #cbd5e1; font-size: 0.8rem; width: 14px;"></i> Add Problems from File
+                    </button>
+                    
+                </div>
+            </div>
+
+            <button class="btn-delete-aqg" style="cursor: pointer; background: none; border: none; color: #94a3b8; padding: 4px;"><i class="fas fa-trash"></i></button>
         </div>
     </div>
     
     <div class="aqg-problems-body" style="padding: 16px; background: #fafafa; min-height: 50px; color: #1e293b; font-size: 0.9rem; text-align: left;">
         
-        {% with problems=group.problem_set.all|dictsort:"branch_location.order" %}
-            {% if problems %}
+        {% with problems=group.problem_set.all cqds=group.branch_location.children.all %}
+            {% if problems or cqds %}
                 <div class="problems-list-wrapper" style="display: flex; flex-direction: column; gap: 8px;">
-                    {% for prob in problems %}
-                        {% include "assessment_tool/components/problem_card.html" with prob=prob %}
+                    
+                    {# 🎯 Iterate through structural virtual directory folder children sorted by your midpoint ordering string #}
+                    {% for child in group.branch_location.children.all|dictsort:"order" %}
+                        
+                        {# 1. Check if this structural node belongs to a Custom Question Distribution group package #}
+                        {% if child.folder_type == 'cqd' or child.cqd %}
+                            {% include "assessment_tool/components/cqd_card.html" with cqd=child.cqd %}
+                        
+                        {# 2. Otherwise, look up the companion concrete problem whose branch tracking id matches this child node's identifier #}
+                        {% else %}
+                            {% for p in problems %}
+                                {% if p.branch_location_id == child.id %}
+                                    {% include "assessment_tool/components/problem_card.html" with prob=p %}
+                                {% endif %}
+                            {% endfor %}
+                        {% endif %}
+
                     {% endfor %}
+                    
                 </div>
             {% else %}
                 <div class="empty-problems-placeholder" style="text-align: center; color: #94a3b8;">
-                    No problems added to this section yet. Click "+ Add Problem" to start building.
+                    No problems added to this section yet. Click "+ Add Problems" to start building.
                 </div>
             {% endif %}
         {% endwith %}
