@@ -23,6 +23,7 @@ urlpatterns = [
     path('create-folder/', views.create_folder, name='create_folder'),
     path('rename-item/', views.rename_item, name='rename_item'),
     path('delete-item/', views.delete_item, name='delete_item'),
+    path('delete-item/<str:item_type>/<int:item_id>/', views.delete_item, name='delete_item_with_args'),
     path('trash/restore/', views.restore_trash_item_view, name='restore_trash_item'),
     path('courses/<int:course_id>/', views.course_detail_view, name='course_detail'),
     path('course/<int:course_id>/assessments/', views.assessment_view, name='assessment_view'),

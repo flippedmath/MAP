@@ -585,19 +585,32 @@ def create_folder(request):
     return JsonResponse({'status': 'success', 'id': new_folder.id})
 
 
-def delete_item(request):
+def delete_item(request, item_type=None, item_id=None):
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
         
-    data = json.loads(request.body)
-    item_id = data.get('id')
-    item_type = data.get('type')
+    # 1. Flexible Extraction Layer (Handles both URL parameters and JSON bodies fluidly)
+    if not item_id or not item_type:
+        try:
+            data = json.loads(request.body)
+            item_id = item_id or data.get('id')
+            item_type = item_type or data.get('type')
+        except Exception:
+            return JsonResponse({'error': 'Malformed request JSON payload content structure.'}, status=400)
 
-    # 1. Resolve Object & Path with strict Ownership Verification
+    if not item_id or not item_type:
+        return JsonResponse({'error': 'Missing required identifier parameters.'}, status=400)
+
+    # Convert ID to int to keep unmanaged queries tracking reliably
+    try:
+        item_id = int(item_id)
+    except (ValueError, TypeError):
+        return JsonResponse({'error': 'Invalid format: ID identifier must be an integer.'}, status=400)
+
+    # 2. Resolve Object & Path with strict Ownership Verification
     try:
         if item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection', 'problem']:
             if item_type in ['folder', 'course', 'assessment']:
-                # Allow IT Support to fetch any folder container, otherwise restrict to the owner
                 if request.user.user_type == 'IT_Support':
                     obj = get_object_or_404(BranchGroup, id=item_id)
                 else:
@@ -613,7 +626,7 @@ def delete_item(request):
                 if is_course_teacher or request.user.user_type == 'IT_Support':
                     obj = aqg_item.branch_location
                 else:
-                    return JsonResponse({'error': f'User not authenticated to delete: {item_type}'}, status=400)
+                    return JsonResponse({'error': f'User not authenticated to delete: {item_type}'}, status=403)
                     
             elif item_type == 'question_selection':
                 if request.user.user_type == 'IT_Support':
@@ -622,31 +635,20 @@ def delete_item(request):
                     cqd_item = get_object_or_404(CustomQuestionDistribution, id=item_id, assigned_folder__owner=request.user)
                 obj = cqd_item.assigned_folder
                 
-            # 🎯 FIXED: PROBLEM OWNERSHIP VALIDATION LOOP
             elif item_type == 'problem':
-                # First fetch the problem safely via select_related to cache the structural node
                 problem_item = get_object_or_404(Problem.objects.select_related('branch_location'), id=item_id)
-                
-                # Verify permission against the underlying virtual file node's owner
                 if request.user.user_type != 'IT_Support' and problem_item.branch_location.owner != request.user:
                     return JsonResponse({'error': 'Permission Denied: You do not own this resource.'}, status=403)
-                
-                # TODO: Placeholder here for removing any sub-problem data in other tables 
-                #       before I lose the reference to them
-                
                 obj = problem_item.branch_location
 
             if not obj:
                 return JsonResponse({'error': 'Target branch directory location tracking error.'}, status=400)
 
-            # ✅ Scoped perfectly for ALL item types inside the wrapper validation block
             item_full_path = obj.get_parent_path() + obj.name + "/"
-
         else:
             return JsonResponse({'error': f'Unsupported item type: {item_type}'}, status=400)
             
     except Exception as e:
-        import traceback
         print(f"The item id being queried is = {item_id}")
         print(traceback.format_exc()) 
         return JsonResponse({
@@ -655,7 +657,7 @@ def delete_item(request):
             'item_type_received': item_type
         }, status=400)
 
-    # 2. System Protection Check
+    # 3. System Protection Check
     username = request.user.username
     root = f"/Users/{username}_root/"
     protected = [f"{root}Courses/", 
@@ -669,7 +671,7 @@ def delete_item(request):
     if item_full_path in protected:
         return JsonResponse({'error': 'System folders cannot be deleted.'}, status=403)
 
-    # 3. Empty Check for Folders
+    # 4. Empty Check for Folders
     if item_type == 'folder':
         has_content = (
             BranchGroup.objects.filter(parent=obj).exists() or
@@ -681,10 +683,9 @@ def delete_item(request):
         if has_content:
             return JsonResponse({'error': 'Folder is not empty.'}, status=400)
 
-    # 4. Execute
+    # 5. Execute
     with transaction.atomic():
         if item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection', 'problem']:
-            # Deleting the BranchGroup here runs a clean cascade down to clear the item tables automatically
             obj.delete()
         else:
             return JsonResponse({'error': f'Unsupported purge routing requested for type: {item_type}.'}, status=403)

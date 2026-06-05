@@ -519,6 +519,39 @@ document.addEventListener("DOMContentLoaded", function() {
                 }
                 return;
             }
+
+            const deleteBtn = e.target.closest('.btn-delete-item');
+            if (deleteBtn) {
+                e.preventDefault();
+                
+                const itemRow = deleteBtn.closest('.cqd-item-row, .problem-item-row');
+                const itemId = itemRow.getAttribute('data-id');
+                const itemType = deleteBtn.getAttribute('data-type'); // Evaluates to 'cqd'
+                
+                if (confirm("Are you sure you want to delete this problem group?")) {
+                    try {
+                        const response = await fetch(`/delete-item/${itemType}/${itemId}/`, {
+                            method: 'POST',
+                            headers: {
+                                'X-CSRFToken': getCookie('csrftoken'),
+                                'Content-Type': 'application/json'
+                            }
+                        });
+                        
+                        const data = await response.json();
+                        if (response.ok) {
+                            // Smoothly remove the card row layout from the viewport canvas
+                            itemRow.remove();
+                        } else {
+                            alert(`Error: ${data.error}`);
+                        }
+                    } catch (err) {
+                        console.error(err);
+                        alert("A network transmission error occurred during deletion.");
+                    }
+                }
+                return;
+            }
         });
     }
 
