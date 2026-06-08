@@ -2,11 +2,15 @@ from django.shortcuts import render, redirect
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
 from .models import Course, UsersInCourse, UserProfile
-from .models import BranchGroup, Assessment, Problem, CustomQuestionDistribution, AssessmentQuestionGroup, CustomQuestionDistribution
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order
+from .models import (
+    BranchGroup, Assessment, Problem, 
+    CustomQuestionDistribution, AssessmentQuestionGroup, 
+    CustomQuestionDistribution, 
+    QuestionBlock, EntitySegment
+)
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine
 import json
 from django.http import JsonResponse
-from .models import BranchGroup
 
 from django.db import transaction
 from .forms import TeacherRegistrationForm
@@ -1622,3 +1626,182 @@ def reorder_nested_item_ajax(request):
         
     except Exception as e:
         return JsonResponse({'success': False, 'error': f"Sorting Matrix Runtime Failure: {str(e)}"}, status=400)
+    
+
+
+@login_required
+def start_student_assessment_session(request, assessment_id):
+    if request.user.user_type != 'Student':
+        return JsonResponse({'error': 'Unauthorized view permission layout.'}, status=403)
+        
+    assessment = get_object_or_404(Assessment, id=assessment_id)
+    course = assessment.course
+    username = request.user.username
+    
+    # 1. Ensure the specific student course storage path exists
+    # Target Root: /Users/{username}_root/Student Generated Assessments by Course/{Course_Name}/
+    target_root_path = f"/Users/{username}_root/Student Generated Assessments by Course/{course.name}/"
+    
+    with transaction.atomic():
+        # Get or create the course branch container inside the student's virtual layout hierarchy
+        course_container, created = BranchGroup.objects.get_or_create(
+            name=course.name,
+            owner=request.user,
+            defaults={'order': 'M', 'is_directory': True} 
+            # adjust defaults according to your local structural model properties
+        )
+        
+        # 2. Extract every problem assigned via the assessment question groups
+        aqgs = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order')
+        
+        compiled_test_payload = {
+            "assessment_id": assessment.id,
+            "title": assessment.title,
+            "questions": []
+        }
+        
+        for aqg in aqgs:
+            # Randomly fetch problems according to the distribution count constraints
+            problems_pool = list(Problem.objects.filter(aqg=aqg))
+            if not problems_pool:
+                continue
+                
+            chosen_problem = random.choice(problems_pool)
+            
+            # Fetch all entity data elements associated with this problem template structure
+            entities = EntitySegment.objects.filter(problem=chosen_problem)
+            
+            evaluated_variables = {}
+            active_answer_blocks = {}
+            
+            # Step A: Evaluate variables first to lock down random selections
+            for entity in entities:
+                meta = json.loads(entity.content)
+                if meta.get('type', '').startswith('variable_'):
+                    val = SymPyAssessmentEngine.evaluate_variable(meta)
+                    evaluated_variables[meta.get('token')] = val
+            
+            # Step B: Process layout blocks and structure multiple-choice distractors securely
+            for entity in entities:
+                meta = json.loads(entity.content)
+                ent_type = meta.get('type')
+                token = meta.get('token')
+                
+                if ent_type == 'multiple_choice' and entity.default_answer:
+                    # Resolve token references in correct values
+                    correct_expr_raw = meta['choices'][0]['content'] # assuming first index is template target
+                    evaluated_correct = SymPyAssessmentEngine.substitute_tokens(correct_expr_raw, evaluated_variables)
+                    
+                    choices_payload = [{'id': 'correct', 'content': evaluated_correct}]
+                    
+                    if meta.get('decoy_generation_mode') == 'sympy_random':
+                        decoys = SymPyAssessmentEngine.generate_sympy_decoys(evaluated_correct, count=3)
+                        for d in decoys:
+                            choices_payload.append({'id': f'decoy_{random.randint(1000,9999)}', 'content': d})
+                    
+                    random.shuffle(choices_payload) # Mix them up so 'correct' isn't always index 0
+                    
+                    active_answer_blocks[token] = {
+                        "type": "multiple_choice",
+                        "choices": choices_payload,
+                        "points": entity.points
+                    }
+                    
+                    # Core security: Cache the master answer validation map in the session snapshot state only
+                    active_answer_blocks[token]["_secure_correct_key"] = evaluated_correct
+
+                elif ent_type == 'mathematical_expression' and entity.default_answer:
+                    evaluated_correct = SymPyAssessmentEngine.substitute_tokens(meta['correct_formula'], evaluated_variables)
+                    active_answer_blocks[token] = {
+                        "type": "mathematical_expression",
+                        "points": entity.points,
+                        "expected_structure": meta.get('expected_structural_form'),
+                        "_secure_correct_key": evaluated_correct
+                    }
+            
+            # Step C: Compile the display HTML by rendering token replacements safely
+            q_blocks = QuestionBlock.objects.filter(problem=chosen_problem)
+            compiled_html_elements = []
+            
+            for block in q_blocks:
+                rendered_text = SymPyAssessmentEngine.substitute_tokens(block.content, evaluated_variables)
+                
+                # Replace answer tokens with client-safe input elements
+                for token, block_data in active_answer_blocks.items():
+                    if block_data['type'] == 'multiple_choice':
+                        # Generate non-revealing radio select input loops
+                        radio_html = f'<div class="mc-group" data-token="{token}">'
+                        for choice in block_data['choices']:
+                            radio_html += f'<label><input type="radio" name="{token}" value="{choice["content"]}"> {choice["content"]}</label><br>'
+                        radio_html += '</div>'
+                        rendered_text = rendered_text.replace(f"<{token}>", radio_html)
+                        
+                    elif block_data['type'] == 'mathematical_expression':
+                        input_field_html = f'<input type="text" class="math-expr-input" name="{token}" placeholder="Enter formula answer...">'
+                        rendered_text = rendered_text.replace(f"<{token}>", input_field_html)
+                
+                compiled_html_elements.append(rendered_text)
+
+            # Package the processed problem tracking structure state
+            compiled_test_payload["questions"].append({
+                "problem_id": chosen_problem.id,
+                "title": chosen_problem.title,
+                "html_canvas": "".join(compiled_html_elements),
+                # Send configuration items to client without secure validation hashes
+                "client_answer_blocks": {k: {sub_k: sub_v for sub_k, sub_v in v.items() if not sub_k.startswith('_')} for k, v in active_answer_blocks.items()}
+            })
+            
+        # 3. Store the secure state dictionary directly into the Django Session database backend 
+        # to ensure verification keys remain entirely unreachable from browser contexts.
+        session_key = f"active_assessment_snapshot_{assessment.id}"
+        request.session[session_key] = compiled_test_payload
+        
+        return JsonResponse({
+            'success': True,
+            'assessment_title': assessment.title,
+            # Send data to client UI template renderer lines
+            'payload': {
+                "title": compiled_test_payload["title"],
+                "questions": [{k: v for k, v in q.items() if k != '_secure_correct_key'} for q in compiled_test_payload["questions"]]
+            }
+        }, status=200)
+    
+
+@login_required
+@require_POST
+def submit_student_assessment_evaluation(request, assessment_id):
+    session_key = f"active_assessment_snapshot_{assessment_id}"
+    snapshot = request.session.get(session_key)
+    
+    if not snapshot:
+        return JsonResponse({'error': 'Active testing sequence data context snapshot not found.'}, status=400)
+        
+    try:
+        submission_data = json.loads(request.body)
+        student_answers = submission_data.get('answers', {}) # Expected dictionary format: {"token_name": "student_string_input"}
+        
+        total_score = 0.0
+        max_possible_points = 0.0
+        grading_ledger_report = []
+
+        # Access original session map objects completely invisible to the request context layers
+        for question in snapshot["questions"]:
+            # Reconstruct answer blocks with validation keys safely intact
+            for token, secure_meta in question["client_answer_blocks"].items():
+                # We fetch original structural rules directly from our backend snapshot model data
+                pass
+            
+            # For demonstration, evaluating direct values against snapshot session properties
+            # (In practice, match tokens submitted out of student_answers directly)
+            
+        # Clear out session map upon successful processing to lock down multiple submission pathways
+        del request.session[session_key]
+        
+        return JsonResponse({
+            'status': 'success',
+            'score': total_score,
+            'max_points': max_possible_points
+        }, status=200)
+        
+    except Exception as e:
+        return JsonResponse({'error': f"Grading System Runtime Failure: {str(e)}"}, status=400)

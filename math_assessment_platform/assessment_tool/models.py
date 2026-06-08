@@ -546,7 +546,7 @@ class EmailAuthentication(models.Model):
 class EntitySegment(models.Model):
     default_answer = models.BooleanField(db_comment='When true, this will make this student interactable answer type shown by default when solving the problem')
     points = models.FloatField(blank=True, null=True)
-    problem = models.ForeignKey('Problem', models.DO_NOTHING, blank=True, null=True)
+    problem = models.ForeignKey('Problem', models.CASCADE, blank=True, null=True)
     problem_type_id_originator = models.ForeignKey('EntityType', models.DO_NOTHING, db_column='problem_type_id_originator')
     content = models.TextField()  # This field type is a guess.
     parent_entity = models.ForeignKey('self', models.DO_NOTHING, db_column='parent_entity', blank=True, null=True, db_comment='The parent entity of the self entity. I will keep track of entity segments separately to make it easy to prevent circular entity recursion')
@@ -572,7 +572,7 @@ class EntityType(models.Model):
 
 
 class EntityUserInput(models.Model):
-    entity = models.ForeignKey(EntitySegment, models.DO_NOTHING)
+    entity = models.ForeignKey(EntitySegment, models.CASCADE)
     points_score = models.FloatField(blank=True, null=True, db_comment="Score can be initially set to 'null' if it requires Teacher to do the grading.")
     content = models.TextField(blank=True, null=True, db_comment='Depending on the entity_type that is tied to the entity_segment, how the json is read as information will change. It is a good idea to consistently organize all data as a json though. This could be a string, an image (canvas/graph), a series of data representing a canvas/graph, a number/float, a formula, etc')  # This field type is a guess.
 
@@ -723,7 +723,7 @@ class ProblemTags(models.Model):
 
 
 class QuestionBlock(models.Model):
-    problem = models.ForeignKey(Problem, models.DO_NOTHING)
+    problem = models.ForeignKey(Problem, models.CASCADE)
     content = models.TextField(db_comment="This is the main paragraph content the question resides in. The content can hold 'answer' insert tag entities that will replace the inner data with other things later compiled.")  # This field type is a guess.
     space_allocation = models.TextField(blank=True, null=True)  # This field type is a guess.
 

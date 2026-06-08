@@ -7,9 +7,7 @@
     <title>MAP | Math Assessment Platform</title>
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
     <link rel="stylesheet" href="{% static 'assessment_tool/css/base_style.css' %}">
-
     {% block extra_css %}{% endblock %}
 </head>
 <body>
@@ -40,6 +38,12 @@
 
         {% block content %}{% endblock %}
     </main>    
+
+    {% if user.is_authenticated and user.user_type != 'Student' %}
+        {% include "assessment_tool/components/problem_workspace_overlay.html" %}
+        <script src="{% static 'assessment_tool/js/problem_overlay_global.js' %}"></script>
+    {% endif %}
+
     {% block extra_js %}
         {% if user.is_authenticated and user.user_type == 'Student' %}
             <script src="{% static 'assessment_tool/js/single_tab_enforcement.js' %}"></script>

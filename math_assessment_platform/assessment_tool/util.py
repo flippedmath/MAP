@@ -10,6 +10,10 @@ from django.db import transaction
 from django.contrib import messages
 from django.utils import timezone
 from django.db import IntegrityError
+import random
+import json
+import sympy as sp
+from sympy.parsing.sympy_parser import parse_expr
 
 
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
@@ -446,3 +450,99 @@ def calculate_midpoint_order(prev="", next=""):
         
     return "".join(res)
 
+
+
+class SymPyAssessmentEngine:
+    
+    @classmethod
+    def substitute_tokens(cls, definition_string, evaluated_variables):
+        """Replaces token patterns like <num1> with concrete evaluated string states."""
+        for token, val in evaluated_variables.items():
+            definition_string = definition_string.replace(f"<{token}>", str(val))
+        return definition_string
+
+    @classmethod
+    def evaluate_variable(cls, content_json):
+        """Evaluates structural variables down to individual numeric values or string expressions."""
+        var_type = content_json.get('type')
+        
+        if var_type == 'variable_numeric':
+            minimum = content_json.get('min', -9)
+            maximum = content_json.get('max', 9)
+            step = content_json.get('step', 1)
+            exclude = content_json.get('exclude', [])
+            
+            # Generate valid range numbers
+            choices = [x for x in range(int(minimum), int(maximum) + 1, int(step)) if x not in exclude]
+            return random.choice(choices) if choices else 1
+            
+        return None
+
+    @classmethod
+    def generate_sympy_decoys(cls, correct_value_str, count=3):
+        """
+        Generates common algebraic wrong-answer distractors dynamically.
+        E.g., sign flips, adding/subtracting 1, or multiplying constants.
+        """
+        decoys = set()
+        try:
+            expr = parse_expr(correct_value_str)
+            
+            # Common mutations
+            mutations = [
+                lambda e: -e,                           # Sign mutation
+                lambda e: e + 1,                        # Off-by-one mutation
+                lambda e: e - 1,
+                lambda e: e * 2,                        # Scale mutation
+                lambda e: parse_expr(f"({str(e)})**2")  # Power mutation
+            ]
+            
+            random.shuffle(mutations)
+            for mutate in mutations:
+                if len(decoys) >= count:
+                    break
+                try:
+                    decoy_expr = mutate(expr)
+                    decoy_str = str(sp.simplify(decoy_expr))
+                    if decoy_str != str(sp.simplify(expr)):
+                        decoys.add(decoy_str)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+            
+        # Fallback to simple random numbers if algebra parsing fails
+        while len(decoys) < count:
+            decoys.add(str(random.randint(-10, 10)))
+            
+        return list(decoys)
+
+    @classmethod
+    def grade_mathematical_expression(cls, student_input_str, correct_formula_str, expected_structure=None):
+        """
+        Grades expression inputs based on two tiers:
+        1. Equivalence via simplify() == 0
+        2. Structural form verification via UnevaluatedExpr or string matching
+        Returns: (score_multiplier, tracking_flag)
+        """
+        try:
+            student_ans = parse_expr(student_input_str)
+            correct_ans = parse_expr(correct_formula_str)
+            
+            # Tier 1: Value Equivalence Verification
+            is_equivalent = sp.simplify(student_ans - correct_ans) == 0
+            
+            if not is_equivalent:
+                return 0.0, "INCORRECT_VALUE"
+            
+            # Tier 2: Structural Verification (e.g., Factored or Expanded Form)
+            if expected_structure == "Factor":
+                # Ensure the student answer's string structure matches a factored structure pattern
+                is_factored = student_input_str.count('(') >= correct_formula_str.count('(')
+                if not is_factored:
+                    return 0.5, "VALUE_MATCH_STRUCTURE_MISMATCH"
+                    
+            return 1.0, "PERFECT_MATCH"
+            
+        except Exception:
+            return 0.0, "SYNTAX_PARSE_ERROR"

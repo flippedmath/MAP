@@ -40,4 +40,6 @@ urlpatterns = [
     path('add-cqd-ajax/', views.add_cqd_to_aqg_ajax, name='add_cqd_ajax'),
     path('update-cqd-count-ajax/', views.update_cqd_count_ajax, name='update_cqd_count_ajax'),
     path('course/api/setup/reorder-nested-item/', views.reorder_nested_item_ajax, name='reorder_nested_item_ajax'),
+    path('course/api/assessment/<int:assessment_id>/start-session/', views.start_student_assessment_session, name='start_assessment_session'),
+    path('course/api/assessment/<int:assessment_id>/submit-evaluation/', views.submit_student_assessment_evaluation, name='submit_assessment_evaluation'),
 ]
