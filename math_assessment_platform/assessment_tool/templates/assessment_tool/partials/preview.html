@@ -14,7 +14,13 @@
     </div>
     
     <h3 style="margin-top: 20px;">
-        {{ item.name|default:item.course_name|default:item.title|default:item.group_name }}
+        {% if type == 'problem' %}
+            {{ item.title }}
+        {% elif type == 'course' %}
+            {{ item.course_name|default:item.name }}
+        {% else %}
+            {{ item.name|default:item.group_name }}
+        {% endif %}
     </h3>
     <hr style="border: 0; border-top: 1px solid #d1d1d6; margin: 20px 0;">
     

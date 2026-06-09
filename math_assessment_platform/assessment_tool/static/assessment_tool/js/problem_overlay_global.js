@@ -52,7 +52,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (tokensLedger) tokensLedger.innerHTML = '';
             if (htmlCanvasEditor) htmlCanvasEditor.innerHTML = '';
 
-            const response = await fetch(`/get-item-preview/problem/${problemId}/`);
+            // const response = await fetch(`/get-item-preview/problem/${problemId}/`);
+            // 🎯 Point to the designated JSON data API endpoint instead of the HTML partial
+            const response = await fetch(`/api/problem/${problemId}/workspace-data/`);
+            
             if (!response.ok) throw new Error("Failed to load problem data maps.");
             
             const data = await response.json();

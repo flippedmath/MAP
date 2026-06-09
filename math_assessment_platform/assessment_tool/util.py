@@ -1,5 +1,5 @@
 import re
-# from .models import BranchGroup, UsersInCourse ... instead of this, use --> BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+# from .models import BranchGroup, UsersInCourse, EntitySegment ... instead of this, use --> BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
 from django.apps import apps
 from django.http import JsonResponse
 import copy
@@ -14,6 +14,7 @@ import random
 import json
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
+
 
 
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
@@ -546,3 +547,82 @@ class SymPyAssessmentEngine:
             
         except Exception:
             return 0.0, "SYNTAX_PARSE_ERROR"
+        
+
+class EntityValidationError(Exception):
+    """Custom exception for mathematical datatype or validation errors in the assessment engine."""
+    def __init__(self, message, token=None, field_slot=None):
+        super().__init__(message)
+        self.message = message
+        self.token = token            # The token where the error occurred (e.g., 'matrix1')
+        self.field_slot = field_slot  # The specific input slot (e.g., 'cells')
+        
+    def __str__(self):
+        if self.token:
+            return f"[{self.token}] {self.message}"
+        return self.message
+
+
+def fetch_sibling_entity_by_token(problem_obj, target_token):
+    """
+    Scans all EntitySegment records assigned to a specific problem instance,
+    parses their serialized JSON content, and returns the entity that matches
+    the specified client-side string token.
+    """
+    # Grab all segments belonging to this problem to narrow down our lookup space
+    EntitySegment = apps.get_model('assessment_tool', 'EntitySegment')
+    sibling_segments = EntitySegment.objects.filter(problem=problem_obj)
+    
+    for segment in sibling_segments:
+        if not segment.content:
+            continue
+            
+        try:
+            meta = json.loads(segment.content)
+            # Check if this segment's internal JSON token matches our target
+            if meta.get("token") == target_token:
+                return segment
+        except (json.JSONDecodeError, TypeError):
+            # If a row contains corrupted or unparseable JSON, skip it safely
+            continue
+            
+    # Raise our newly enhanced validation exception if the token cannot be resolved
+    raise EntityValidationError(
+        message=f"The entity token reference '<{target_token}>' could not be found within this problem's configuration scope.",
+        token=target_token
+    )
+
+def validate_entity_node_datatype(entity_segment_obj):
+    """
+    Recursively checks that an entity segment's inputs (whether static 
+    or linked child entities) conform to expected mathematical types.
+    """
+    meta = json.loads(entity_segment_obj.content)
+    ent_type = entity_segment_obj.problem_type_id_originator.name
+
+    # Example Check: Validating a Matrix Variable's Cells
+    if ent_type == "variable_matrix":
+        cells = meta.get("cells", [])
+        for row in cells:
+            for cell_value in row:
+                # If it's a linked token, fetch the child record and check its type
+                if str(cell_value).startswith("<") and str(cell_value).endswith(">"):
+                    child_token = cell_value.strip("<>")
+                    # Query database for the child segment linked under this problem
+                    # (Assuming a helper lookup method exists)
+                    child_entity = fetch_sibling_entity_by_token(entity_segment_obj.problem, child_token)
+                    
+                    if child_entity.problem_type_id_originator.name == "variable_string_array":
+                        raise EntityValidationError(
+                            f"Type Mismatch: Matrix cells cannot accept String Array token '{cell_value}'."
+                        )
+                else:
+                    # If it's a static user input, verify SymPy can parse it as a valid scalar expression
+                    try:
+                        parsed = sp.parse_expr(str(cell_value))
+                        if isinstance(parsed, (sp.Matrix, str)):
+                            raise EntityValidationError(f"Invalid static value '{cell_value}' inside matrix cell.")
+                    except Exception:
+                        raise EntityValidationError(f"Syntax Error: '{cell_value}' is not a valid mathematical statement.")
+
+    return True

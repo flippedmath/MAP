@@ -16,6 +16,7 @@ from django.db import transaction
 from .forms import TeacherRegistrationForm
 from .models import EmailAuthentication
 import secrets
+import random
 from django.utils import timezone
 from datetime import timedelta
 from django.contrib import messages
@@ -1805,3 +1806,46 @@ def submit_student_assessment_evaluation(request, assessment_id):
         
     except Exception as e:
         return JsonResponse({'error': f"Grading System Runtime Failure: {str(e)}"}, status=400)
+
+
+# A view specifically designed to look up a problem, 
+#   collect its child EntitySegment configurations, and return them as a JSON response
+@login_required
+def get_problem_workspace_data(request, problem_id):
+    """
+    API endpoint that returns the full structural JSON definitions 
+    of a problem's entity segments and content canvas for the editing workspace.
+    """
+    problem = get_object_or_404(Problem, id=problem_id)
+    
+    # Fetch all child entity segments belonging to this problem
+    segments = EntitySegment.objects.filter(problem=problem)
+    
+    entities_payload = []
+    for segment in segments:
+        try:
+            # Parse the content field back into a native dict/list structure
+            parsed_content = json.loads(segment.content) if segment.content else {}
+        except json.JSONDecodeError:
+            parsed_content = {"raw_text": segment.content}
+
+        entities_payload.append({
+            "id": segment.id,
+            "type": segment.problem_type_id_originator.name,
+            "points": float(segment.points) if segment.points else 0.0,
+            "default_answer": segment.default_answer,
+            "is_answer_to_multi_choice": segment.is_answer_to_multi_choice,
+            "content_schema": parsed_content
+        })
+        
+    # Fetch the visual text/html question layout content blocks
+    q_blocks = QuestionBlock.objects.filter(problem=problem).order_by('id')
+    html_content = "".join([block.content for block in q_blocks if block.content])
+
+    return JsonResponse({
+        "success": True,
+        "problem_id": problem.id,
+        "title": problem.title,
+        "html_content": html_content,
+        "entities": entities_payload
+    }, status=200)

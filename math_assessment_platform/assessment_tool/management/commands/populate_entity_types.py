@@ -1,6 +1,6 @@
 import json
 from django.core.management.base import BaseCommand
-from assessment_tool.models import EntityType  
+from assessment_tool.models import EntityType  # 🎯 Updated to your app name
 
 class Command(BaseCommand):
     help = "Populates or updates the unmanaged entity_type table with master serialization schemas."
@@ -13,7 +13,7 @@ class Command(BaseCommand):
             # -------------------------------------------------------------
             {
                 "name": "variable_numeric",
-                "format_pattern": "Range [{min}, {max}], step {step}, excluding {exclude}",
+                "format_pattern": json.dumps("Range [{min}, {max}], step {step}, excluding {exclude}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "variable_numeric",
                     "token": "num1",
@@ -22,22 +22,22 @@ class Command(BaseCommand):
                     "exclude": [0],
                     "step": 1
                 }, indent=2),
-                "entity_name_list": "min, max, exclude, step"
+                "entity_name_list": json.dumps(["min", "max", "exclude", "step"])
             },
             {
                 "name": "variable_equation",
-                "format_pattern": "Formula: {formula} with variables: {variables}",
+                "format_pattern": json.dumps("Formula: {formula} with variables: {variables}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "variable_equation",
                     "token": "equation1",
                     "formula": "",
                     "variables": "x"
                 }, indent=2),
-                "entity_name_list": "formula, variables"
+                "entity_name_list": json.dumps(["formula", "variables"])
             },
             {
                 "name": "variable_matrix",
-                "format_pattern": "Matrix {rows}x{cols} cell configurations matrix grid",
+                "format_pattern": json.dumps("Matrix {rows}x{cols} cell configurations matrix grid"),
                 "insert_entity_pattern": json.dumps({
                     "type": "variable_matrix",
                     "token": "matrix1",
@@ -45,18 +45,18 @@ class Command(BaseCommand):
                     "cols": 3,
                     "cells": [["1", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]]
                 }, indent=2),
-                "entity_name_list": "rows, cols, cells"
+                "entity_name_list": json.dumps(["rows", "cols", "cells"])
             },
             {
                 "name": "variable_string_array",
-                "format_pattern": "Array: {strings}, Sync target: {sync_target}",
+                "format_pattern": json.dumps("Array: {strings}, Sync target: {sync_target}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "variable_string_array",
                     "token": "stringArray1",
                     "strings": ["Kyle", "Kylie", "Sean"],
                     "sync_target": ""
                 }, indent=2),
-                "entity_name_list": "strings, sync_target"
+                "entity_name_list": json.dumps(["strings", "sync_target"])
             },
 
             # -------------------------------------------------------------
@@ -64,7 +64,7 @@ class Command(BaseCommand):
             # -------------------------------------------------------------
             {
                 "name": "multiple_choice",
-                "format_pattern": "MC Single: {single_choice}, Options Array Count: {choices_count}",
+                "format_pattern": json.dumps("MC Single: {single_choice}, Options Array Count: {choices_count}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "multiple_choice",
                     "token": "mc1",
@@ -76,23 +76,23 @@ class Command(BaseCommand):
                         {"id": "c1", "content": "", "is_correct": True, "comment": ""}
                     ]
                 }, indent=2),
-                "entity_name_list": "points, single_choice, decoy_generation_mode, choices"
+                "entity_name_list": json.dumps(["points", "single_choice", "decoy_generation_mode", "choices"])
             },
             {
                 "name": "mathematical_expression",
-                "format_pattern": "SymPy Expression Evaluation mode. Criteria target: {expected_structural_form}",
+                "format_pattern": json.dumps("SymPy Expression Evaluation mode. Criteria target: {expected_structural_form}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "mathematical_expression",
                     "token": "math1",
                     "points": 1.0,
-                    "expected_structural_form": "Factor",  # Factor, Simplify, Expand, etc.
+                    "expected_structural_form": "Factor",
                     "correct_formula": ""
                 }, indent=2),
-                "entity_name_list": "points, expected_structural_form, correct_formula"
+                "entity_name_list": json.dumps(["points", "expected_structural_form", "correct_formula"])
             },
             {
                 "name": "numeric_tolerance",
-                "format_pattern": "Target: {correct_value} +/- Tolerance Buffer: {tolerance}",
+                "format_pattern": json.dumps("Target: {correct_value} +/- Tolerance Buffer: {tolerance}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "numeric_tolerance",
                     "token": "numInput1",
@@ -101,11 +101,11 @@ class Command(BaseCommand):
                     "tolerance": 0.01,
                     "reveal_tolerance_to_student": False
                 }, indent=2),
-                "entity_name_list": "points, correct_value, tolerance, reveal_tolerance_to_student"
+                "entity_name_list": json.dumps(["points", "correct_value", "tolerance", "reveal_tolerance_to_student"])
             },
             {
                 "name": "short_text_input",
-                "format_pattern": "Short Text entry. Auto Grade: {auto_grade}",
+                "format_pattern": json.dumps("Short Text entry. Auto Grade: {auto_grade}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "short_text_input",
                     "token": "textInput1",
@@ -114,30 +114,30 @@ class Command(BaseCommand):
                     "allow_formula_submission": False,
                     "expected_answers": []
                 }, indent=2),
-                "entity_name_list": "points, auto_grade, allow_formula_submission, expected_answers"
+                "entity_name_list": json.dumps(["points", "auto_grade", "allow_formula_submission", "expected_answers"])
             },
             {
                 "name": "long_text_input",
-                "format_pattern": "Manual evaluation descriptive text block",
+                "format_pattern": json.dumps("Manual evaluation descriptive text block"),
                 "insert_entity_pattern": json.dumps({
                     "type": "long_text_input",
                     "token": "paragraphBlock1",
                     "points": 1.0,
                     "placeholder": "Enter detailed response..."
                 }, indent=2),
-                "entity_name_list": "points, placeholder"
+                "entity_name_list": json.dumps(["points", "placeholder"])
             },
             {
                 "name": "matrix_input",
-                "format_pattern": "Expected target solution Matrix reference placeholder: {correct_matrix_variable}",
+                "format_pattern": json.dumps("Expected target solution Matrix reference placeholder: {correct_matrix_variable}"),
                 "insert_entity_pattern": json.dumps({
                     "type": "matrix_input",
                     "token": "matrixInput1",
                     "points": 1.0,
-                    "correct_matrix_variable": "",  # Maps directly to a token key name like <matrix1>
+                    "correct_matrix_variable": "",
                     "allow_student_dimension_changes": False
                 }, indent=2),
-                "entity_name_list": "points, correct_matrix_variable, allow_student_dimension_changes"
+                "entity_name_list": json.dumps(["points", "correct_matrix_variable", "allow_student_dimension_changes"])
             },
 
             # -------------------------------------------------------------
@@ -145,7 +145,7 @@ class Command(BaseCommand):
             # -------------------------------------------------------------
             {
                 "name": "graph_equation_insert",
-                "format_pattern": "Axes boundaries ranges with formula strings array",
+                "format_pattern": json.dumps("Axes boundaries ranges with formula strings array"),
                 "insert_entity_pattern": json.dumps({
                     "type": "graph_equation_insert",
                     "token": "graph1",
@@ -154,11 +154,11 @@ class Command(BaseCommand):
                     "y_axis": {"min": "-5", "max": "5", "step": "1"},
                     "formulas": []
                 }, indent=2),
-                "entity_name_list": "allow_student_drawing_overlay, x_axis, y_axis, formulas"
+                "entity_name_list": json.dumps(["allow_student_drawing_overlay", "x_axis", "y_axis", "formulas"])
             },
             {
                 "name": "graph_between_points",
-                "format_pattern": "Dynamic piecewise geometric curves map connecting point ranges",
+                "format_pattern": json.dumps("Dynamic piecewise geometric curves map connecting point ranges"),
                 "insert_entity_pattern": json.dumps({
                     "type": "graph_between_points",
                     "token": "pointGraph1",
@@ -166,7 +166,7 @@ class Command(BaseCommand):
                     "y_range": {"min": -5, "max": 5},
                     "curves": []
                 }, indent=2),
-                "entity_name_list": "x_range, y_range, curves"
+                "entity_name_list": json.dumps(["x_range", "y_range", "curves"])
             },
 
             # -------------------------------------------------------------
@@ -174,13 +174,13 @@ class Command(BaseCommand):
             # -------------------------------------------------------------
             {
                 "name": "canvas_notes",
-                "format_pattern": "Student scratchpad drawing canvas layer",
+                "format_pattern": json.dumps("Student scratchpad drawing canvas layer"),
                 "insert_entity_pattern": json.dumps({
                     "type": "canvas_notes",
                     "token": "canvas1",
                     "height_pixels": 300
                 }, indent=2),
-                "entity_name_list": "height_pixels"
+                "entity_name_list": json.dumps(["height_pixels"])
             },
 
             # -------------------------------------------------------------
@@ -188,17 +188,16 @@ class Command(BaseCommand):
             # -------------------------------------------------------------
             {
                 "name": "multi_answer",
-                "format_pattern": "Nested multi-part composite sub-problem array",
+                "format_pattern": json.dumps("Nested multi-part composite sub-problem array"),
                 "insert_entity_pattern": json.dumps({
                     "type": "multi_answer",
                     "token": "multiGroup1",
                     "sub_entities_tokens_list": []
                 }, indent=2),
-                "entity_name_list": "sub_entities_tokens_list"
+                "entity_name_list": json.dumps(["sub_entities_tokens_list"])
             }
         ]
 
-        # 2. Loop and execute write state changes inside the target database
         self.stdout.write(self.style.NOTICE("Initializing entity_type master catalog mapping values..."))
         
         success_count = 0
