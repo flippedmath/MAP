@@ -6,7 +6,8 @@ from .models import (
     BranchGroup, Assessment, Problem, 
     CustomQuestionDistribution, AssessmentQuestionGroup, 
     CustomQuestionDistribution, 
-    QuestionBlock, EntitySegment
+    QuestionBlock, EntitySegment,
+    EntityType, EntityUserInput
 )
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine
 import json
@@ -214,6 +215,10 @@ def database_viewer(request):
         'aqg': AssessmentQuestionGroup,
         'cqd': CustomQuestionDistribution,
         'problem': Problem,
+        'question_block': QuestionBlock,
+        'entity_segment': EntitySegment,
+        'entity_type': EntityType,
+        'entity_user_input': EntityUserInput,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
