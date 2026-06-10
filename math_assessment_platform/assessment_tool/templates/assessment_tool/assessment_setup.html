@@ -61,7 +61,8 @@
         createUrl: "{% url 'create_aqg_ajax' course.id assessment.id %}",
         renameUrl: "{% url 'rename_aqg_ajax' course.id assessment.id %}",
         reorderUrl: "{% url 'reorder_aqg_ajax' course.id assessment.id %}",
-        addProblemUrl: "{% url 'add_problem_to_aqg_ajax' course.id assessment.id %}"
+        addProblemUrl: "{% url 'add_problem_to_aqg_ajax' course.id assessment.id %}",
+        saveProblemUrl: "{% url 'save_problem_workspace_ajax' course.id %}"
     };
 </script>
 <script src="{% static 'assessment_tool/js/assessment_setup.js' %}"></script>

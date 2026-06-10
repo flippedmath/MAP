@@ -22,7 +22,7 @@ from django.utils import timezone
 from datetime import timedelta
 from django.contrib import messages
 from django.db import IntegrityError
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 from django.shortcuts import get_object_or_404
 
 from django.contrib.auth.decorators import login_required
@@ -1250,7 +1250,8 @@ def assessment_setup_view(request, course_id, assessment_id):
         'course': course,
         'assessment': assessment,
         'aqg_groups': aqg_groups,
-        'user_type': user_type if user_type == 'IT_Support' else 'Teacher'
+        'user_type': user_type if user_type == 'IT_Support' else 'Teacher',
+        'load_problem_workspace': True,
     }
     return render(request, 'assessment_tool/assessment_setup.html', context)
 
@@ -1813,44 +1814,261 @@ def submit_student_assessment_evaluation(request, assessment_id):
         return JsonResponse({'error': f"Grading System Runtime Failure: {str(e)}"}, status=400)
 
 
-# A view specifically designed to look up a problem, 
-#   collect its child EntitySegment configurations, and return them as a JSON response
-@login_required
+def verify_workspace_clearance(user, problem):
+    """
+    Validates structural user clearance across three conditions:
+    - User is 'IT_Support'
+    - User is the owner of the branch group tied to the problem
+    - User is a 'Teacher' registered inside the course ancestry track
+    """
+    if not user.is_authenticated or user.user_type == 'Student':
+        return False
+        
+    if user.user_type == 'IT_Support':
+        return True
+        
+    if problem.branch_location and problem.branch_location.owner == user:
+        return True
+        
+    if problem.aqg_id:
+        has_group_clearance = UsersInCourse.objects.filter(
+            user=user,
+            user__user_type='Teacher',
+            course__assessment_id_originator__assessmentquestiongroup__problem=problem
+        ).exists()
+        if has_group_clearance:
+            return True
+            
+    return False
+
+
 def get_problem_workspace_data(request, problem_id):
     """
     API endpoint that returns the full structural JSON definitions 
     of a problem's entity segments and content canvas for the editing workspace.
     """
-    problem = get_object_or_404(Problem, id=problem_id)
+    problem = get_object_or_404(Problem.objects.select_related('branch_location'), id=problem_id)
     
+    # Secure validation fence check
+    if not verify_workspace_clearance(request.user, problem):
+        return JsonResponse({'success': False, 'error': 'Permission Denied: Insufficient authorization clearing.'}, status=403)
+        
     # Fetch all child entity segments belonging to this problem
-    segments = EntitySegment.objects.filter(problem=problem)
+    segments = EntitySegment.objects.filter(problem=problem).select_related('problem_type_id_originator')
     
     entities_payload = []
     for segment in segments:
-        try:
-            # Parse the content field back into a native dict/list structure
-            parsed_content = json.loads(segment.content) if segment.content else {}
-        except json.JSONDecodeError:
-            parsed_content = {"raw_text": segment.content}
+        # Defensively check if content is a native dict/list already (PostgreSQL JSON/JSONB auto-parsing)
+        if isinstance(segment.content, (dict, list)):
+            parsed_content = segment.content
+        else:
+            try:
+                parsed_content = json.loads(segment.content) if segment.content else {}
+            except (json.JSONDecodeError, TypeError):
+                parsed_content = {}
 
-        entities_payload.append({
+        # Extract type classification accurately via the entity_type name definition column
+        entity_type_string = "variable_numeric"
+        if segment.problem_type_id_originator:
+            entity_type_string = segment.problem_type_id_originator.name
+        elif isinstance(parsed_content, dict) and "type" in parsed_content:
+            entity_type_string = parsed_content["type"]
+
+        token_name = parsed_content.get("token") if isinstance(parsed_content, dict) else f"var_{segment.id}"
+        if not token_name:
+            token_name = f"var_{segment.id}"
+            
+        label_name = parsed_content.get("label", token_name.capitalize())
+
+        # Build clean structural dict item packaging all properties stored in the schema
+        entity_item = {
             "id": segment.id,
-            "type": segment.problem_type_id_originator.name,
+            "type": entity_type_string,
+            "token": token_name,
+            "label": label_name,
             "points": float(segment.points) if segment.points else 0.0,
             "default_answer": segment.default_answer,
             "is_answer_to_multi_choice": segment.is_answer_to_multi_choice,
-            "content_schema": parsed_content
-        })
+        }
+
+        # Keep all supplemental variable keys flat so the JavaScript scraper reads them instantly
+        if isinstance(parsed_content, dict):
+            for key, val in parsed_content.items():
+                if key not in ["id", "token", "label", "type"]:
+                    entity_item[key] = val
+
+        entities_payload.append(entity_item)
         
     # Fetch the visual text/html question layout content blocks
     q_blocks = QuestionBlock.objects.filter(problem=problem).order_by('id')
-    html_content = "".join([block.content for block in q_blocks if block.content])
+    
+    html_pieces = []
+    for block in q_blocks:
+        if not block.content:
+            continue
+            
+        if isinstance(block.content, dict):
+            html_pieces.append(block.content.get('html_content', ''))
+        else:
+            try:
+                parsed_block = json.loads(block.content)
+                if isinstance(parsed_block, dict):
+                    html_pieces.append(parsed_block.get('html_content', ''))
+                else:
+                    html_pieces.append(str(parsed_block))
+            except (json.JSONDecodeError, TypeError):
+                html_pieces.append(block.content)
+
+    compiled_html_content = "".join(html_pieces) if html_pieces else '<p><br></p>'
 
     return JsonResponse({
         "success": True,
         "problem_id": problem.id,
         "title": problem.title,
-        "html_content": html_content,
-        "entities": entities_payload
+        "html_content": compiled_html_content, 
+        "entities": entities_payload           
     }, status=200)
+
+
+@require_http_methods(["GET", "POST"])
+def save_problem_workspace_ajax(request, course_id):
+    # ---------------------------------------------------------
+    # 📥 CASE A: FETCH DATA (When opening the overlay)
+    # ---------------------------------------------------------
+    if request.method == "GET":
+        problem_id = request.GET.get('problem_id')
+        if not problem_id:
+            return JsonResponse({'success': False, 'error': 'Missing problem identity.'}, status=400)
+            
+        problem = get_object_or_404(Problem.objects.select_related('branch_location'), id=problem_id)
+        
+        if not verify_workspace_clearance(request.user, problem):
+            return JsonResponse({'success': False, 'error': 'Permission Denied: Insufficient permissions.'}, status=403)
+            
+        q_block = QuestionBlock.objects.filter(problem=problem).first()
+        body_html = '<p><br></p>'
+        
+        if q_block and q_block.content:
+            if isinstance(q_block.content, dict):
+                body_html = q_block.content.get('html_content', '<p><br></p>')
+            else:
+                try:
+                    content_data = json.loads(q_block.content)
+                    body_html = content_data.get('html_content', '<p><br></p>') if isinstance(content_data, dict) else str(content_data)
+                except json.JSONDecodeError:
+                    body_html = q_block.content
+        
+        return JsonResponse({
+            'success': True,
+            'title': problem.title,
+            'html_content': body_html
+        })
+
+    # ---------------------------------------------------------
+    # 📤 CASE B: SAVE DATA (When clicking "Save Draft")
+    # ---------------------------------------------------------
+    elif request.method == "POST":
+        try:
+            print("\n=== Django Relational Workspace Save Triggered ===")
+            data = json.loads(request.body)
+            
+            problem_id = data.get('problem_id')
+            title = data.get('title')
+            body_html = data.get('body_html')
+            active_entities = data.get('active_entities', []) 
+
+            problem = get_object_or_404(Problem.objects.select_related('branch_location'), id=problem_id)
+            
+            if not verify_workspace_clearance(request.user, problem):
+                return JsonResponse({'success': False, 'error': 'Permission Denied: Access structure blocked.'}, status=403)
+
+            with transaction.atomic():
+                problem.title = title
+                problem.save()
+
+                # Commit layout rich-text to QuestionBlock record
+                structured_json_string = json.dumps({"html_content": body_html})
+                q_block, created = QuestionBlock.objects.get_or_create(
+                    problem=problem,
+                    defaults={'content': structured_json_string}
+                )
+                if not created:
+                    q_block.content = structured_json_string
+                    q_block.save()
+
+                active_entity_ids = []
+                entity_type_cache = {et.name: et for et in EntityType.objects.all()}
+
+                # Iterate through UI payload tokens directly
+                for ent in active_entities:
+                    token_clean = ent.get('token', '').replace('<', '').replace('>', '').strip()
+                    if not token_clean:
+                        continue
+
+                    ent_type_name = ent.get('type')
+                    is_input_field = not ent_type_name.startswith('variable_')
+
+                    type_originator = entity_type_cache.get(ent_type_name)
+                    if not type_originator:
+                        type_originator = EntityType.objects.filter(name=ent_type_name).first()
+
+                    if not type_originator:
+                        return JsonResponse({
+                            'success': False,
+                            'error': f"EntityType constraint validation mismatch: '{ent_type_name}' does not exist."
+                        }, status=400)
+
+                    # Copy all frontend config values directly into the schema dictionary
+                    schema_payload = {
+                        "token": token_clean,
+                        "label": token_clean.capitalize(),
+                        "type": ent_type_name,
+                    }
+                    
+                    for key, val in ent.items():
+                        if key not in ['token', 'type']:
+                            schema_payload[key] = val
+
+                    pts_val = float(ent.get('points', 1.0 if is_input_field else 0.0))
+
+                    # Identify if a row already exists matching this token code within this specific problem scope
+                    entity_seg = None
+                    for candidate in EntitySegment.objects.filter(problem=problem):
+                        c_content = candidate.content
+                        if isinstance(c_content, dict) and c_content.get('token') == token_clean:
+                            entity_seg = candidate
+                            break
+                        elif isinstance(c_content, str) and f'"token": "{token_clean}"' in c_content:
+                            entity_seg = candidate
+                            break
+
+                    if not entity_seg:
+                        entity_seg = EntitySegment.objects.create(
+                            problem=problem,
+                            problem_type_id_originator=type_originator,
+                            default_answer=is_input_field,
+                            points=pts_val,
+                            is_answer_to_multi_choice=True if ent_type_name == 'multiple_choice' else False,
+                            content=json.dumps(schema_payload)
+                        )
+                        print(f"➕ Row created in entity_segment for token: {token_clean} ({ent_type_name})")
+                    else:
+                        entity_seg.problem_type_id_originator = type_originator
+                        entity_seg.default_answer = is_input_field
+                        entity_seg.points = pts_val
+                        entity_seg.is_answer_to_multi_choice = True if ent_type_name == 'multiple_choice' else False
+                        entity_seg.content = json.dumps(schema_payload)
+                        entity_seg.save()
+                        print(f"🔄 Row updated in entity_segment for token: {token_clean} ({ent_type_name})")
+
+                    active_entity_ids.append(entity_seg.id)
+
+                # Clean up stale database entities missing from the frontend sidebar registry list
+                EntitySegment.objects.filter(problem=problem).exclude(id__in=active_entity_ids).delete()
+                    
+            print(f"✅ SUCCESS: Synchronized exactly {len(active_entity_ids)} rows into entity_segment table.")
+            return JsonResponse({'success': True, 'message': 'Master problem configuration changes synchronized cleanly.'})
+
+        except Exception as e:
+            print(f"❌ CRITICAL EXCEPTION THROWN: {str(e)}")
+            return JsonResponse({'success': False, 'error': str(e)}, status=500)
