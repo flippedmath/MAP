@@ -14,6 +14,7 @@ import random
 import json
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
+from django.core.exceptions import ValidationError
 
 
 
@@ -626,3 +627,214 @@ def validate_entity_node_datatype(entity_segment_obj):
                         raise EntityValidationError(f"Syntax Error: '{cell_value}' is not a valid mathematical statement.")
 
     return True
+
+
+class BaseEntity:
+    """
+    Abstract validation base class for processing structural configurations
+    against seeded format patterns stored in the EntityType table.
+    """
+    def __init__(self, data, pattern_blueprint):
+        self.data = data  # The raw input object provided by the user workspace
+        self.pattern_blueprint = pattern_blueprint  # The matched format_pattern dictionary
+        self.cleaned_data = {}
+        self.errors = {}
+
+    def is_valid(self):
+        """
+        Executes structural audit verification against the configuration input object.
+        Returns True if the data conforms to the schema rules, otherwise False.
+        """
+        self.errors = {}
+        self.cleaned_data = {}
+        
+        # 1. Validate that the input structure has an explicitly defined "inputs" block
+        blueprint_inputs = self.pattern_blueprint.get("inputs", {})
+        provided_inputs = self.data.get("inputs", {})
+        
+        if not isinstance(provided_inputs, dict):
+            self.errors["inputs"] = "The provided inputs field must be a structured key-value map."
+            return False
+
+        # 2. Cycle through each required argument specified in our format pattern layout
+        for input_key, field_rules in blueprint_inputs.items():
+            # Extract configuration parameters
+            expected_field_type = field_rules.get("field")
+            has_default = "default" in field_rules
+            default_value = field_rules.get("default")
+            
+            # Catch if the user omitted a required input field parameter
+            if input_key not in provided_inputs:
+                if has_default:
+                    self.cleaned_data[input_key] = default_value
+                    continue
+                else:
+                    self.errors[input_key] = f"Missing required configuration property: '{input_key}'."
+                    continue
+
+            user_value = provided_inputs[input_key]
+            
+            # Run data constraint evaluation types
+            try:
+                self.cleaned_data[input_key] = self.validate_field_type(
+                    input_key, user_value, expected_field_type
+                )
+            except ValidationError as e:
+                self.errors[input_key] = e.message
+
+        return len(self.errors) == 0
+
+    def validate_field_type(self, key, value, field_type):
+        """
+        Type checking matrix matched to format pattern fields.
+        """
+        if field_type == "integer":
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValidationError(f"Value for '{key}' must be a valid integer.")
+            return value
+            
+        elif field_type == "double":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise ValidationError(f"Value for '{key}' must be a numeric decimal or double.")
+            return float(value)
+            
+        elif field_type in ["text", "paragraph"]:
+            if not isinstance(value, str):
+                raise ValidationError(f"Value for '{key}' must be a valid text string.")
+            return value.strip()
+            
+        elif field_type == "dropdown":
+            # Dropdown selections require plain string matching validation
+            if not isinstance(value, str):
+                raise ValidationError(f"Selected option for '{key}' must be a string identifier.")
+            return value
+            
+        # Fallback collection catcher for unhandled complex validation matrix configurations
+        return value
+    
+
+class RandomIntegerEntity(BaseEntity):
+    """
+    Validation engine for the 'randInt' token pattern.
+    """
+    def is_valid(self):
+        # Run standard property-type checks first
+        if not super().is_valid():
+            return False
+            
+        # Post-validation domain checks
+        min_val = self.cleaned_data.get("min")
+        max_val = self.cleaned_data.get("max")
+        step_val = self.cleaned_data.get("step")
+        exclude_raw = self.cleaned_data.get("exclude", "")
+
+        # 1. Rule: Boundaries validation
+        if min_val > max_val:
+            self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
+
+        # 2. Rule: Step range constraint
+        if step_val <= 0:
+            self.errors["step"] = "Step value interval must be a positive integer greater than 0."
+
+        # 3. Rule: Validate and normalize the comma-separated integer array format
+        if exclude_raw:
+            # Strip whitespace and split clean elements
+            elements = [item.strip() for item in exclude_raw.split(",") if item.strip()]
+            parsed_integers = []
+            for item in elements:
+                if not re.match(r"^-?\d+$", item):
+                    self.errors["exclude"] = f"Value '{item}' inside exclude filter is not a valid integer."
+                    break
+                parsed_integers.append(int(item))
+            
+            # Save the clean processed list array back into cleaned_data instead of raw string text
+            if "exclude" not in self.errors:
+                self.cleaned_data["exclude_array"] = parsed_integers
+
+        return len(self.errors) == 0
+
+
+class FormulaEntity(BaseEntity):
+    """
+    Validation engine for the 'formula' token pattern.
+    """
+    def is_valid(self):
+        # Run standard property-type checks first
+        if not super().is_valid():
+            return False
+
+        formula_text = self.cleaned_data.get("formula")
+        solve_method = self.cleaned_data.get("solve method")
+        solve_for_variable = self.cleaned_data.get("solve for _", "").strip()
+        variables_raw = self.cleaned_data.get("variables", "")
+
+        # 1. Rule: Validate cross-field dropdown dependency logic
+        if solve_method == "solve for _" and not solve_for_variable:
+            self.errors["solve for _"] = "You must provide a variable target when the solve method is configured to 'solve for _'."
+
+        # 2. Rule: Validate variables array mapping layout if provided
+        if variables_raw:
+            # Clean comma or space-separated variable strings
+            var_list = [v.strip() for v in re.split(r"[\s,]+", variables_raw) if v.strip()]
+            self.cleaned_data["variables_array"] = var_list
+
+            # 3. Rule: Ensure target solve variable matches declared variable options
+            if solve_method == "solve for _" and solve_for_variable not in var_list:
+                self.errors["solve for _"] = f"Target variable '{solve_for_variable}' must exist inside the specified variables index list: {var_list}."
+
+        return len(self.errors) == 0
+
+
+class MatrixEntity(BaseEntity):
+    """
+    Validation engine for the 'matrix' or 'matrixAnswer' token patterns.
+    """
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        rows = self.cleaned_data.get("rows")
+        cols = self.cleaned_data.get("cols")
+        cells = self.data.get("inputs", {}).get("cells")  # Grab raw inputs array reference
+
+        if not isinstance(cells, list):
+            self.errors["cells"] = "Cells property must be a multi-dimensional array matrix layout."
+            return False
+
+        # 1. Rule: Row length validation
+        if len(cells) != rows:
+            self.errors["cells"] = f"Row multi-array count balance error. Expected {rows} rows, received {len(cells)}."
+            return False
+
+        # 2. Rule: Column elements uniform length validation matrices verification
+        for index, row_item in enumerate(cells):
+            if not isinstance(row_item, list):
+                self.errors["cells"] = f"Row at matrix index {index} must be a valid list."
+                return False
+            if len(row_item) != cols:
+                self.errors["cells"] = f"Column elements mismatch at row index {index}. Expected {cols} columns, received {len(row_item)}."
+                return False
+
+        # If everything balances out, clean up elements structure copies safely
+        self.cleaned_data["cells"] = cells
+        return len(self.errors) == 0
+    
+
+def get_entity_validator(token_string, data_payload, pattern_blueprint):
+    """
+    Factory helper utility that returns the matching validation engine sub-class
+    configured to handle target structural verification logic mappings.
+    """
+    # Map token names to dedicated sub-classes
+    validator_mapping = {
+        "randInt": RandomIntegerEntity,
+        "formula": FormulaEntity,
+        "matrix": MatrixEntity,
+        "matrixAnswer": MatrixEntity,
+    }
+    
+    # Fallback to base configuration validator if a custom token model isn't written yet
+    validator_class = validator_mapping.get(token_string, BaseEntity)
+    return validator_class(data_payload, pattern_blueprint)
+
+
