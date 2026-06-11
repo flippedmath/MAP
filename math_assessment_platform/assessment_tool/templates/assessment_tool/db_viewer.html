@@ -53,8 +53,15 @@
             {% for row in data %}
                 <tr>
                     {% for header in headers %}
-                        <!-- Use dynamic attribute fetching -->
-                        <td>{{ row|get_attr:header }}</td>
+                        <td style="vertical-align: top;">
+                            {% with val=row|get_attr:header %}
+                                {% if header == 'format_pattern' or header == 'insert_entity_pattern' or header == 'entity_name_list' %}
+                                    <pre style="margin: 0; font-family: monospace; font-size: 0.8rem; white-space: pre-wrap; max-height: 220px; overflow-y: auto; background: #f8fafc; color: #0f172a; padding: 6px; border: 1px solid #e2e8f0; border-radius: 4px; line-height: 1.2;">{{ val }}</pre>
+                                {% else %}
+                                    {{ val }}
+                                {% endif %}
+                            {% endwith %}
+                        </td>
                     {% endfor %}
                 </tr>
             {% empty %}

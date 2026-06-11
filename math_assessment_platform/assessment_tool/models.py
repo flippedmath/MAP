@@ -563,7 +563,7 @@ class EntityType(models.Model):
     name = models.CharField(unique=True, max_length=255)
     format_pattern = models.TextField(db_comment="This will be an html section with the <<childEntity>> inside the string in various places. There will also be a <<addOptionButton>> if applicable, which will add the 'insert_entity_pattern' into the designated <<patternInsert>> location. I used <<element>> as an example, but the json actually stores a json array list")  # This field type is a guess.
     insert_entity_pattern = models.TextField(db_comment="Uses exact strings existing in the 'problem_type' name columns. If I don't use exact names, it won't work right.")  # This field type is a guess.
-    entity_name_list = models.TextField()  # This field type is a guess.
+    entity_name_list = models.TextField() 
 
     class Meta:
         managed = False
