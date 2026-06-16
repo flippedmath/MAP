@@ -717,51 +717,54 @@ def rename_item(request):
         if not new_name:
             return JsonResponse({'error': 'Name cannot be blank.'}, status=400)
 
-        # Ensure field names match your actual model definitions
+        # Map client identifiers to core model definitions
         model_map = {
             'folder': (BranchGroup, 'name'),
             'course': (Course, 'name'), 
             'assessment': (Assessment, 'name'),
             'problem': (Problem, 'title'),
             'assessment_selection': (AssessmentQuestionGroup, 'name'),
-            # can't rename the custom_question_group generated name from get_unique_name
         }
 
         if item_type not in model_map:
             return JsonResponse({'error': 'Unknown item type.'}, status=400)
 
         model_class, field_name = model_map[item_type]
-        is_it_support = (request.user.user_type == 'IT_Support')
         
+        # --- COMPONENT FETCH AND SECURITY CLEARANCE ---
         if item_type in ['folder', 'course', 'assessment']:
-            if is_it_support:
-                obj = get_object_or_404(BranchGroup, id=item_id)
-            else:
-                obj = get_object_or_404(BranchGroup, id=item_id, owner=request.user)
+            obj = get_object_or_404(BranchGroup, id=item_id)
+            
+            # Since verify_workspace_clearance expects a Problem instance, 
+            # we handle Folder/Course/Assessment node ownership directly or fallback on IT_Support
+            if request.user.user_type != 'IT_Support' and obj.owner != request.user:
+                return JsonResponse({'error': 'You do not have permission to rename this system element.'}, status=403)
+                
             item_full_path = obj.get_parent_path() + obj.name + "/"
             parent = obj.parent
         else:
-            # Independent items (problems, selection groups) resolve normally
-            if is_it_support:
-                obj = get_object_or_404(model_class, id=item_id)
+            # 🚀 UPDATED: Fetch independent items and defer to your global clearance engine
+            # The 'obj' is a BranchGroup item, not the 'problem' item
+            print(f"model_class: {model_class}")
+            obj = get_object_or_404(model_class, id=item_id)
+            
+            if item_type == 'problem':
+                # Pass your problem record straight to your specialized security matrix mapping routine
+                if not verify_workspace_clearance(request.user, obj):
+                    return JsonResponse({'error': 'You do not have workspace clearance to rename this problem.'}, status=403)
             else:
-                obj = get_object_or_404(model_class, id=item_id, owner=request.user)
+                # Fallback security check for other independent items (like assessment_selection groups)
+                if request.user.user_type != 'IT_Support' and obj.branch_location and obj.branch_location.owner != request.user:
+                    return JsonResponse({'error': 'You do not have permission to rename this resource.'}, status=403)
+
             item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
             parent = obj.branch_location
 
-        # Check to make sure the 'new_name' doesn't contain any special characters 
-        #    other than space (no '_' and '()' especially since I am going to hard code 
-        #    those in for special circumstances later)
+        # Check to make sure the 'new_name' doesn't contain unallowed structures via business rules
         bg_context_node = obj if item_type == 'folder' else parent
         new_name, error = get_valid_unique_name(BranchGroup, bg_context_node.parent if item_type == 'folder' else bg_context_node, new_name)
         if error:
             return JsonResponse({'error': error}, status=400)
-
-        # # Path Protection Logic
-        # if item_type == 'folder':
-        #     item_full_path = obj.get_parent_path() + obj.name + "/"
-        # else:
-        #     item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
 
         username = request.user.username
         protected_roots = [
@@ -777,21 +780,11 @@ def rename_item(request):
         if item_full_path in protected_roots:
             return JsonResponse({'error': 'Cannot rename system folders.'}, status=403)
 
-        # Allow IT Support or owners to change names inside the Courses/ tree via this specific grid
         if item_full_path.startswith(f"/Users/{username}_root/Courses/") and not request.resolver_match.view_name == 'course_list':
-            # Note: If you want to allow renames from the courses page but block general Explorer renames,
-            # we can skip this check if request path hits your course list, or keep it open for IT Support.
-            if not is_it_support and item_type == 'folder' and obj.name in ['Courses', 'Trash']:
+            if request.user.user_type != 'IT_Support' and item_type == 'folder' and obj.name in ['Courses', 'Trash']:
                 return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
 
-        # if item_full_path.startswith(f"/Users/{username}_root/Courses/"):
-        #     return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
-
-        # Collision Check: Find the Parent/Location
-        # We need to check siblings (other items with the same parent)
-        # parent = getattr(obj, 'parent', None) or getattr(obj, 'branch_location', None)
-        
-        # Automatic Suffix Incrementer Logic
+        # Automatic Suffix Incrementor Collision Management Logic
         base_name = new_name
         counter = 1
         
@@ -799,7 +792,6 @@ def rename_item(request):
             duplicate_query = {field_name: new_name}
             if parent:
                 if item_type in ['folder', 'course', 'assessment']:
-                    # Sibling collision check against the folder structure table
                     duplicate_exists = BranchGroup.objects.filter(parent=parent, name=new_name).exclude(id=obj.id if item_type == 'folder' else obj.id).exists()
                 else:
                     duplicate_exists = model_class.objects.filter(branch_location=parent, **duplicate_query).exclude(id=obj.id).exists()
@@ -812,14 +804,12 @@ def rename_item(request):
             new_name = f"{base_name} ({counter})"
             counter += 1
 
-        # --- STEP 4: EXECUTE SYNCHRONIZED DATABASE ATOMIC WRITE ---
+        # --- EXECUTE SYNCHRONIZED DATABASE ATOMIC WRITE ---
         with transaction.atomic():
             if item_type in ['course', 'assessment']:
-                # 'obj' is the BranchGroup folder. Rename the folder container:
                 obj.name = new_name
                 obj.save()
 
-                # Find and rename the connected core payload entity (e.g., Course row)
                 payload_relation_str = 'course' if item_type == 'course' else 'assessment'
                 if hasattr(obj, payload_relation_str):
                     payload_obj = getattr(obj, payload_relation_str)
@@ -830,25 +820,21 @@ def rename_item(request):
                 obj.name = new_name
                 obj.save()
                 
-                # If a regular folder maps to a course or assessment payload, sync it too
                 if hasattr(obj, 'course'):
                     obj.course.name = new_name
                     obj.course.save()
                 elif hasattr(obj, 'assessment'):
                     obj.assessment.name = new_name
                     obj.assessment.save()
-            # 🎯 NEW: SYNCHRONIZED WRITE FOR PROBLEMS
+
             elif item_type == 'problem':
-                # 'obj' is the Problem instance. Update its title field:
-                setattr(obj, field_name, new_name)  # sets obj.title = new_name
+                setattr(obj, field_name, new_name)  # updates obj.title
                 obj.save()
 
-                # Safely reach out and sync the companion structural BranchGroup file node name
                 if obj.branch_location:
                     obj.branch_location.name = new_name
                     obj.branch_location.save()
             else:
-                # Fallback for independent metadata types (problems, selections)
                 setattr(obj, field_name, new_name)
                 obj.save()
 
