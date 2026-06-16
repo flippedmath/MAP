@@ -39,7 +39,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 import re
 from django.template.loader import render_to_string
-
+import traceback
 
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
@@ -1471,7 +1471,6 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
         }, status=201)
 
     except Exception as e:
-        import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': f"Operation failed: {str(e)}"}, status=400)
 
@@ -1494,7 +1493,11 @@ def add_cqd_to_aqg_ajax(request):
         
         # Calculate sequential ordering positions inside the folder layout tree branch
         last_child = BranchGroup.objects.filter(parent=parent_directory).order_by('order').last()
-        prev_order = last_child.order if last_child else " "
+        
+        # 🚀 FIX: Fallback to an empty string instead of a whitespace character " "
+        # (Alternatively, if your midpoint logic prefers starting from the beginning of the alphabet, use "a")
+        prev_order = last_child.order if last_child else "" 
+        
         new_order = calculate_midpoint_order(prev_order, "z")
         
         # Generation identity config fields
@@ -1506,7 +1509,7 @@ def add_cqd_to_aqg_ajax(request):
                 owner=request.user,
                 name=final_item_name,
                 parent=parent_directory,
-                folder_type='cqd',  # Ties into your choices Enum layout parameter matrix
+                folder_type='cqd',  
                 order=new_order,
                 creation_date=timezone.now(),
                 modification_date=timezone.now()
@@ -1515,14 +1518,14 @@ def add_cqd_to_aqg_ajax(request):
             # 2. Allocate the concrete CustomQuestionDistribution database payload row layer
             new_cqd_item = CustomQuestionDistribution.objects.create(
                 assigned_folder=cqd_branch_node,
-                suggested_count=1  # Baseline default structural configuration initialization choice
+                suggested_count=1  
             )
             
             # Set a temporary query attribute variable hook to reflect 0 initialization sub-pairs safely inside get_unique_name
             new_cqd_item.num_pairs = 0
 
             cqd_branch_node.name = new_cqd_item.get_unique_name()
-            cqd_branch_node.save(update_fields=['name', 'modification_date']) # Optimization: save only the target tracking fields
+            cqd_branch_node.save(update_fields=['name', 'modification_date']) 
         
         # 3. Pre-compile the standalone component template context snapshot layout fragment string snippet
         cqd_html = render_to_string(

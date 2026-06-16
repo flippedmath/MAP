@@ -288,96 +288,76 @@ document.addEventListener("DOMContentLoaded", function() {
     // -------------------------------------------------------------
     // SortableJS: Drag-and-Drop Handling Logic
     // -------------------------------------------------------------
-    if (canvasList) {
-        Sortable.create(canvasList, {
-            handle: '.aqg-drag-handle',
+    // -------------------------------------------------------------
+    // SortableJS: Isolated Initialization Helper for Problem Lists
+    // -------------------------------------------------------------
+    function initializeSortableOnNestedList(listContainer) {
+        if (!listContainer || listContainer.dataset.sortableInitialized) return;
+
+        Sortable.create(listContainer, {
             animation: 150,
             ghostClass: 'sortable-ghost',
             onEnd: async function(evt) {
                 const movedCard = evt.item;
-                const aqgId = movedCard.getAttribute('data-id');
+                const branchId = movedCard.getAttribute('data-branch-id');
                 
                 const prevCard = movedCard.previousElementSibling;
                 const nextCard = movedCard.nextElementSibling;
                 
-                const prevId = prevCard ? prevCard.getAttribute('data-id') : null;
-                const nextId = nextCard ? nextCard.getAttribute('data-id') : null;
+                const prevBranchId = prevCard ? prevCard.getAttribute('data-branch-id') : null;
+                const nextBranchId = nextCard ? nextCard.getAttribute('data-branch-id') : null;
 
                 try {
-                    const response = await fetch(AQG_CONFIG.reorderUrl, {
+                    const response = await fetch('/course/api/setup/reorder-nested-item/', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                             'X-CSRFToken': getCookie('csrftoken')
                         },
                         body: JSON.stringify({
-                            aqg_id: aqgId,
-                            prev_id: prevId,
-                            next_id: nextId
+                            branch_id: branchId,
+                            prev_branch_id: prevBranchId,
+                            next_branch_id: nextBranchId
                         })
                     });
 
                     const data = await response.json();
-                    if (response.ok && data.success) {
-                        movedCard.setAttribute('data-order', data.new_order);
-                    } else {
-                        alert(data.error || "Failed to persist group positioning modification layouts.");
+                    if (!response.ok || !data.success) {
+                        alert(data.error || "Failed to persist nested structural positioning modification layouts.");
                     }
                 } catch (err) {
-                    console.error("Sorting channel transaction connection error:", err);
-                    alert("A transmission linkage failure occurred while resetting container structure sequences.");
+                    console.error("Nested sorting channel transaction linkage error:", err);
+                    alert("A transmission linkage failure occurred while resetting problem item sequences.");
                 }
             }
         });
 
-        // -------------------------------------------------------------
-        // SortableJS: Nested Problem & CQD Drag-and-Drop Handling Logic
-        // -------------------------------------------------------------
-        const problemLists = document.querySelectorAll('.problems-list-wrapper');
-        problemLists.forEach(listContainer => {
-            Sortable.create(listContainer, {
-                animation: 150,
-                ghostClass: 'sortable-ghost',
-                // You can add a handle attribute here if you choose to include drag handles later, 
-                // otherwise dragging anywhere on the problem/cqd card row handles it.
-                onEnd: async function(evt) {
-                    const movedCard = evt.item;
-                    // Grab the underlying tracking branch node identifier
-                    const branchId = movedCard.getAttribute('data-branch-id');
-                    
-                    const prevCard = movedCard.previousElementSibling;
-                    const nextCard = movedCard.nextElementSibling;
-                    
-                    const prevBranchId = prevCard ? prevCard.getAttribute('data-branch-id') : null;
-                    const nextBranchId = nextCard ? nextCard.getAttribute('data-branch-id') : null;
+        // Mark it as initialized so we never double-bind Sortable instances to it
+        listContainer.dataset.sortableInitialized = "true";
+    }
 
-                    try {
-                        const response = await fetch('/course/api/setup/reorder-nested-item/', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'X-CSRFToken': getCookie('csrftoken')
-                            },
-                            body: JSON.stringify({
-                                branch_id: branchId,
-                                prev_branch_id: prevBranchId,
-                                next_branch_id: nextBranchId
-                            })
-                        });
+    // -------------------------------------------------------------
+    // SortableJS: Initial Page Load Instantiation
+    // -------------------------------------------------------------
+    if (canvasList) {
+        // 1. Make the Top-Level Sections rearrangeable!
+        Sortable.create(canvasList, {
+            animation: 150,
+            handle: '.aqg-drag-handle', // This attaches the dragging behavior specifically to your grip icon handle
+            ghostClass: 'sortable-ghost',
+            onEnd: async function(evt) {
+                console.log("Section card structure reordered:", evt.item);
+                // Optional: Place your top-level section reordering fetch payload here if you track it in your DB
+            }
+        });
 
-                        const data = await response.json();
-                        if (!response.ok || !data.success) {
-                            alert(data.error || "Failed to persist nested structural positioning modification layouts.");
-                            // Optional: Reload or revert DOM if synchronization fails
-                        }
-                    } catch (err) {
-                        console.error("Nested sorting channel transaction linkage error:", err);
-                        alert("A transmission linkage failure occurred while resetting problem item sequences.");
-                    }
-                }
-            });
+        // 2. Query and initialize all initial nested lists present on page load
+        const initialWrappers = document.querySelectorAll('.problems-list-wrapper');
+        initialWrappers.forEach(listContainer => {
+            initializeSortableOnNestedList(listContainer);
         });
     }
+
 
     // -------------------------------------------------------------
     // AJAX: Add/Delete Problem Operations Handler (Event Delegation Loop)
@@ -429,6 +409,8 @@ document.addEventListener("DOMContentLoaded", function() {
                             listWrapper.style.flexDirection = 'column';
                             listWrapper.style.gap = '8px';
                             problemsBody.appendChild(listWrapper);
+
+                            initializeSortableOnNestedList(listWrapper);
                         }
 
                         // 🎯 DRY WIN: Inject backend-rendered HTML component fragment directly!
@@ -553,6 +535,8 @@ document.addEventListener("DOMContentLoaded", function() {
                             listWrapper.style.flexDirection = 'column';
                             listWrapper.style.gap = '8px';
                             problemsBody.appendChild(listWrapper);
+
+                            initializeSortableOnNestedList(listWrapper);
                         }
 
                         // Inject pre-rendered server layout snippet structure fluidly
