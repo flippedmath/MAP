@@ -9,7 +9,7 @@ from .models import (
     QuestionBlock, EntitySegment,
     EntityType, EntityUserInput
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator
 import json
 from django.http import JsonResponse
 
@@ -39,6 +39,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 import re
 from django.template.loader import render_to_string
+
 
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
@@ -1842,233 +1843,252 @@ def verify_workspace_clearance(user, problem):
     return False
 
 
-def get_problem_workspace_data(request, problem_id):
+
+
+
+
+@require_POST
+@user_passes_test(lambda u: u.is_superuser or u.is_staff, login_url='/dashboard/')
+def save_problem_workspace(request, problem_id):
     """
-    API endpoint that returns the full structural JSON definitions 
-    of a problem's entity segments and content canvas for the editing workspace.
+    Unified, transactional endpoint that runs teacher tokens through verification matrices,
+    commits verified variables to entity_segment rows, and updates the text canvas in QuestionBlock.
     """
-    problem = get_object_or_404(Problem.objects.select_related('branch_location'), id=problem_id)
-    
-    # Secure validation fence check
+    try:
+        payload = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "error": "Malformed JSON payload specification request."}, status=400)
+
+    try:
+        problem = Problem.objects.get(pk=problem_id)
+    except Problem.DoesNotExist:
+        return JsonResponse({"success": False, "error": f"Problem reference ID {problem_id} not found."}, status=404)
+
+    # 🔒 SECURITY FENCE
     if not verify_workspace_clearance(request.user, problem):
         return JsonResponse({'success': False, 'error': 'Permission Denied: Insufficient authorization clearing.'}, status=403)
-        
-    # Fetch all child entity segments belonging to this problem
-    segments = EntitySegment.objects.filter(problem=problem).select_related('problem_type_id_originator')
+
+    user_inputs = payload.get("inputs", [])
+    body_html = payload.get("body_html", "").strip() # Extract raw rich-text markup sent down by Quill
     
-    entities_payload = []
-    for segment in segments:
-        # Defensively check if content is a native dict/list already (PostgreSQL JSON/JSONB auto-parsing)
-        if isinstance(segment.content, (dict, list)):
-            parsed_content = segment.content
-        else:
+    if not isinstance(user_inputs, list):
+        return JsonResponse({"success": False, "error": "The workspace inputs block layout must be an array list structure."}, status=400)
+
+    # Cache format patterns locally for this loop session to minimize database load
+    cached_patterns = {}
+
+    # 🎯 STEP A: VALIDATION LOOP (Before touch transactions)
+    for index, entity_data in enumerate(user_inputs):
+        # Use the clean base token for database blueprint schema matching
+        token_id = entity_data.get("token") 
+        if not token_id:
+            return JsonResponse({"success": False, "error": f"Missing 'token' identity string at index [{index}]."}, status=400)
+
+        if token_id not in cached_patterns:
             try:
-                parsed_content = json.loads(segment.content) if segment.content else {}
-            except (json.JSONDecodeError, TypeError):
-                parsed_content = {}
+                entity_type_record = EntityType.objects.get(name=token_id)
+                pattern_data = entity_type_record.format_pattern
+                if isinstance(pattern_data, str):
+                    pattern_data = json.loads(pattern_data)
+                cached_patterns[token_id] = pattern_data
+            except EntityType.DoesNotExist:
+                return JsonResponse({"success": False, "error": f"Token configuration type '{token_id}' is invalid."}, status=400)
 
-        # Extract type classification accurately via the entity_type name definition column
-        entity_type_string = "variable_numeric"
-        if segment.problem_type_id_originator:
-            entity_type_string = segment.problem_type_id_originator.name
-        elif isinstance(parsed_content, dict) and "type" in parsed_content:
-            entity_type_string = parsed_content["type"]
+        blueprint = cached_patterns[token_id]
+        validator = get_entity_validator(token_id, entity_data, blueprint)
 
-        token_name = parsed_content.get("token") if isinstance(parsed_content, dict) else f"var_{segment.id}"
-        if not token_name:
-            token_name = f"var_{segment.id}"
-            
-        label_name = parsed_content.get("label", token_name.capitalize())
+        if not validator.is_valid():
+            error_details = ", ".join([f"[{k}]: {v}" for k, v in validator.errors.items()])
+            friendly_name = blueprint.get("name", token_id)
+            return JsonResponse({
+                "success": False,
+                "error": f"Validation failed for '{friendly_name}' component: {error_details}"
+            }, status=422)
 
-        # Build clean structural dict item packaging all properties stored in the schema
-        entity_item = {
-            "id": segment.id,
-            "type": entity_type_string,
-            "token": token_name,
-            "label": label_name,
-            "points": float(segment.points) if segment.points else 0.0,
-            "default_answer": segment.default_answer,
-            "is_answer_to_multi_choice": segment.is_answer_to_multi_choice,
-        }
-
-        # Keep all supplemental variable keys flat so the JavaScript scraper reads them instantly
-        if isinstance(parsed_content, dict):
-            for key, val in parsed_content.items():
-                if key not in ["id", "token", "label", "type"]:
-                    entity_item[key] = val
-
-        entities_payload.append(entity_item)
+    # 🎯 STEP B: ATOMIC DATABASE SAVE TRANSACTION
+    with transaction.atomic():
         
-    # Fetch the visual text/html question layout content blocks
-    q_blocks = QuestionBlock.objects.filter(problem=problem).order_by('id')
-    
-    html_pieces = []
-    for block in q_blocks:
-        if not block.content:
-            continue
+        # 1. Update the parent Problem parameters if altered
+        problem.title = payload.get("title", problem.title)
+        problem.save()
+
+        # 2. Synchronize Canvas Text directly to the Related QuestionBlock row entry
+        structured_json_string = json.dumps({"html_content": body_html})
+        q_block, created = QuestionBlock.objects.get_or_create(
+            problem=problem,
+            defaults={'content': structured_json_string}
+        )
+        if not created:
+            q_block.content = structured_json_string
+            q_block.save()
+
+        # 3. Clear previous variable configurations for a fresh workspace compile write
+        EntitySegment.objects.filter(problem=problem).delete()
+
+        # 4. Commit verified segments safely
+        for entity_data in user_inputs:
+            token_id = entity_data.get("token")
+            sequence_token = entity_data.get("sequence_token", token_id) # e.g., "randInt1"
+            blueprint = cached_patterns[token_id]
             
-        if isinstance(block.content, dict):
-            html_pieces.append(block.content.get('html_content', ''))
-        else:
-            try:
-                parsed_block = json.loads(block.content)
-                if isinstance(parsed_block, dict):
-                    html_pieces.append(parsed_block.get('html_content', ''))
+            provided_inputs = entity_data.get("inputs", {})
+            points_value = provided_inputs.get("points") or blueprint.get("points", {}).get("default", 0.0)
+            
+            # Combine the user parameters and append display configurations to content payload JSON
+            content_payload = dict(provided_inputs)
+            content_payload["answer_field"] = blueprint.get("answer_field", False)
+            content_payload["sequence_token"] = sequence_token 
+
+            blueprint_default = blueprint.get("default_answer")
+            if blueprint_default in [True, False]:
+                default_answer_fallback = blueprint_default
+            else:
+                # If it's a string, try parsing it, or fall back to False to satisfy NOT NULL safely
+                if str(blueprint_default).lower() in ['true', '1', 'yes']:
+                    default_answer_fallback = True
                 else:
-                    html_pieces.append(str(parsed_block))
-            except (json.JSONDecodeError, TypeError):
-                html_pieces.append(block.content)
+                    default_answer_fallback = False
 
-    compiled_html_content = "".join(html_pieces) if html_pieces else '<p><br></p>'
+            EntitySegment.objects.create(
+                problem=problem,
+                problem_type_id_originator=EntityType.objects.get(name=token_id),
+                content=json.dumps(content_payload),
+                points=float(points_value) if points_value is not None else 0.0,
+                default_answer=str(default_answer_fallback),
+                parent_entity=None,
+                is_answer_to_multi_choice=None,
+                space_allocation=None
+            )
+            
+            # TODO: wait till 'multipleChoiceAnswer' token is being built before implementing this
 
     return JsonResponse({
         "success": True,
-        "problem_id": problem.id,
-        "title": problem.title,
-        "html_content": compiled_html_content, 
-        "entities": entities_payload           
-    }, status=200)
+        "message": f"Workspace structure compiled successfully. Saved {len(user_inputs)} components and canvas."
+    })
 
 
-@require_http_methods(["GET", "POST"])
-def save_problem_workspace_ajax(request, course_id):
-    # ---------------------------------------------------------
-    # 📥 CASE A: FETCH DATA (When opening the overlay)
-    # ---------------------------------------------------------
-    if request.method == "GET":
-        problem_id = request.GET.get('problem_id')
-        if not problem_id:
-            return JsonResponse({'success': False, 'error': 'Missing problem identity.'}, status=400)
+
+@user_passes_test(lambda u: u.is_superuser or u.is_staff, login_url='/dashboard/')
+@login_required
+def problem_workspace_editor(request, problem_id):
+    try:
+        problem = Problem.objects.get(pk=problem_id)
+    except Problem.DoesNotExist:
+        return JsonResponse({"success": False, "error": "Problem not found"}, status=404)
+    
+    # 1. Fetch available EntityType options
+    all_types = EntityType.objects.all()
+    dynamic_variables_options = []
+    answer_fields_options = []
+    
+    for entity_type in all_types:
+        try:
+            pattern = entity_type.format_pattern
+            if isinstance(pattern, str):
+                pattern = json.loads(pattern)
+            name_list = entity_type.entity_name_list
+            if isinstance(name_list, str):
+                name_list = json.loads(name_list)
+        except (json.JSONDecodeError, TypeError):
+            continue
             
-        problem = get_object_or_404(Problem.objects.select_related('branch_location'), id=problem_id)
-        
-        if not verify_workspace_clearance(request.user, problem):
-            return JsonResponse({'success': False, 'error': 'Permission Denied: Insufficient permissions.'}, status=403)
+        if pattern.get("disabled") is True:
+            continue
             
-        q_block = QuestionBlock.objects.filter(problem=problem).first()
-        body_html = '<p><br></p>'
+        token_info = {
+            "token": entity_type.name,
+            "name": pattern.get("name", entity_type.name),
+            "note": pattern.get("note", "")
+        }
         
-        if q_block and q_block.content:
-            if isinstance(q_block.content, dict):
-                body_html = q_block.content.get('html_content', '<p><br></p>')
-            else:
-                try:
-                    content_data = json.loads(q_block.content)
-                    body_html = content_data.get('html_content', '<p><br></p>') if isinstance(content_data, dict) else str(content_data)
-                except json.JSONDecodeError:
-                    body_html = q_block.content
+        if "Dynamic Variables" in name_list:
+            dynamic_variables_options.append(token_info)
+        elif "Answer Input Fields" in name_list:
+            answer_fields_options.append(token_info)
+
+    # 2. Load existing segments for *this* specific problem
+    saved_segments_records = EntitySegment.objects.filter(problem=problem).order_by('id')
+    loaded_segments = []
+    
+    for segment in saved_segments_records:
+        # 🎯 FIX: Defensively verify if content is already a dictionary (Django JSONField auto-decode) 
+        # or if it needs a string fallback conversion pass.
+        if isinstance(segment.content, dict):
+            content_data = segment.content
+        elif isinstance(segment.content, str) and segment.content.strip():
+            try:
+                content_data = json.loads(segment.content)
+            except json.JSONDecodeError:
+                content_data = {}
+        else:
+            content_data = {}
+
+        # Strip internal schema parameters out of user input values before sending to the card form layouts
+        clean_inputs = dict(content_data)
+        clean_inputs.pop("answer_field", None)
         
-        return JsonResponse({
-            'success': True,
-            'title': problem.title,
-            'html_content': body_html
+        # Pull down the sequence tracking token string if it exists (e.g. "randInt2")
+        sequence_token = clean_inputs.pop("sequence_token", None) 
+
+        # 🚀 NEW: Rehydrate the validator class to calculate simulated preview values dynamically
+        token_name = segment.problem_type_id_originator.name
+        
+        # Parse the archetype blueprint rules cleanly
+        blueprint_pattern = segment.problem_type_id_originator.format_pattern
+        if isinstance(blueprint_pattern, str):
+            try:
+                blueprint_pattern = json.loads(blueprint_pattern)
+            except json.JSONDecodeError:
+                blueprint_pattern = {}
+
+        # Rebuild payload container object matching validator structure interface rules
+        rebuilt_payload = {"token": token_name, "inputs": content_data}
+        validator = get_entity_validator(token_name, rebuilt_payload, blueprint_pattern)
+        
+        simulated_value = "???"
+        if validator.is_valid():
+            try:
+                simulated_value = validator.evaluate_output()
+            except Exception:
+                simulated_value = "⚠️ Error"
+
+        loaded_segments.append({
+            "id": segment.id,
+            "token": token_name, # Keeps database archetype clear ("randInt")
+            "sequence_token": sequence_token or token_name, # Falls back gracefully if old row
+            "points": segment.points,
+            "inputs": clean_inputs,
+            "simulated_value": simulated_value # 🚀 Transmit calculated variable value to frontend
         })
 
-    # ---------------------------------------------------------
-    # 📤 CASE B: SAVE DATA (When clicking "Save Draft")
-    # ---------------------------------------------------------
-    elif request.method == "POST":
-        try:
-            print("\n=== Django Relational Workspace Save Triggered ===")
-            data = json.loads(request.body)
-            
-            problem_id = data.get('problem_id')
-            title = data.get('title')
-            body_html = data.get('body_html')
-            active_entities = data.get('active_entities', []) 
+    # 3. Safely pull Quill rich text from QuestionBlock
+    q_block = QuestionBlock.objects.filter(problem=problem).first()
+    body_html = "<p><br></p>"
+    if q_block and q_block.content:
+        # 🎯 FIX: Defensively verify if content is already a dictionary or an unparsed string
+        if isinstance(q_block.content, dict):
+            content_data = q_block.content
+        elif isinstance(q_block.content, str) and q_block.content.strip():
+            try:
+                content_data = json.loads(q_block.content)
+            except json.JSONDecodeError:
+                content_data = {}
+        else:
+            content_data = {}
 
-            problem = get_object_or_404(Problem.objects.select_related('branch_location'), id=problem_id)
-            
-            if not verify_workspace_clearance(request.user, problem):
-                return JsonResponse({'success': False, 'error': 'Permission Denied: Access structure blocked.'}, status=403)
+        # Safely extract the HTML content markup or fallback
+        if isinstance(content_data, dict):
+            body_html = content_data.get("html_content", "<p><br></p>")
+        else:
+            body_html = q_block.content
 
-            with transaction.atomic():
-                problem.title = title
-                problem.save()
-
-                # Commit layout rich-text to QuestionBlock record
-                structured_json_string = json.dumps({"html_content": body_html})
-                q_block, created = QuestionBlock.objects.get_or_create(
-                    problem=problem,
-                    defaults={'content': structured_json_string}
-                )
-                if not created:
-                    q_block.content = structured_json_string
-                    q_block.save()
-
-                active_entity_ids = []
-                entity_type_cache = {et.name: et for et in EntityType.objects.all()}
-
-                # Iterate through UI payload tokens directly
-                for ent in active_entities:
-                    token_clean = ent.get('token', '').replace('<', '').replace('>', '').strip()
-                    if not token_clean:
-                        continue
-
-                    ent_type_name = ent.get('type')
-                    is_input_field = not ent_type_name.startswith('variable_')
-
-                    type_originator = entity_type_cache.get(ent_type_name)
-                    if not type_originator:
-                        type_originator = EntityType.objects.filter(name=ent_type_name).first()
-
-                    if not type_originator:
-                        return JsonResponse({
-                            'success': False,
-                            'error': f"EntityType constraint validation mismatch: '{ent_type_name}' does not exist."
-                        }, status=400)
-
-                    # Copy all frontend config values directly into the schema dictionary
-                    schema_payload = {
-                        "token": token_clean,
-                        "label": token_clean.capitalize(),
-                        "type": ent_type_name,
-                    }
-                    
-                    for key, val in ent.items():
-                        if key not in ['token', 'type']:
-                            schema_payload[key] = val
-
-                    pts_val = float(ent.get('points', 1.0 if is_input_field else 0.0))
-
-                    # Identify if a row already exists matching this token code within this specific problem scope
-                    entity_seg = None
-                    for candidate in EntitySegment.objects.filter(problem=problem):
-                        c_content = candidate.content
-                        if isinstance(c_content, dict) and c_content.get('token') == token_clean:
-                            entity_seg = candidate
-                            break
-                        elif isinstance(c_content, str) and f'"token": "{token_clean}"' in c_content:
-                            entity_seg = candidate
-                            break
-
-                    if not entity_seg:
-                        entity_seg = EntitySegment.objects.create(
-                            problem=problem,
-                            problem_type_id_originator=type_originator,
-                            default_answer=is_input_field,
-                            points=pts_val,
-                            is_answer_to_multi_choice=True if ent_type_name == 'multiple_choice' else False,
-                            content=json.dumps(schema_payload)
-                        )
-                        print(f"➕ Row created in entity_segment for token: {token_clean} ({ent_type_name})")
-                    else:
-                        entity_seg.problem_type_id_originator = type_originator
-                        entity_seg.default_answer = is_input_field
-                        entity_seg.points = pts_val
-                        entity_seg.is_answer_to_multi_choice = True if ent_type_name == 'multiple_choice' else False
-                        entity_seg.content = json.dumps(schema_payload)
-                        entity_seg.save()
-                        print(f"🔄 Row updated in entity_segment for token: {token_clean} ({ent_type_name})")
-
-                    active_entity_ids.append(entity_seg.id)
-
-                # Clean up stale database entities missing from the frontend sidebar registry list
-                EntitySegment.objects.filter(problem=problem).exclude(id__in=active_entity_ids).delete()
-                    
-            print(f"✅ SUCCESS: Synchronized exactly {len(active_entity_ids)} rows into entity_segment table.")
-            return JsonResponse({'success': True, 'message': 'Master problem configuration changes synchronized cleanly.'})
-
-        except Exception as e:
-            print(f"❌ CRITICAL EXCEPTION THROWN: {str(e)}")
-            return JsonResponse({'success': False, 'error': str(e)}, status=500)
+    # 🎯 Return EVERYTHING as a fast, clean AJAX payload response
+    return JsonResponse({
+        "success": True,
+        "title": problem.title,
+        "body_html": body_html,
+        "dynamic_variables_options": dynamic_variables_options,
+        "answer_fields_options": answer_fields_options,
+        "loaded_segments": loaded_segments
+    })

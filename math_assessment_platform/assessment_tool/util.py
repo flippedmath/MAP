@@ -648,7 +648,6 @@ class BaseEntity:
         self.errors = {}
         self.cleaned_data = {}
         
-        # 1. Validate that the input structure has an explicitly defined "inputs" block
         blueprint_inputs = self.pattern_blueprint.get("inputs", {})
         provided_inputs = self.data.get("inputs", {})
         
@@ -656,14 +655,11 @@ class BaseEntity:
             self.errors["inputs"] = "The provided inputs field must be a structured key-value map."
             return False
 
-        # 2. Cycle through each required argument specified in our format pattern layout
         for input_key, field_rules in blueprint_inputs.items():
-            # Extract configuration parameters
             expected_field_type = field_rules.get("field")
             has_default = "default" in field_rules
             default_value = field_rules.get("default")
             
-            # Catch if the user omitted a required input field parameter
             if input_key not in provided_inputs:
                 if has_default:
                     self.cleaned_data[input_key] = default_value
@@ -674,7 +670,6 @@ class BaseEntity:
 
             user_value = provided_inputs[input_key]
             
-            # Run data constraint evaluation types
             try:
                 self.cleaned_data[input_key] = self.validate_field_type(
                     input_key, user_value, expected_field_type
@@ -685,32 +680,42 @@ class BaseEntity:
         return len(self.errors) == 0
 
     def validate_field_type(self, key, value, field_type):
-        """
-        Type checking matrix matched to format pattern fields.
-        """
         if field_type == "integer":
-            if not isinstance(value, int) or isinstance(value, bool):
+            if value == "" or value is None:
+                return None
+            try:
+                return int(value)
+            except:
                 raise ValidationError(f"Value for '{key}' must be a valid integer.")
-            return value
             
         elif field_type == "double":
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
+            if value == "" or value is None:
+                return None
+            try:
+                return float(value)
+            except:
                 raise ValidationError(f"Value for '{key}' must be a numeric decimal or double.")
-            return float(value)
             
         elif field_type in ["text", "paragraph"]:
+            if getattr(value, 'strip', None) and value.strip() == "":
+                return None
             if not isinstance(value, str):
                 raise ValidationError(f"Value for '{key}' must be a valid text string.")
             return value.strip()
             
         elif field_type == "dropdown":
-            # Dropdown selections require plain string matching validation
             if not isinstance(value, str):
                 raise ValidationError(f"Selected option for '{key}' must be a string identifier.")
             return value
             
-        # Fallback collection catcher for unhandled complex validation matrix configurations
         return value
+
+    def evaluate_output(self):
+        """
+        🎯 CORE FORCE INTERFACE INTERACTION METHOD
+        Calculates and produces evaluated simulation content data for live engine previews.
+        """
+        raise NotImplementedError("Child entity component sub-classes must override evaluate_output() configuration mappings.")
     
 
 class RandomIntegerEntity(BaseEntity):
@@ -718,28 +723,22 @@ class RandomIntegerEntity(BaseEntity):
     Validation engine for the 'randInt' token pattern.
     """
     def is_valid(self):
-        # Run standard property-type checks first
         if not super().is_valid():
             return False
             
-        # Post-validation domain checks
         min_val = self.cleaned_data.get("min")
         max_val = self.cleaned_data.get("max")
         step_val = self.cleaned_data.get("step")
         exclude_raw = self.cleaned_data.get("exclude", "")
 
-        # 1. Rule: Boundaries validation
-        if min_val > max_val:
+        if min_val is not None and max_val is not None and min_val > max_val:
             self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
 
-        # 2. Rule: Step range constraint
-        if step_val <= 0:
+        if step_val is not None and step_val <= 0:
             self.errors["step"] = "Step value interval must be a positive integer greater than 0."
 
-        # 3. Rule: Validate and normalize the comma-separated integer array format
         if exclude_raw:
-            # Strip whitespace and split clean elements
-            elements = [item.strip() for item in exclude_raw.split(",") if item.strip()]
+            elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
             parsed_integers = []
             for item in elements:
                 if not re.match(r"^-?\d+$", item):
@@ -747,11 +746,34 @@ class RandomIntegerEntity(BaseEntity):
                     break
                 parsed_integers.append(int(item))
             
-            # Save the clean processed list array back into cleaned_data instead of raw string text
             if "exclude" not in self.errors:
                 self.cleaned_data["exclude_array"] = parsed_integers
 
         return len(self.errors) == 0
+
+    def evaluate_output(self):
+        """
+        🎯 CALCULATES REAL DYNAMIC INTEGERS ACCORDING TO USER PROPERTIES
+        """
+        # Ensure fallback defaults exist if validation hasn't filled them or if running dynamically
+        min_val = self.cleaned_data.get("min") if self.cleaned_data.get("min") is not None else -9
+        max_val = self.cleaned_data.get("max") if self.cleaned_data.get("max") is not None else 9
+        step_val = self.cleaned_data.get("step") if self.cleaned_data.get("step") is not None else 1
+        exclude_set = set(self.cleaned_data.get("exclude_array", []))
+
+        # Generate a list of available numbers matching our specific step increments
+        possible_values = []
+        current = min_val
+        while current <= max_val:
+            if current not in exclude_set:
+                possible_values.append(current)
+            current += step_val
+
+        # If exclusions wiped out every single digit option, fall back inside boundaries safely
+        if not possible_values:
+            return str(min_val)
+
+        return str(random.choice(possible_values))
 
 
 class FormulaEntity(BaseEntity):
@@ -783,6 +805,10 @@ class FormulaEntity(BaseEntity):
                 self.errors["solve for _"] = f"Target variable '{solve_for_variable}' must exist inside the specified variables index list: {var_list}."
 
         return len(self.errors) == 0
+    
+    def evaluate_output(self):
+        # Placeholder fallback output for raw layout validation formula variables
+        return self.cleaned_data.get("formula") or "3*x + 5"
 
 
 class MatrixEntity(BaseEntity):
@@ -818,6 +844,11 @@ class MatrixEntity(BaseEntity):
         # If everything balances out, clean up elements structure copies safely
         self.cleaned_data["cells"] = cells
         return len(self.errors) == 0
+    
+    def evaluate_output(self):
+        # Placeholder layout text representation for matrix entities
+        cells = self.cleaned_data.get("cells") or [[0,0],[0,0]]
+        return str(cells)
     
 
 def get_entity_validator(token_string, data_payload, pattern_blueprint):

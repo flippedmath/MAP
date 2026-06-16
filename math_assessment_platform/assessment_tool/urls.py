@@ -42,6 +42,6 @@ urlpatterns = [
     path('course/api/setup/reorder-nested-item/', views.reorder_nested_item_ajax, name='reorder_nested_item_ajax'),
     path('course/api/assessment/<int:assessment_id>/start-session/', views.start_student_assessment_session, name='start_assessment_session'),
     path('course/api/assessment/<int:assessment_id>/submit-evaluation/', views.submit_student_assessment_evaluation, name='submit_assessment_evaluation'),
-    path('api/problem/<int:problem_id>/workspace-data/', views.get_problem_workspace_data, name='get_problem_workspace_data'),
-    path('course/<int:course_id>/problem/save-workspace/', views.save_problem_workspace_ajax, name='save_problem_workspace_ajax'),
+    path('api/problem/<int:problem_id>/save-workspace/', views.save_problem_workspace, name='save_problem_workspace'),
+    path('problem/<int:problem_id>/workspace/', views.problem_workspace_editor, name='problem_workspace_editor'),
 ]

@@ -3,6 +3,8 @@
 // -------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', function() {
     const workspaceOverlay = document.getElementById('problem-workspace-overlay');
+    if (!workspaceOverlay) return;
+
     const overlayTitleField = document.getElementById('overlay-problem-title-field');
     const closeOverlayBtn = document.getElementById('close-workspace-overlay');
     
@@ -12,273 +14,254 @@ document.addEventListener('DOMContentLoaded', function() {
     const htmlCanvasEditor = document.getElementById('editor-html-insert-canvas');
     const tokensLedger = document.getElementById('overlay-tokens-wrapper-line');
 
-    // Targets for the creation trigger buttons
-    const addVariableTrigger = document.getElementById('add-variable-trigger');
-    const addInputTrigger = document.getElementById('add-input-trigger');
-
+    // Targets for the execution trigger action buttons
     const saveDraftBtn = document.getElementById('btn-save-master-problem');
     const saveStatusSpan = document.getElementById('overlay-save-status');
 
-    // 🎯 NEW: Global Workspace Quill Editor Tracker Instance
+    // 🎯 1. GLOBAL MUTABLE TOKEN ARRAYS POPULATED VIA THE AJAX FETCH PIPELINE
+    let dynamicVarsTokens = [];
+    let answerFieldsTokens = [];
+
+    // Global Workspace Quill Editor Tracker Instance
     let workspaceQuillInstance = null;
 
-    if (!workspaceOverlay) return;
 
-    // 1. Global Event Delegation: Catch edit requests from ANY page
-    document.body.addEventListener('click', async function(e) {
-        const editBtn = e.target.closest('.btn-edit-problem-details');
-        if (!editBtn) return;
+    /**
+     * Toggles layout option menus dynamically based on your database rows
+     */
+    function setupDropdownMenu(triggerId, menuId, tokens) {
+        const trigger = document.getElementById(triggerId);
+        const menu = document.getElementById(menuId);
+        if (!trigger || !menu) return;
 
-        e.preventDefault();
+        // Defensively verify 'tokens' is an actual array list.
+        let tokensArray = [];
+        if (Array.isArray(tokens)) {
+            tokensArray = tokens;
+        } else if (tokens && typeof tokens === 'object') {
+            tokensArray = Object.values(tokens);
+        }
 
-        const itemRow = editBtn.closest('[data-id], .problem-item-row');
-        if (!itemRow) return;
-
-        const problemId = itemRow.getAttribute('data-id');
-        
-        const titleInput = itemRow.querySelector('.problem-title-input');
-        let problemTitle = "Untitled Problem";
-        
-        if (titleInput) {
-            problemTitle = titleInput.value.trim();
+        // 1. Clean dropdown item render without the internal note text blocks
+        if (tokensArray.length === 0) {
+            menu.innerHTML = `<div style="padding: 8px 12px; font-size: 0.8rem; color: #94a3b8; font-style: italic;">No options available</div>`;
         } else {
-            const textContainer = itemRow.querySelector('.problem-title-text, .item-name');
-            if (textContainer) problemTitle = textContainer.innerText.trim();
+            menu.innerHTML = tokensArray.map(t => `
+                <button type="button" class="entity-menu-item" data-token="${t.token}" style="width: 100%; text-align: left; padding: 8px 12px; background: none; border: none; cursor: pointer; transition: background 0.15s;">
+                    <strong>+ ${t.name}</strong>
+                </button>
+            `).join('');
         }
 
-        if (overlayTitleField) overlayTitleField.value = problemTitle;
-        workspaceOverlay.setAttribute('data-current-problem-id', problemId);
-        
-        workspaceOverlay.style.display = 'flex';
-        document.body.style.overflow = 'hidden';
-
-        // Fetch problem data specifications asynchronously from the database
-        try {
-            if (variablesContainer) variablesContainer.innerHTML = '<p style="color:#94a3b8; font-size:0.85rem; font-style:italic;">Loading components...</p>';
-            if (inputsContainer) inputsContainer.innerHTML = '<p style="color:#94a3b8; font-size:0.85rem; font-style:italic;">Loading components...</p>';
-            if (tokensLedger) tokensLedger.innerHTML = '';
-            
-            // Clear active canvas state values completely
-            if (htmlCanvasEditor) htmlCanvasEditor.innerHTML = '';
-
-            const response = await fetch(`/api/problem/${problemId}/workspace-data/`);
-            if (!response.ok) throw new Error("Failed to load problem data maps.");
-            
-            const data = await response.json();
-            
-            // 🎯 FIXED: Clean out all previous systemic classes and wrappers entirely
-            if (htmlCanvasEditor) {
-                htmlCanvasEditor.removeAttribute('class'); // Strip all structural classes
-                htmlCanvasEditor.innerHTML = ''; // Ensure it's a completely blank slate
-            }
-
-            // 🎯 Clean Lazy-Initialize for Quill 2.0.2
-            if (!workspaceQuillInstance && typeof Quill !== 'undefined' && htmlCanvasEditor) {
-                try {
-                    workspaceQuillInstance = new Quill('#editor-html-insert-canvas', {
-                        theme: 'snow',
-                        modules: {
-                            toolbar: '#workspace-quill-toolbar-container'
-                        }
-                    });
-
-                    console.log("✅ SUCCESS: Workspace Quill instance spawned with math capabilities.");
-
-                    workspaceQuillInstance.on('text-change', function() {
-                        updateWorkspaceSimulationPreview();
-                        if (saveStatusSpan) {
-                            saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
-                        }
-                    });
-
-                } catch (quillInitError) {
-                    console.error("Quill initialization exception:", quillInitError);
-                }
-            }
-
-            // 🎯 POPULATE CONTENT SAFELY
-            if (workspaceQuillInstance && workspaceQuillInstance.root) {
-                // Ensure the editor container is explicitly enabled for editing
-                workspaceQuillInstance.enable(true);
-                
-                if (data.html_content) {
-                    // Create an isolated safe virtual document check
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(data.html_content, 'text/html');
-                    const embeddedCanvas = doc.getElementById('editor-html-insert-canvas');
-                    
-                    if (embeddedCanvas) {
-                        // If it somehow extracted the outer skeleton wrapper, pluck just the clean inner content
-                        workspaceQuillInstance.root.innerHTML = embeddedCanvas.innerHTML;
-                    } else {
-                        // Otherwise, your backend data is already a perfect raw HTML string! Inject it straight in.
-                        workspaceQuillInstance.root.innerHTML = data.html_content;
-                    }
-                } else {
-                    workspaceQuillInstance.root.innerHTML = '<p><br></p>';
-                }
-                
-                // Run immediate simulation verification cycle
-                updateWorkspaceSimulationPreview();
-                if (saveStatusSpan) {
-                    saveStatusSpan.innerHTML = `<i class="fas fa-check-circle" style="color: #10b981;"></i> Synced`;
-                }
-            }
-            
-            if (variablesContainer) variablesContainer.innerHTML = '';
-            if (inputsContainer) inputsContainer.innerHTML = '';
-            if (tokensLedger) tokensLedger.innerHTML = '';
-
-            if (!data.entities || data.entities.length === 0) {
-                clearAndShowPlaceholders();
-                return;
-            }
-
-            // PROCESS & RENDER COMPONENT ENTITIES
-            data.entities.forEach(entity => {
-                const schema = entity.content_schema || {};
-                const tokenName = schema.token || `entity_${entity.id}`;
-                
-                createTokenBadge(tokenName);
-
-                if (entity.type.startsWith('variable_')) {
-                    renderVariableComponent(entity, schema, tokenName);
-                } else {
-                    renderInputFormComponent(entity, schema, tokenName);
-                }
+        trigger.onclick = function(e) {
+            e.stopPropagation();
+            document.querySelectorAll('.entity-menu-dropdown').forEach(m => {
+                if (m !== menu) m.style.display = 'none';
             });
+            menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+        };
 
-            checkEmptyColumns();
+        menu.onclick = function(e) {
+            const btn = e.target.closest('.entity-menu-item');
+            if (!btn) return;
+            
+            e.stopPropagation();
+            const tokenSelected = btn.getAttribute('data-token');
+            
+            const isVariable = dynamicVarsTokens.some(item => item.token === tokenSelected);
+            const targetContainer = isVariable ? variablesContainer : inputsContainer;
 
-        } catch (err) {
-            console.error("Workspace configuration loader error:", err);
-            if (variablesContainer) variablesContainer.innerHTML = '<p style="color:#ef4444; font-size:0.85rem;">Failed to synchronize variables.</p>';
-            if (inputsContainer) inputsContainer.innerHTML = '<p style="color:#ef4444; font-size:0.85rem;">Failed to synchronize input layout.</p>';
-        }
+            if (targetContainer) {
+                removePlaceholders(targetContainer);
+                createTokenBadge(tokenSelected);
+                createNewBlockInstanceUI(tokenSelected, targetContainer, {});
+                updateWorkspaceSimulationPreview();
+            }
+            
+            menu.style.display = 'none';
+        };
+    }
+
+    // Close open menus if user clicks away into void space elements
+    document.addEventListener('click', function() {
+        document.querySelectorAll('.entity-menu-dropdown').forEach(m => m.style.display = 'none');
     });
 
-    // 2. Global Close Controller Action
-    if (closeOverlayBtn) {
-        closeOverlayBtn.addEventListener('click', function() {
-            workspaceOverlay.style.display = 'none';
-            workspaceOverlay.removeAttribute('data-current-problem-id');
-            document.body.style.overflow = '';
-        });
-    }
 
-    // 3. Component Add Instantiation Events
-    if (addVariableTrigger) {
-        addVariableTrigger.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const existingMenu = document.getElementById('active-variable-dropdown-menu');
-            if (existingMenu) { existingMenu.remove(); return; }
+    /**
+     * Loops through saved entity segments extracted from database layers on load
+     */
+    function rehydrateWorkspaceSegments(segments) {
+        if (!segments || segments.length === 0) {
+            clearAndShowPlaceholders();
+            return;
+        }
 
-            const menu = document.createElement('div');
-            menu.id = 'active-variable-dropdown-menu';
-            menu.style.cssText = 'position: absolute; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); padding: 4px 0; min-width: 180px; z-index: 10005; display: flex; flex-direction: column;';
+        if (variablesContainer) variablesContainer.innerHTML = '';
+        if (inputsContainer) inputsContainer.innerHTML = '';
+        if (tokensLedger) tokensLedger.innerHTML = '';
+
+        segments.forEach(segment => {
+            const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
+            const targetContainer = isVariable ? variablesContainer : inputsContainer;
+
+            if (!targetContainer) return;
+
+            removePlaceholders(targetContainer);
             
-            const options = [
-                { type: 'variable_numeric', label: 'Numeric Range', icon: 'fa-sort-numeric-up' },
-                { type: 'variable_equation', label: 'Equation/Formula String', icon: 'fa-square-root-alt' },
-                { type: 'variable_matrix', label: 'Variable Matrix Grid', icon: 'fa-matrix', placeholderPrefix: 'matrix' },
-                { type: 'variable_string_array', label: 'String Array List', icon: 'fa-tags', placeholderPrefix: 'stringArray' }
-            ];
+            // 🚀 FIX: Extract the persistent sequence token sent down by Django, 
+            // or pass undefined so it defaults to dynamic look-ahead calculation
+            const savedSequenceToken = segment.sequence_token; 
 
-            options.forEach(opt => {
-                const item = document.createElement('button');
-                item.type = 'button';
-                item.style.cssText = 'background: none; border: none; padding: 6px 12px; text-align: left; font-size: 0.8rem; color: #334155; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; transition: background 0.1s;';
-                item.innerHTML = `<i class="fas ${opt.icon}" style="width:14px; color:#64748b;"></i> ${opt.label}`;
-                
-                item.addEventListener('mouseover', () => { item.style.background = '#f1f5f9'; });
-                item.addEventListener('mouseout', () => { item.style.background = 'none'; });
-                
-                item.addEventListener('click', function() {
-                    const prefix = opt.placeholderPrefix || 'num';
-                    // Replace broad lookups with explicit direct-descendant selections:
-                    const currentVarsCount = variablesContainer.querySelectorAll(':scope > .workspace-component-card').length + 1;
-                    const tokenName = `${prefix}${currentVarsCount}`;
-                    
-                    const mockEntity = { id: `new_${Date.now()}`, type: opt.type, points: 0.0 };
-                    const mockSchema = { type: opt.type, token: tokenName };
-                    
-                    removePlaceholders(variablesContainer);
-                    createTokenBadge(tokenName);
-                    renderVariableComponent(mockEntity, mockSchema, tokenName);
-                    updateWorkspaceSimulationPreview();
-                    menu.remove();
-                });
-                menu.appendChild(item);
+            // Flow execution order synchronously, explicitly supplying the permanent token name string
+            createTokenBadge(segment.token, savedSequenceToken);
+            createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
+        
+            // 🎯 NEW: After card UI construction, tuck the evaluated value onto the card wrapper element
+            const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
+            const latestCard = builtCards[builtCards.length - 1];
+            if (latestCard && segment.simulated_value !== undefined) {
+                latestCard.setAttribute('data-simulated-value', segment.simulated_value);
+            }
+        });
+
+        checkEmptyColumns();
+    }
+
+
+    /**
+     * Unified Form Element Interface Constructor Factory
+     */
+    function createNewBlockInstanceUI(token, containerElement, savedValues = {}, points = 0.0, overrideSequenceToken = undefined) {
+        const card = document.createElement('div');
+        card.className = 'workspace-component-card workspace-block-card';
+        card.setAttribute('data-token', token);
+        card.style.cssText = 'background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; position: relative;';
+
+        const isVariable = dynamicVarsTokens.some(item => item.token === token);
+        const headerColor = isVariable ? '#0284c7' : '#16a34a';
+        const typeBadgeText = isVariable ? 'Variable' : `${points} Pts`;
+
+        let indexedTokenString = "";
+
+        if (overrideSequenceToken) {
+            indexedTokenString = overrideSequenceToken;
+        } else {
+            const matchingCardsOnPage = document.querySelectorAll(`.workspace-block-card[data-token="${token}"]`);
+            let maxIndex = 0;
+
+            matchingCardsOnPage.forEach(existingCard => {
+                const deleteBtn = existingCard.querySelector('.btn-delete-workspace-component');
+                if (deleteBtn) {
+                    const existingIndexedToken = deleteBtn.getAttribute('data-indexed-token') || '';
+                    const numericMatch = existingIndexedToken.match(/\d+$/);
+                    if (numericMatch) {
+                        const indexNum = parseInt(numericMatch[0], 10);
+                        if (indexNum > maxIndex) maxIndex = indexNum;
+                    }
+                }
             });
+            const nextSequenceIndex = maxIndex + 1;
+            indexedTokenString = `${token}${nextSequenceIndex}`;
+        }
 
-            const rect = addVariableTrigger.getBoundingClientRect();
-            menu.style.top = `${window.scrollY + rect.bottom + 4}px`;
-            menu.style.left = `${window.scrollX + rect.left}px`;
-            document.body.appendChild(menu);
-            document.addEventListener('click', () => menu.remove(), { once: true });
+        const tokenSourceArray = isVariable ? dynamicVarsTokens : answerFieldsTokens;
+        const matchingTokenData = tokenSourceArray.find(item => item.token === token);
+        const tokenNoteHint = matchingTokenData ? (matchingTokenData.note || '') : '';
+
+        let fieldsHtml = '';
+
+        if (token === 'randInt') {
+            fieldsHtml = `
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+                    <label style="font-size: 0.75rem; color: #475569;">Min: <input type="number" class="val-input-min" value="${savedValues.min ?? -9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                    <label style="font-size: 0.75rem; color: #475569;">Max: <input type="number" class="val-input-max" value="${savedValues.max ?? 9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                    <label style="font-size: 0.75rem; color: #475569;">Step: <input type="number" class="val-input-step" value="${savedValues.step ?? 1}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                </div>
+            `;
+        } else if (token === 'formula') {
+            fieldsHtml = `
+                <label style="font-size: 0.75rem; color: #475569;">Formula expression string: 
+                    <input type="text" class="val-input-formula" value="${savedValues.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                </label>
+            `;
+        } else if (token === 'mathAnswer') {
+            fieldsHtml = `
+                <label style="font-size: 0.75rem; color: #475569; display:block; margin-bottom:4px;">Correct Target Formula: 
+                    <input type="text" class="val-input-correct-formula" value="${savedValues.correct_formula || ''}" placeholder="e.g. factor(x**2 - 1)" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                </label>
+            `;
+        } else {
+            fieldsHtml = `<p style="font-size:0.8rem; color:#64748b; margin:0;">Standard attributes container template wrapper.</p>`;
+        }
+
+        card.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px dashed #e2e8f0; padding-bottom: 6px; margin-bottom: 4px;">
+                <span style="font-weight: 600; font-size: 0.85rem; color: ${headerColor};"><i class="fas fa-cube"></i> &lt;${indexedTokenString}&gt;</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    
+                    <button type="button" class="btn-refresh-workspace-component-value" title="Shuffle simulation instance sample value" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, transform 0.15s;">
+                        <i class="fas fa-redo-alt"></i>
+                    </button>
+
+                    <span style="font-size: 0.77rem; background:${isVariable ? '#e0f2fe' : '#dcfce7'}; color:${isVariable ? '#0369a1' : '#166534'}; padding:1px 6px; border-radius:10px; font-weight:500;">${typeBadgeText}</span>
+                    
+                    ${tokenNoteHint ? `
+                        <div class="workspace-info-tooltip-container" style="position: relative; display: inline-block;">
+                            <i class="fas fa-info-circle" style="color: #94a3b8; cursor: pointer; font-size: 0.85rem; transition: color 0.15s;"></i>
+                            <div class="workspace-info-tooltip-overlay">
+                                <strong>&lt;${indexedTokenString}&gt; Definition Note:</strong><br>
+                                ${tokenNoteHint}
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    <button type="button" class="btn-delete-workspace-component" data-token="${token}" data-indexed-token="${indexedTokenString}" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; transition: color 0.15s;"><i class="fas fa-trash"></i></button>
+                </div>
+            </div>
+            <div class="component-fields-wrapper">${fieldsHtml}</div>
+        `;
+
+        // Interactive UI hover transitions
+        const refreshIconBtn = card.querySelector('.btn-refresh-workspace-component-value');
+        if (refreshIconBtn) {
+            refreshIconBtn.onmouseenter = () => refreshIconBtn.style.color = '#0284c7';
+            refreshIconBtn.onmouseleave = () => refreshIconBtn.style.color = '#94a3b8';
+        }
+
+        const infoIcon = card.querySelector('.fa-info-circle');
+        if (infoIcon) {
+            infoIcon.onmouseenter = () => infoIcon.style.color = '#64748b';
+            infoIcon.onmouseleave = () => infoIcon.style.color = '#94a3b8';
+        }
+
+        const trashIcon = card.querySelector('.btn-delete-workspace-component');
+        if (trashIcon) {
+            trashIcon.onmouseenter = () => trashIcon.style.color = '#ef4444';
+            trashIcon.onmouseleave = () => trashIcon.style.color = '#94a3b8';
+        }
+
+        containerElement.appendChild(card);
+
+        // Track live typing modifications to clear synced status tracking layers
+        card.addEventListener('input', function(e) {
+            if (e.target.matches('input, select, textarea')) {
+                if (saveStatusSpan) {
+                    saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+                }
+                updateWorkspaceSimulationPreview();
+            }
         });
     }
 
-    if (addInputTrigger) {
-        addInputTrigger.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const existingMenu = document.getElementById('active-input-dropdown-menu');
-            if (existingMenu) { existingMenu.remove(); return; }
-
-            const menu = document.createElement('div');
-            menu.id = 'active-input-dropdown-menu';
-            menu.style.cssText = 'position: absolute; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); padding: 4px 0; min-width: 220px; z-index: 10005; display: flex; flex-direction: column;';
-            
-            const options = [
-                { type: 'mathematical_expression', label: 'SymPy Math Expression', icon: 'fa-square-root-alt', prefix: 'math' },
-                { type: 'multiple_choice', label: 'Multiple Choice Radio Grid', icon: 'fa-list-ul', prefix: 'mc' },
-                { type: 'numeric_tolerance', label: 'Numeric Entry w/ Tolerance', icon: 'fa-percentage', prefix: 'numInput' },
-                { type: 'short_text_input', label: 'Short Text Response Field', icon: 'fa-minus', prefix: 'textInput' },
-                { type: 'matrix_input', label: 'Matrix Vector Entry Grid', icon: 'fa-th', prefix: 'matrixInput' }
-            ];
-
-            options.forEach(opt => {
-                const item = document.createElement('button');
-                item.type = 'button';
-                item.style.cssText = 'background: none; border: none; padding: 6px 12px; text-align: left; font-size: 0.8rem; color: #334155; cursor: pointer; display: flex; align-items: center; gap: 8px; width: 100%; transition: background 0.1s;';
-                item.innerHTML = `<i class="fas ${opt.icon}" style="width:14px; color:#64748b;"></i> ${opt.label}`;
-                
-                item.addEventListener('mouseover', () => { item.style.background = '#f1f5f9'; });
-                item.addEventListener('mouseout', () => { item.style.background = 'none'; });
-                
-                item.addEventListener('click', function() {
-                    // Do the same for inputsContainer layout calculations:
-                    const currentInputsCount = inputsContainer.querySelectorAll(':scope > .workspace-component-card').length + 1;
-                    const tokenName = `${opt.prefix}${currentInputsCount}`;
-                    
-                    const mockEntity = { id: `new_${Date.now()}`, type: opt.type, points: 1.0 };
-                    const mockSchema = { type: opt.type, token: tokenName };
-                    
-                    removePlaceholders(inputsContainer);
-                    createTokenBadge(tokenName);
-                    renderInputFormComponent(mockEntity, mockSchema, tokenName);
-                    updateWorkspaceSimulationPreview();
-                    menu.remove();
-                });
-                menu.appendChild(item);
-            });
-
-            const rect = addInputTrigger.getBoundingClientRect();
-            menu.style.top = `${window.scrollY + rect.bottom + 4}px`;
-            menu.style.left = `${window.scrollX + rect.left}px`;
-            document.body.appendChild(menu);
-            document.addEventListener('click', () => menu.remove(), { once: true });
-        });
-    }
 
     // -------------------------------------------------------------
-    // LIVE PREVIEW SIMULATION RENDERING ENGINE
+    // LIVE PREVIEW SIMULATION RENDERING ENGINE (DYNAMIC RE-CALCULATION)
     // -------------------------------------------------------------
     function updateWorkspaceSimulationPreview() {
         const renderTarget = document.getElementById('simulation-render-target');
         if (!renderTarget) return;
 
-        // Read output markup data via root.innerHTML out of Quill instead of raw text elements
         let canvasContent = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
 
         if (!canvasContent || canvasContent === '<p><br></p>') {
@@ -286,346 +269,317 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // 1. 🎯 CREATE AN IN-MEMORY DOM TREE FOR THE PREVIEW
-        // This isolates the content from the active editor so we can safely strip KaTeX elements.
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = canvasContent;
 
-        // 2. 🎯 FIND AND CONVERT ALL ACTIVE QUILL FORMULAS TO PREVIEW SLOTS
-        // We find elements with class 'ql-formula', grab their raw LaTeX data string,
-        // and replace them with a safe placeholder class that the tokenizer won't touch.
         const formulaNodes = tempContainer.querySelectorAll('.ql-formula');
         formulaNodes.forEach(formula => {
             const latexValue = formula.getAttribute('data-value') || '';
             const mathSpan = document.createElement('span');
-            mathSpan.className = 'preview-static-latex'; // Safe signature class
-            mathSpan.textContent = latexValue;           // Store raw string temporarily inside text context
+            mathSpan.className = 'preview-static-latex';
+            mathSpan.textContent = latexValue;
             formula.parentNode.replaceChild(mathSpan, formula);
         });
 
-        // 🎯 FIX A: Handle Quill alignment classes safely (Supporting blocks and lists)
-        const alignedElements = tempContainer.querySelectorAll('.ql-align-right, .ql-align-center, .ql-align-justify');
-        alignedElements.forEach(el => {
-            let alignType = 'left';
-            if (el.classList.contains('ql-align-right')) alignType = 'right';
-            if (el.classList.contains('ql-align-center')) alignType = 'center';
-            if (el.classList.contains('ql-align-justify')) alignType = 'justify';
-            
+        tempContainer.querySelectorAll('.ql-align-right, .ql-align-center, .ql-align-justify').forEach(el => {
+            let alignType = el.classList.contains('ql-align-right') ? 'right' : el.classList.contains('ql-align-center') ? 'center' : 'left';
             el.style.textAlign = alignType;
-            
-            // If it's a list item being aligned, force its inner block container layout to obey directionality
-            if (el.tagName === 'LI') {
-                el.style.listStylePosition = 'inside';
-            }
         });
 
-        // 🎯 FIX B: Group consecutive <li> elements sequentially into unified lists
-        const listItems = tempContainer.querySelectorAll('li[data-list]');
-        if (listItems.length > 0) {
-            let currentWrapper = null;
-            let currentType = null;
-
-            Array.from(listItems).forEach(li => {
-                const listType = li.getAttribute('data-list'); // 'bullet' or 'ordered'
-                const targetTagName = listType === 'bullet' ? 'UL' : 'OL';
-
-                // Check if the previous element in the markup is an active wrapper of the exact same type
-                const previousElement = li.previousElementSibling;
-                const isContinuation = previousElement && previousElement.tagName === targetTagName && currentType === listType;
-
-                if (!isContinuation) {
-                    // Only build a brand new parent container if the chain broke or changed type
-                    currentWrapper = document.createElement(targetTagName);
-                    currentWrapper.style.paddingLeft = '24px';
-                    currentWrapper.style.margin = '8px 0';
-                    
-                    if (listType === 'bullet') {
-                        currentWrapper.style.listStyleType = 'disc';
-                    }
-
-                    // If the item has alignment styling, pass the text alignment up to the parent wrapper
-                    if (li.style.textAlign === 'right' || li.style.textAlign === 'center') {
-                        currentWrapper.style.textAlign = li.style.textAlign;
-                    }
-
-                    li.parentNode.insertBefore(currentWrapper, li);
-                    currentType = listType;
-                }
-
-                // Move the element into the grouped list block execution stream
-                currentWrapper.appendChild(li);
-                li.removeAttribute('data-list');
-            });
-        }
-
-        // Pull out the sanitized template HTML string to run through your existing tokenizer
         let workingHtml = tempContainer.innerHTML;
-
-        // 3. 🎯 TOKEN MATCH ENGINE (REDUCED TO MATCH ONLY YOUR EXPLICIT TEMPLATE TOKENS)
-        // Restricted to capture template tags and ignore raw structural tags
-        const tokenRegex = /&lt;([^&>]+)&gt;|<(math\d+|mc\d+|numInput\d+|textInput\d+|matrixInput\d+|num\d+|equation\d+|matrix\d+|stringArray\d+)>/g;
+        const tokenRegex = /&lt;([^&>]+)&gt;|<([^>]+)>/g;
 
         let simulatedHtml = workingHtml.replace(tokenRegex, function(match, tokenText) {
-            const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim();
+            const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim(); // e.g., "randInt2"
+            
+            let evaluationValue = null;
+            
+            // Look across variables and inputs sidebar blocks to locate an active configuration block match
+            const allCards = document.querySelectorAll('.workspace-block-card');
+            allCards.forEach(card => {
+                const deleteBtn = card.querySelector('.btn-delete-workspace-component');
+                if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanToken) {
+                    
+                    const baseArchetype = card.getAttribute('data-token');
+                    
+                    // 🎯 CLIENT-SIDE RANDOMIZATION SEED EVALUATION MATRIX
+                    if (baseArchetype === 'randInt') {
+                        const minVal = parseInt(card.querySelector('.val-input-min')?.value ?? -9, 10);
+                        const maxVal = parseInt(card.querySelector('.val-input-max')?.value ?? 9, 10);
+                        const stepVal = parseInt(card.querySelector('.val-input-step')?.value ?? 1, 10);
+                        
+                        if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
+                            const pool = [];
+                            let current = minVal;
+                            while (current <= maxVal) {
+                                pool.push(current);
+                                current += stepVal;
+                            }
+                            if (pool.length > 0) {
+                                // Read our random factor string
+                                const seedAttr = card.getAttribute('data-shuffle-seed');
+                                
+                                let targetIndex = 0;
+                                if (seedAttr) {
+                                    // 🚀 CRITICAL FIX: Direct fractional translation. 
+                                    // This guarantees an unpredictable jump every single time across any sized pool.
+                                    const randomMultiplier = parseFloat(seedAttr);
+                                    targetIndex = Math.floor(randomMultiplier * pool.length);
+                                } else {
+                                    // Fallback deterministic default index for when the card first cold-loads 
+                                    // from the database before a user clicks refresh
+                                    const baseTextSeed = cleanToken.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                                    targetIndex = baseTextSeed % pool.length;
+                                }
+                                
+                                // Defensively clamp index to prevent array index out of bounds exceptions
+                                if (targetIndex >= pool.length) targetIndex = pool.length - 1;
+                                if (targetIndex < 0) targetIndex = 0;
 
-            if (cleanToken.startsWith('num') && !cleanToken.startsWith('numInput') || 
-                cleanToken.startsWith('equation') || 
-                cleanToken.startsWith('matrix') && !cleanToken.startsWith('matrixInput') || 
-                cleanToken.startsWith('stringArray')) {
-                return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">[x]</span>`;
-            } 
-            else if (cleanToken.startsWith('math')) {
+                                evaluationValue = pool[targetIndex].toString();
+                            }
+                        }
+                    } else if (baseArchetype === 'formula') {
+                        evaluationValue = card.querySelector('.val-input-formula')?.value.trim() || '3*x + 5';
+                    }
+                    
+                    // If client-side processing didn't catch the token or fields are completely blank, 
+                    // fall back gracefully onto the initial server token string attribute
+                    if (evaluationValue === null || evaluationValue === '') {
+                        evaluationValue = card.getAttribute('data-simulated-value');
+                    }
+                }
+            });
+
+            const baseArchetypeToken = cleanToken.replace(/\d+$/, '');
+            const isVar = dynamicVarsTokens.some(v => v.token === baseArchetypeToken);
+            
+            if (isVar) {
+                const displayVal = evaluationValue !== null ? evaluationValue : cleanToken;
+                return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
+            } else if (answerFieldsTokens.some(i => i.token === baseArchetypeToken)) {
                 return `
                     <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px;">
-                        <input type="text" placeholder="Enter math answer..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 160px; font-family: monospace; color: #334155;">
-                        <span style="font-size: 0.75rem; color: #16a34a; font-weight: 600; margin-left: 4px;"><i class="fas fa-square-root-alt"></i></span>
-                    </div>
-                `;
-            } 
-            else if (cleanToken.startsWith('mc')) {
-                return `
-                    <div style="margin: 8px 0; background: #ffffff; border: 1px solid #e2e8f0; padding: 10px; border-radius: 6px; max-width: 300px;">
-                        <label style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #475569;"><input type="radio" disabled> Option selection placeholder layout slot</label>
-                    </div>
-                `;
-            } 
-            else if (cleanToken.startsWith('numInput')) {
-                return `
-                    <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px;">
-                        <input type="text" placeholder="0.00" disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 90px; text-align: right; font-family: monospace; color: #334155;">
-                        <span style="font-size: 0.75rem; color: #64748b; font-weight: 500; margin-left: 4px;">&plusmn; tol</span>
-                    </div>
-                `;
-            } 
-            else if (cleanToken.startsWith('textInput')) {
-                return `
-                    <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px; width: 100%; max-width: 280px;">
-                        <input type="text" placeholder="Type short answer response..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 6px 10px; border-radius: 4px; font-size: 0.85rem; width: 100%; box-sizing: border-box; color: #334155;">
-                    </div>
-                `;
-            } 
-            else if (cleanToken.startsWith('matrixInput')) {
-                return `
-                    <div style="display: inline-grid; grid-template-columns: repeat(2, 45px); gap: 4px; border-left: 2px solid #475569; border-right: 2px solid #475569; padding: 2px 6px; vertical-align: middle; margin: 6px 2px; border-radius: 4px;">
-                        <input type="text" placeholder="0" disabled style="width:100%; text-align:center; font-size:0.8rem; padding:2px 0; border:1px solid #e2e8f0; border-radius:3px;">
-                        <input type="text" placeholder="0" disabled style="width:100%; text-align:center; font-size:0.8rem; padding:2px 0; border:1px solid #e2e8f0; border-radius:3px;">
-                        <input type="text" placeholder="0" disabled style="width:100%; text-align:center; font-size:0.8rem; padding:2px 0; border:1px solid #e2e8f0; border-radius:3px;">
-                        <input type="text" placeholder="0" disabled style="width:100%; text-align:center; font-size:0.8rem; padding:2px 0; border:1px solid #e2e8f0; border-radius:3px;">
+                        <input type="text" placeholder="Input slot..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 140px;">
                     </div>
                 `;
             }
             return match;
         });
 
-        // Write tokenized result into the target panel DOM layout structure
         renderTarget.innerHTML = simulatedHtml;
 
-        // 4. 🎯 RENDER KATED EXPRESSIONS INSIDE THE SIMULATED PREVIEW
-        // Now that the raw HTML string is updated without leaking artifacts,
-        // we call KaTeX to convert our placeholder elements into beautifully rendered math equations.
         if (typeof katex !== 'undefined') {
-            const staticFormulas = renderTarget.querySelectorAll('.preview-static-latex');
-            staticFormulas.forEach(span => {
-                const formulaString = span.textContent.trim();
+            renderTarget.querySelectorAll('.preview-static-latex').forEach(span => {
                 try {
-                    katex.render(formulaString, span, { 
-                        displayMode: false, 
-                        throwOnError: false 
-                    });
+                    katex.render(span.textContent.trim(), span, { displayMode: false, throwOnError: false });
                 } catch (err) {
-                    console.error("Preview math rendering breakdown:", err);
+                    console.error(err);
                 }
             });
         }
     }
 
-    function createTokenBadge(token) {
+
+    /**
+     * Builds and manages ledger tokens badges
+     */
+    function createTokenBadge(token, overrideSequenceToken = undefined) {
         if (!tokensLedger) return;
-        if (Array.from(tokensLedger.children).some(b => b.innerText === `<${token}>`)) return;
+
+        let indexedTokenString = "";
+
+        // 🚀 FIX: Balance the name assignment calculations to mirror structural rendering parameters
+        if (overrideSequenceToken) {
+            indexedTokenString = overrideSequenceToken;
+        } else {
+            const matchingCardsOnPage = document.querySelectorAll(`.workspace-block-card[data-token="${token}"]`);
+            let maxIndex = 0;
+
+            matchingCardsOnPage.forEach(existingCard => {
+                const deleteBtn = existingCard.querySelector('.btn-delete-workspace-component');
+                if (deleteBtn) {
+                    const existingIndexedToken = deleteBtn.getAttribute('data-indexed-token') || '';
+                    const numericMatch = existingIndexedToken.match(/\d+$/);
+                    if (numericMatch) {
+                        const indexNum = parseInt(numericMatch[0], 10);
+                        if (indexNum > maxIndex) maxIndex = indexNum;
+                    }
+                }
+            });
+
+            const currentNextIndex = maxIndex + 1;
+            indexedTokenString = `${token}${currentNextIndex}`;
+        }
+
+        if (Array.from(tokensLedger.children).some(b => b.innerText === `<${indexedTokenString}>`)) return;
 
         const badge = document.createElement('span');
         badge.className = 'token-badge-clickable';
-        badge.style.cssText = 'background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; cursor: pointer; user-select: none; transition: all 0.15s;';
-        badge.innerText = `<${token}>`;
+        badge.style.cssText = 'background: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600; cursor: pointer; user-select: none; transition: all 0.15s; margin-right: 4px;';
+        badge.innerText = `<${indexedTokenString}>`;
         
-        badge.addEventListener('mouseover', () => { badge.style.background = '#bae6fd'; });
-        badge.addEventListener('mouseout', () => { badge.style.background = '#e0f2fe'; });
-        
-        // 🎯 NEW: Upgraded Quill Token Injection Routine targeting current selection coordinates
         badge.addEventListener('click', function() {
             if (!workspaceQuillInstance) return;
-            
-            // Look up where the user's focus cursor is located inside the text
             const range = workspaceQuillInstance.getSelection(true);
             if (range) {
-                // Drop the token string precisely at the caret location index
-                workspaceQuillInstance.insertText(range.index, `<${token}>`, 'user');
-                // Advance the caret cursor position past the newly added token characters
-                workspaceQuillInstance.setSelection(range.index + token.length + 2, 'user');
+                workspaceQuillInstance.insertText(range.index, `<${indexedTokenString}>`, 'user');
+                workspaceQuillInstance.setSelection(range.index + indexedTokenString.length + 2, 'user');
             }
         });
 
         tokensLedger.appendChild(badge);
     }
 
-    function handleComponentDeletion(e) {
+
+    // -------------------------------------------------------------
+    // SHARED SIDEBAR COMPONENT CLICK DELEGATION ROUTER
+    // -------------------------------------------------------------
+    function handleSidebarComponentActions(e) {
+        // 1. Check if the user clicked a Delete Button
         const deleteBtn = e.target.closest('.btn-delete-workspace-component');
-        if (!deleteBtn) return;
+        if (deleteBtn) {
+            e.stopPropagation();
+            const tokenToRemove = deleteBtn.getAttribute('data-token');
+            const indexedTokenToRemove = deleteBtn.getAttribute('data-indexed-token');
+            const cardElement = deleteBtn.closest('.workspace-component-card');
+            
+            if (cardElement) cardElement.remove();
 
-        e.stopPropagation();
-        const tokenToRemove = deleteBtn.getAttribute('data-token');
-        const cardElement = deleteBtn.closest('.workspace-component-card');
-        
-        if (!cardElement) return;
-        cardElement.remove();
+            // Remove the exact matching indexed text badge wrapper from the top tracking row ledger
+            if (tokensLedger && indexedTokenToRemove) {
+                tokensLedger.querySelectorAll('.token-badge-clickable').forEach(badge => {
+                    if (badge.innerText === `<${indexedTokenToRemove}>`) badge.remove();
+                });
+            }
 
-        if (tokensLedger) {
-            const badges = tokensLedger.querySelectorAll('.token-badge-clickable');
-            badges.forEach(badge => {
-                if (badge.innerText === `<${tokenToRemove}>`) badge.remove();
-            });
+            // Clean instances out of the editor text context canvas safely using the indexed token label
+            if (workspaceQuillInstance && indexedTokenToRemove) {
+                let currentText = workspaceQuillInstance.root.innerHTML;
+                [`<${indexedTokenToRemove}>`, `&lt;${indexedTokenToRemove}&gt;`].forEach(p => {
+                    currentText = currentText.replaceAll(p, '');
+                });
+                workspaceQuillInstance.root.innerHTML = currentText;
+            }
+
+            checkEmptyColumns();
+            updateWorkspaceSimulationPreview();
+            return;
         }
 
-        // 🎯 NEW: Perform automated cascading cleanup inside Quill's rich text core innerHTML parameters
-        if (workspaceQuillInstance) {
-            let currentText = workspaceQuillInstance.root.innerHTML;
-            const escapePatterns = [`<${tokenToRemove}>`, `&lt;${tokenToRemove}&gt;`];
-            escapePatterns.forEach(pattern => {
-                currentText = currentText.replaceAll(pattern, '');
-            });
-            workspaceQuillInstance.root.innerHTML = currentText;
-        }
+        // 2. Check if the user clicked your Refresh Shuffler Button
+        const refreshBtn = e.target.closest('.btn-refresh-workspace-component-value');
+        if (refreshBtn) {
+            e.stopPropagation();
+            const cardElement = refreshBtn.closest('.workspace-block-card');
+            if (!cardElement) return;
 
-        checkEmptyColumns();
-        updateWorkspaceSimulationPreview();
+            // Animate the rotation icon briefly for high-fidelity visual feedback
+            const icon = refreshBtn.querySelector('.fa-redo-alt');
+            if (icon) {
+                icon.style.transform = 'rotate(360deg)';
+                icon.style.transition = 'transform 0.4s ease';
+                setTimeout(() => {
+                    icon.style.transform = 'none';
+                    icon.style.transition = 'none';
+                }, 400);
+            }
+
+            // 🎯 UPGRADED: Assign a completely unique, non-sequential random float multiplier 
+            // so it breaks any repeating cyclic loops when evaluating the pool.
+            cardElement.setAttribute('data-shuffle-seed', Math.random().toString());
+
+            // Force engine view sync redraw transaction
+            updateWorkspaceSimulationPreview();
+            return;
+        }
     }
 
-    if (variablesContainer) variablesContainer.addEventListener('click', handleComponentDeletion);
-    if (inputsContainer) inputsContainer.addEventListener('click', handleComponentDeletion);
+    // Connect our multi-action router directly to both sidebars
+    if (variablesContainer) variablesContainer.addEventListener('click', handleSidebarComponentActions);
+    if (inputsContainer) inputsContainer.addEventListener('click', handleSidebarComponentActions);
 
-    // -------------------------------------------------------------
-    // UI Builder Render Framework Functions
-    // -------------------------------------------------------------
-    function renderVariableComponent(entity, schema, tokenName) {
-        if (!variablesContainer) return;
-        const card = document.createElement('div');
-        card.className = 'workspace-component-card';
-        card.setAttribute('data-entity-id', entity.id);
-        card.setAttribute('data-entity-type', entity.type);
-        card.style.cssText = 'background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;';
-        
-        let fieldsHtml = '';
-        if (entity.type === 'variable_numeric') {
-            fieldsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
-                    <label style="font-size: 0.75rem; color: #475569;">Min: <input type="number" class="val-input-min" value="${schema.min ?? -9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Max: <input type="number" class="val-input-max" value="${schema.max ?? 9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Step: <input type="number" class="val-input-step" value="${schema.step ?? 1}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                </div>
-                <label style="font-size: 0.75rem; color: #475569; display:block; margin-top:4px;">Exclude (Comma-separated): 
-                    <input type="text" class="val-input-exclude" value="${(schema.exclude || []).join(', ')}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
-            `;
-        } else if (entity.type === 'variable_equation') {
-            fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569;">Formula expression string: 
-                    <input type="text" class="val-input-formula" value="${schema.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
-            `;
-        } else if (entity.type === 'variable_matrix') {
-            fieldsHtml = `
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 4px;">
-                    <label style="font-size: 0.75rem; color: #475569;">Rows: <input type="number" class="val-input-rows" value="${schema.rows ?? 3}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Cols: <input type="number" class="val-input-cols" value="${schema.cols ?? 3}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                </div>
-                <div style="background: #ffffff; border: 1px dashed #cbd5e1; padding: 6px; border-radius: 4px; font-size: 0.75rem; text-align: center; color: #64748b;"><i class="fas fa-th"></i> Matrix grid mapped</div>
-            `;
-        } else if (entity.type === 'variable_string_array') {
-            fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569; display:block; margin-bottom:4px;">Array values (Comma-separated text): 
-                    <input type="text" class="val-input-strings" value="${(schema.strings || ['A', 'B', 'C']).join(', ')}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
-            `;
+
+    // 🎯 4. GLOBAL EDIT TRIGGER CONTROLLER HANDLER: Fetch Data on demand from database
+    document.body.addEventListener('click', async function(e) {
+        const editBtn = e.target.closest('.btn-edit-problem-details');
+        if (!editBtn) return;
+
+        e.preventDefault();
+        const itemRow = editBtn.closest('[data-id], .problem-item-row');
+        if (!itemRow) return;
+
+        const problemId = itemRow.getAttribute('data-id');
+        workspaceOverlay.setAttribute('data-current-problem-id', problemId);
+        workspaceOverlay.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+
+        if (saveStatusSpan) {
+            saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Loading workspace options...`;
         }
 
-        card.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px dashed #e2e8f0; padding-bottom: 6px; margin-bottom: 4px;">
-                <span style="font-weight: 600; font-size: 0.85rem; color: #0284c7;"><i class="fas fa-calculator"></i> &lt;${tokenName}&gt;</span>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 0.7rem; background:#e0f2fe; color:#0369a1; padding:1px 6px; border-radius:10px; font-weight:500;">Variable</span>
-                    <button type="button" class="btn-delete-workspace-component" data-token="${tokenName}" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem;"><i class="fas fa-trash"></i></button>
-                </div>
-            </div>
-            <div class="component-fields-wrapper">${fieldsHtml}</div>
-        `;
-        variablesContainer.appendChild(card);
-    }
+        try {
+            // 🚀 Fetch real-time row options and saved elements compiled for this specific problem instance
+            const response = await fetch(`/problem/${problemId}/workspace/`);
+            const data = await response.json();
 
-    function renderInputFormComponent(entity, schema, tokenName) {
-        if (!inputsContainer) return;
-        const card = document.createElement('div');
-        card.className = 'workspace-component-card';
-        card.setAttribute('data-entity-id', entity.id);
-        card.setAttribute('data-entity-type', entity.type);
-        card.style.cssText = 'background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;';
-        
-        let fieldsHtml = '';
-        if (entity.type === 'mathematical_expression') {
-            fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569; display:block; margin-bottom:4px;">Correct Target Formula: 
-                    <input type="text" class="val-input-correct-formula" value="${schema.correct_formula || ''}" placeholder="e.g. factor(x**2 - 1)" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
-                <label style="font-size: 0.75rem; color: #475569; display:block;">Evaluation Structural Target Form:
-                    <select class="val-input-structural-form" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        <option value="Factor" ${schema.expected_structural_form === 'Factor' ? 'selected' : ''}>Factor Analysis Matching</option>
-                        <option value="Simplify" ${schema.expected_structural_form === 'Simplify' ? 'selected' : ''}>Simplify Algebraic Equivalency</option>
-                        <option value="Expand" ${schema.expected_structural_form === 'Expand' ? 'selected' : ''}>Expand Polynomial Statements</option>
-                    </select>
-                </label>
-            `;
-        } else if (entity.type === 'multiple_choice') {
-            const choiceCount = schema.choices ? schema.choices.length : 0;
-            fieldsHtml = `
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-                    <span style="font-size: 0.75rem; color:#475569;">Mode: <strong>${schema.decoy_generation_mode || 'Manual'}</strong></span>
-                    <span style="font-size: 0.75rem; color:#475569;">Options Array Count: <strong>${choiceCount}</strong></span>
-                </div>
-                <button type="button" style="width:100%; background:#ffffff; border:1px solid #cbd5e1; font-size:0.75rem; padding:4px; border-radius:4px; color:#475569;"><i class="fas fa-list-ul"></i> Edit Options</button>
-            `;
-        } else if (entity.type === 'numeric_tolerance') {
-            fieldsHtml = `
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-                    <label style="font-size: 0.75rem; color: #475569;">Value: <input type="text" class="val-input-correct-value" value="${schema.correct_value || ''}" placeholder="e.g. 3.141" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">&plusmn; Tolerance: <input type="number" class="val-input-tolerance" step="0.001" value="${schema.tolerance ?? 0.01}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                </div>
-            `;
-        } else if (entity.type === 'short_text_input') {
-            fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569; display:block;">Expected text answer string: 
-                    <input type="text" class="val-input-expected" value="${(schema.expected_answers || []).join(', ')}" placeholder="e.g. true, false" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
-            `;
-        } else if (entity.type === 'matrix_input') {
-            fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569; display:block;">Correct matrix variable link: 
-                    <input type="text" class="val-input-matrix-var" value="${schema.correct_matrix_variable || ''}" placeholder="e.g. <matrix1>" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
-            `;
+            if (!data.success) {
+                alert(`Error initializing workspace environment: ${data.error}`);
+                return;
+            }
+
+            // Write live elements arrays straight to mutable global tracking parameters
+            dynamicVarsTokens = data.dynamic_variables_options || [];
+            answerFieldsTokens = data.answer_fields_options || [];
+
+            if (overlayTitleField) {
+                overlayTitleField.value = data.title || '';
+            }
+
+            // Rebuild option dropdown interfaces straight from active tables definitions arrays
+            setupDropdownMenu('add-variable-trigger', 'dropdown-menu-variables', dynamicVarsTokens);
+            setupDropdownMenu('add-input-trigger', 'dropdown-menu-inputs', answerFieldsTokens);
+
+            // Lazy-Initialize Quill text frame securely
+            if (!workspaceQuillInstance && typeof Quill !== 'undefined' && htmlCanvasEditor) {
+                workspaceQuillInstance = new Quill('#editor-html-insert-canvas', {
+                    theme: 'snow',
+                    modules: { toolbar: '#workspace-quill-toolbar-container' }
+                });
+                workspaceQuillInstance.on('text-change', () => {
+                    updateWorkspaceSimulationPreview();
+                    if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+                });
+            }
+
+            if (workspaceQuillInstance) {
+                workspaceQuillInstance.root.innerHTML = data.body_html || '<p><br></p>';
+            }
+
+            // Restore active workspace variables configuration blocks columns rows items
+            rehydrateWorkspaceSegments(data.loaded_segments || []);
+            updateWorkspaceSimulationPreview();
+
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Synced`;
+            }
+
+        } catch (err) {
+            console.error("Failed cold-loading problem metrics payload:", err);
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Loading Failed`;
+            }
         }
+    });
 
-        card.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px dashed #e2e8f0; padding-bottom: 6px; margin-bottom: 4px;">
-                <span style="font-weight: 600; font-size: 0.85rem; color: #16a34a;"><i class="fas fa-pen-alt"></i> &lt;${tokenName}&gt;</span>
-                <div style="display: flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 0.7rem; background:#dcfce7; color:#166534; padding:1px 6px; border-radius:10px; font-weight:500;">${entity.points} Pts</span>
-                    <button type="button" class="btn-delete-workspace-component" data-token="${tokenName}" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem;"><i class="fas fa-trash"></i></button>
-                </div>
-            </div>
-            <div class="component-fields-wrapper">${fieldsHtml}</div>
-        `;
-        inputsContainer.appendChild(card);
+    if (closeOverlayBtn) {
+        closeOverlayBtn.addEventListener('click', function() {
+            workspaceOverlay.style.display = 'none';
+            document.body.style.overflow = '';
+        });
     }
 
+    // Structural Helpers
     function removePlaceholders(container) {
         if (!container) return;
         const italicText = container.querySelector('p');
@@ -646,142 +600,110 @@ document.addEventListener('DOMContentLoaded', function() {
         if (inputsContainer) inputsContainer.innerHTML = '<p style="color:#94a3b8; font-size:0.85rem; font-style:italic;">No answer forms attached.</p>';
     }
 
-    // 🎯 2. DRAFT PROGRESS SAVE ACTION HANDLER
+    // 🎯 5. DRAFT PROGRESS SAVE ACTION HANDLER
     if (saveDraftBtn) {
-        saveDraftBtn.addEventListener('click', function() {
-            const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
+        saveDraftBtn.addEventListener('click', async function() {
+            console.log("Save button clicked. Building workspace configuration payload...");
             
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Saving draft...`;
+            }
+            saveDraftBtn.disabled = true;
+
+            const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
+            const titleValue = overlayTitleField ? overlayTitleField.value.trim() : '';
+            const canvasHtml = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
+
             if (!problemId) {
-                alert("Error: No target problem identification selected.");
+                alert("Error: Missing target problem identifier instance anchor.");
+                resetSaveButtonState();
                 return;
             }
 
-            // Provide visual feedback state changes while transmitting data via AJAX
-            saveDraftBtn.disabled = true;
-            if (saveStatusSpan) {
-                saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Saving changes...`;
-            }
+            const inputsPayloadList = [];
+            const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
 
-            // Gathers current rich-text layout markup directly out of the editor core canvas surface
-            const htmlContent = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML : '';
+            activeCards.forEach(card => {
+                const baseToken = card.getAttribute('data-token'); // e.g., "randInt"
+                if (!baseToken) return;
 
-            // 🎯 NEW: Scrape active configurations straight from the left sidebar DOM entries
-            const activeEntities = [];
-
-            // Combine both list containers to loop through all configurations seamlessly
-            const componentCards = document.querySelectorAll('#sidebar-variables-list .workspace-component-card, #sidebar-inputs-list .workspace-component-card');
-
-            componentCards.forEach(card => {
-                const entityType = card.getAttribute('data-entity-type');
-                
-                // Pull token out of the data-token attribute on the delete button
+                // Find the delete button to read the custom calculated sequential label string
                 const deleteBtn = card.querySelector('.btn-delete-workspace-component');
-                const token = deleteBtn ? deleteBtn.getAttribute('data-token') : '';
+                const indexedTokenString = deleteBtn ? deleteBtn.getAttribute('data-indexed-token') : baseToken; // e.g., "randInt1"
 
-                if (!token) return; // Skip if token extraction fails
+                const inputValues = {};
 
-                // Establish a baseline object payload for the entity segment
-                const entityData = {
-                    token: token,
-                    type: entityType
-                };
+                const minEl = card.querySelector('.val-input-min');
+                const maxEl = card.querySelector('.val-input-max');
+                const stepEl = card.querySelector('.val-input-step');
 
-                // 🛠️ Dynamic Variables Parsing Group
-                if (entityType === 'variable_numeric') {
-                    entityData.min = card.querySelector('.val-input-min')?.value || '-9';
-                    entityData.max = card.querySelector('.val-input-max')?.value || '9';
-                    entityData.step = card.querySelector('.val-input-step')?.value || '1';
-                    entityData.exclude = card.querySelector('.val-input-exclude')?.value || '';
-                } 
-                else if (entityType === 'variable_equation') {
-                    entityData.formula = card.querySelector('.val-input-formula')?.value || '';
-                } 
-                else if (entityType === 'variable_matrix') {
-                    entityData.rows = card.querySelector('.val-input-rows')?.value || '3';
-                    entityData.cols = card.querySelector('.val-input-cols')?.value || '3';
-                } 
-                else if (entityType === 'variable_string_array') {
-                    entityData.strings = card.querySelector('.val-input-strings')?.value || '';
-                }
-                
-                // 🛠️ Answer Input Fields Parsing Group
-                else if (entityType === 'mathematical_expression') {
-                    entityData.correct_formula = card.querySelector('.val-input-correct-formula')?.value || '';
-                    entityData.structural_form = card.querySelector('.val-input-structural-form')?.value || 'Factor';
-                    entityData.points = 1.0;
-                } 
-                else if (entityType === 'multiple_choice') {
-                    entityData.mode = 'Manual';
-                    entityData.points = 1.0;
-                    // If you manage an option checklist array globally or within a sub-container, 
-                    // you can push it here: entityData.options = []
-                } 
-                else if (entityType === 'numeric_tolerance') {
-                    entityData.correct_value = card.querySelector('.val-input-correct-value')?.value || '';
-                    entityData.tolerance = card.querySelector('.val-input-tolerance')?.value || '0.01';
-                    entityData.points = 1.0;
-                } 
-                else if (entityType === 'short_text_input') {
-                    entityData.expected = card.querySelector('.val-input-expected')?.value || '';
-                    entityData.points = 1.0;
-                } 
-                else if (entityType === 'matrix_input') {
-                    entityData.matrix_var = card.querySelector('.val-input-matrix-var')?.value || '';
-                    entityData.points = 1.0;
-                }
+                if (minEl) inputValues.min = minEl.value;
+                if (maxEl) inputValues.max = maxEl.value;
+                if (stepEl) inputValues.step = stepEl.value;
 
-                activeEntities.push(entityData);
+                const formulaEl = card.querySelector('.val-input-formula');
+                if (formulaEl) inputValues.formula = formulaEl.value.trim();
+
+                const correctFormulaEl = card.querySelector('.val-input-correct-formula');
+                if (correctFormulaEl) inputValues.correct_formula = correctFormulaEl.value.trim();
+
+                // 🚀 FIX: Send the clean base database token, and pass the indexed tracking sequence string separately
+                inputsPayloadList.push({
+                    token: baseToken,                       // Keeps Django's database lookup clean (e.g. "randInt")
+                    sequence_token: indexedTokenString,    // Lets the backend know its order index (e.g. "randInt1")
+                    inputs: inputValues
+                });
             });
 
-            // Build payload properties targeting the Django update view receiver
             const payload = {
-                problem_id: problemId,
-                title: overlayTitleField ? overlayTitleField.value.trim() : '',
-                body_html: htmlContent,
-                active_entities: activeEntities // 🎯 Explicitly tracked configurations
+                title: titleValue,
+                body_html: canvasHtml,
+                inputs: inputsPayloadList
             };
 
-            console.log("Transmitting relational ledger payload state down to database:", payload);
+            try {
+                const response = await fetch(`/api/problem/${problemId}/save-workspace/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCsrfToken()
+                    },
+                    body: JSON.stringify(payload)
+                });
 
-            // Post down to the background view route asynchronously
-            fetch(window.AQG_CONFIG.saveProblemUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-CSRFToken": getCsrfToken()
-                },
-                body: JSON.stringify(payload)
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log("Server Response Payload Object:", data);
-                if (data.success) {
+                const result = await response.json();
+
+                if (response.ok && result.success) {
                     if (saveStatusSpan) {
-                        saveStatusSpan.innerHTML = `<i class="fas fa-check-circle" style="color: #10b981;"></i> Draft Saved`;
+                        saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Synced`;
                     }
-                    
-                    // Update matching title labels over on the underlying course dashboard rows instantly
-                    const dashboardRowTitle = document.querySelector(`.problem-item-row[data-id="${problemId}"] .problem-title-text`);
-                    if (dashboardRowTitle && payload.title) {
-                        dashboardRowTitle.textContent = payload.title;
-                    }
+                    console.log("Database transaction complete:", result.message);
                 } else {
-                    alert("Error saving workspace configuration: " + (data.error || "Unknown server response fault exception."));
-                    if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color: #ef4444;"></i> Sync Failed`;
+                    if (saveStatusSpan) {
+                        saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Save Failed`;
+                    }
+                    alert(`Compilation Error:\n${result.error || 'Unknown tracking malfunction.'}`);
                 }
-            })
-            .catch(err => {
-                console.error("Workspace persistence transactional operation error:", err);
-                if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color: #ef4444;"></i> Connection Lost`;
-            })
-            .finally(() => {
-                saveDraftBtn.disabled = false;
-            });
+            } catch (error) {
+                console.error("AJAX Communication failure:", error);
+                if (saveStatusSpan) {
+                    saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Connection Error`;
+                }
+                alert("Network communication timeout occurred processing save transaction.");
+            } finally {
+                resetSaveButtonState();
+            }
         });
     }
 
-    // Small standalone security helper to extract active CSRF middleware tokens safely
+    function resetSaveButtonState() {
+        if (saveDraftBtn) {
+            saveDraftBtn.disabled = false;
+        }
+    }
+
     function getCsrfToken() {
-        return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+        const csrfInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+        return csrfInput ? csrfInput.value : '';
     }
 });
