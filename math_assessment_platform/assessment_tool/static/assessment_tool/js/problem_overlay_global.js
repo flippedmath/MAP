@@ -173,26 +173,60 @@ document.addEventListener('DOMContentLoaded', function() {
         // Add new entity Step 1: if new fields exist, then add the html here for the new entity
         if (token === 'randInt') {
             fieldsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
-                    <label style="font-size: 0.75rem; color: #475569;">Min: <input type="number" class="val-input-min" value="${savedValues.min ?? -9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Max: <input type="number" class="val-input-max" value="${savedValues.max ?? 9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Step: <input type="number" class="val-input-step" value="${savedValues.step ?? 1}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                    <div class="linked-input-wrapper" data-input-key="min" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: 
+                            <input type="number" class="val-input-min" value="${savedValues.min ?? -9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        </label>
+                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+                    
+                    <div class="linked-input-wrapper" data-input-key="max" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: 
+                            <input type="number" class="val-input-max" value="${savedValues.max ?? 9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        </label>
+                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+
+                    <div class="linked-input-wrapper" data-input-key="step" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: 
+                            <input type="number" class="val-input-step" value="${savedValues.step ?? 1}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        </label>
+                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
                 </div>
             `;
         } else if (token === 'rand') {
             fieldsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
-                    <label style="font-size: 0.75rem; color: #475569;">Min: <input type="number" step="any" class="val-input-min" value="${savedValues.min ?? 0.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Max: <input type="number" step="any" class="val-input-max" value="${savedValues.max ?? 1.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                    <label style="font-size: 0.75rem; color: #475569;">Step: <input type="number" step="any" class="val-input-step" value="${savedValues.step ?? 0.01}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                    <div class="linked-input-wrapper" data-input-key="min" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: <input type="number" step="any" class="val-input-min" value="${savedValues.min ?? 0.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                        <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+                    <div class="linked-input-wrapper" data-input-key="max" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: <input type="number" step="any" class="val-input-max" value="${savedValues.max ?? 1.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                        <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+                    <div class="linked-input-wrapper" data-input-key="step" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: <input type="number" step="any" class="val-input-step" value="${savedValues.step ?? 0.01}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                        <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
                 </div>
             `;
         } else if (token === 'primeFactors') {
             fieldsHtml = `
-                <div style="display: grid; grid-template-columns: 1fr; gap: 6px;">
-                    <label style="font-size: 0.75rem; color: #475569;">Number to Factor: 
-                        <input type="number" class="val-input-number" value="${savedValues['number to factor'] ?? 12}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;">
+                <div class="linked-input-wrapper" data-input-key="number to factor" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
+                    <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Number to Factor: 
+                        <input type="number" class="val-input-number" value="${savedValues['number to factor'] ?? 12}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                     </label>
+                    <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                    <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
                 </div>
             `;
         }
@@ -262,6 +296,41 @@ document.addEventListener('DOMContentLoaded', function() {
 
         containerElement.appendChild(card);
 
+        // 🎯 NEW REHYDRATION RE-LINKING MATRIX
+        // Scan all newly created input wrappers on this card to check if their saved values are tokens
+        const newlyCreatedWrappers = card.querySelectorAll('.linked-input-wrapper');
+        newlyCreatedWrappers.forEach(wrapper => {
+            const inputKey = wrapper.getAttribute('data-input-key');
+            const savedValue = savedValues[inputKey];
+
+            // If the saved parameter is a linked token string (e.g., "<randInt4>")
+            if (savedValue && typeof savedValue === 'string' && savedValue.trim().match(/^<([^>]+)>$/)) {
+                const cleanTokenString = savedValue.trim();
+                const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
+                
+                // 1. Hide the native fallback input element label text
+                wrapper.querySelector('label').style.display = 'none';
+                
+                // 2. Explicitly stamp the structural relation connection parameter
+                wrapper.setAttribute('data-bound-token', cleanTokenString);
+
+                // 3. Inject the green tracking pill capsule interface design
+                const pill = document.createElement('span');
+                pill.className = 'linked-token-pill';
+                pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
+                pill.innerText = cleanTokenString;
+                wrapper.insertBefore(pill, linkBtn);
+
+                // 4. Pivot the link button into an active red close asset layout element
+                if (linkBtn) {
+                    linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+                    linkBtn.className = 'btn-input-link-trigger is-linked';
+                    linkBtn.style.color = '#ef4444';
+                    linkBtn.style.borderColor = '#fca5a5';
+                }
+            }
+        });
+
         // Track live typing modifications to clear synced status tracking layers
         card.addEventListener('input', function(e) {
             if (e.target.matches('input, select, textarea')) {
@@ -273,6 +342,98 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // -------------------------------------------------------------
+    // RECURSIVE DEPENDENCY RESOLUTION HELPER
+    // -------------------------------------------------------------
+    function getLiveComponentValue(card, inputKey, defaultFallback) {
+        if (!card) return defaultFallback;
+        
+        // Find the specific wrapper container for this input parameter field
+        const wrapper = card.querySelector(`.linked-input-wrapper[data-input-key="${inputKey}"]`);
+        if (!wrapper) {
+            // Fallback for elements without standard linkage wrappers yet (like formula inputs)
+            const inputField = card.querySelector(`[class*="val-input-${inputKey}"]`);
+            return inputField ? inputField.value.trim() : defaultFallback;
+        }
+
+        const boundToken = wrapper.getAttribute('data-bound-token');
+        if (boundToken) {
+            const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
+            
+            // Scan the DOM to locate the source variable component card
+            const allCards = document.querySelectorAll('.workspace-block-card');
+            let matchedValue = defaultFallback;
+
+            allCards.forEach(sourceCard => {
+                const deleteBtn = sourceCard.querySelector('.btn-delete-workspace-component');
+                if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
+                    matchedValue = evaluateSingleCardOutput(sourceCard, cleanTargetToken);
+                }
+            });
+            return matchedValue;
+        }
+
+        // No link: fallback directly onto the text/numeric input value parameter
+        const inputField = wrapper.querySelector('input');
+        return (inputField && inputField.value !== '') ? inputField.value.trim() : defaultFallback;
+    }
+
+    // Isolate the core calculation matrix out of the main loop so it can be resolved recursively
+    function evaluateSingleCardOutput(card, tokenIdentifier) {
+        const baseArchetype = card.getAttribute('data-token');
+
+        if (baseArchetype === 'randInt') {
+            const minVal = parseInt(getLiveComponentValue(card, 'min', -9), 10);
+            const maxVal = parseInt(getLiveComponentValue(card, 'max', 9), 10);
+            const stepVal = parseInt(getLiveComponentValue(card, 'step', 1), 10);
+            
+            if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
+                const pool = [];
+                let current = minVal;
+                while (current <= maxVal) { pool.push(current); current += stepVal; }
+                if (pool.length > 0) {
+                    const seedAttr = card.getAttribute('data-shuffle-seed');
+                    let targetIndex = 0;
+                    if (seedAttr) {
+                        targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
+                    } else {
+                        const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                        targetIndex = baseTextSeed % pool.length;
+                    }
+                    if (targetIndex >= pool.length) targetIndex = pool.length - 1;
+                    return pool[targetIndex].toString();
+                }
+            }
+        } 
+        else if (baseArchetype === 'rand') {
+            const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0));
+            const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0));
+            const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01));
+            // Your rand resolution...
+            return minVal.toString(); 
+        }
+        else if (baseArchetype === 'primeFactors') {
+            let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12), 10);
+            if (!isNaN(targetNum) && targetNum > 1) {
+                const factors = [];
+                while (targetNum % 2 === 0) { factors.push(2); targetNum = Math.floor(targetNum / 2); }
+                let factor = 3;
+                while (factor * factor <= targetNum) {
+                    while (targetNum % factor === 0) { factors.push(factor); targetNum = Math.floor(targetNum / factor); }
+                    factor += 2;
+                }
+                if (targetNum > 1) factors.push(targetNum);
+                return factors.join(', ');
+            }
+            return "";
+        }
+        else if (baseArchetype === 'formula') {
+            const formulaField = card.querySelector('.val-input-formula');
+            return formulaField ? formulaField.value.trim() : '';
+        }
+
+        return card.getAttribute('data-simulated-value') || '';
+    }
 
     // -------------------------------------------------------------
     // LIVE PREVIEW SIMULATION RENDERING ENGINE (DYNAMIC RE-CALCULATION)
@@ -288,6 +449,145 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
+        // -------------------------------------------------------------
+        // INNER RECURSIVE VALUE RESOLUTION ENGINE
+        // -------------------------------------------------------------
+        function getLiveComponentValue(card, inputKey, defaultFallback) {
+            if (!card) return defaultFallback;
+            
+            // Query for standard linkage structural container wrappers
+            const wrapper = card.querySelector(`.linked-input-wrapper[data-input-key="${inputKey}"]`);
+            if (!wrapper) {
+                // Fallback catch-all logic for legacy unbound field classes (like formula)
+                const legacyInput = card.querySelector(`.val-input-${inputKey}`);
+                return legacyInput ? legacyInput.value.trim() : defaultFallback;
+            }
+
+            // Check if input parameter context is currently chained to an output token dependency
+            const boundToken = wrapper.getAttribute('data-bound-token');
+            if (boundToken) {
+                const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
+                const activeCards = document.querySelectorAll('.workspace-block-card');
+                let resolvedValue = defaultFallback;
+
+                activeCards.forEach(srcCard => {
+                    const deleteBtn = srcCard.querySelector('.btn-delete-workspace-component');
+                    if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
+                        // Recursively compute value based on the linked element card branch configuration
+                        resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken);
+                    }
+                });
+                return resolvedValue;
+            }
+
+            // No active link: extract current string out of standard native input element field lines
+            const nativeInput = wrapper.querySelector('input');
+            return (nativeInput && nativeInput.value !== '') ? nativeInput.value.trim() : defaultFallback;
+        }
+
+        function evaluateSingleCardOutput(card, tokenIdentifier) {
+            const baseArchetype = card.getAttribute('data-token');
+            let val = null;
+
+            if (baseArchetype === 'randInt') {
+                const minVal = parseInt(getLiveComponentValue(card, 'min', -9), 10);
+                const maxVal = parseInt(getLiveComponentValue(card, 'max', 9), 10);
+                const stepVal = parseInt(getLiveComponentValue(card, 'step', 1), 10);
+                
+                if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
+                    const pool = [];
+                    let current = minVal;
+                    while (current <= maxVal) { pool.push(current); current += stepVal; }
+                    if (pool.length > 0) {
+                        const seedAttr = card.getAttribute('data-shuffle-seed');
+                        let targetIndex = 0;
+                        if (seedAttr) {
+                            targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
+                        } else {
+                            const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                            targetIndex = baseTextSeed % pool.length;
+                        }
+                        if (targetIndex >= pool.length) targetIndex = pool.length - 1;
+                        val = pool[targetIndex].toString();
+                    }
+                }
+            } 
+            else if (baseArchetype === 'rand') {
+                const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0));
+                const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0));
+                const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01));
+
+                if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
+                    const totalRange = maxVal - minVal;
+                    const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
+
+                    if (maxSteps >= 0) {
+                        const seedAttr = card.getAttribute('data-shuffle-seed');
+                        let targetStepMultiplier = 0;
+
+                        if (seedAttr) {
+                            targetStepMultiplier = Math.floor(parseFloat(seedAttr) * (maxSteps + 1));
+                        } else {
+                            const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                            targetStepMultiplier = baseTextSeed % (maxSteps + 1);
+                            if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
+                        }
+
+                        if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
+                        if (targetStepMultiplier < 0) targetStepMultiplier = 0;
+
+                        let finalValue = minVal + (targetStepMultiplier * stepVal);
+                        if (finalValue > maxVal) finalValue = maxVal;
+
+                        const stepStr = stepVal.toString();
+                        let decimalPlaces = 4;
+                        if (stepStr.includes('.')) {
+                            decimalPlaces = stepStr.split('.')[1].length;
+                        }
+                        val = finalValue.toFixed(decimalPlaces);
+                    }
+                }
+            } 
+            else if (baseArchetype === 'primeFactors') {
+                // 🎯 LOOKUP BY DYNAMIC blue-printed dictionary parameter key string
+                let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12), 10);
+                
+                if (!isNaN(targetNum) && targetNum > 1) {
+                    const factors = [];
+                    while (targetNum % 2 === 0) {
+                        factors.push(2);
+                        targetNum = Math.floor(targetNum / 2);
+                    }
+                    let factor = 3;
+                    while (factor * factor <= targetNum) {
+                        while (targetNum % factor === 0) {
+                            factors.push(factor);
+                            targetNum = Math.floor(targetNum / factor);
+                        }
+                        factor += 2;
+                    }
+                    if (targetNum > 1) {
+                        factors.push(targetNum);
+                    }
+                    val = factors.join(', ');
+                } else {
+                    val = "";
+                }
+            }
+            else if (baseArchetype === 'formula') {
+                val = getLiveComponentValue(card, 'formula', '3*x + 5');
+            }
+
+            // Fallback cleanly onto seed attribute markers if evaluation results output blank string/null maps
+            if (val === null || val === '') {
+                val = card.getAttribute('data-simulated-value');
+            }
+            return val;
+        }
+
+        // -------------------------------------------------------------
+        // HTML LAYOUT PARSING AND FORMATTING REPLACEMENTS
+        // -------------------------------------------------------------
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = canvasContent;
 
@@ -309,137 +609,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const tokenRegex = /&lt;([^&>]+)&gt;|<([^>]+)>/g;
 
         let simulatedHtml = workingHtml.replace(tokenRegex, function(match, tokenText) {
-            const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim(); // e.g., "randInt2"
-            
+            const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim(); // e.g., "primeFactors1"
             let evaluationValue = null;
             
-            // Look across variables and inputs sidebar blocks to locate an active configuration block match
+            // Scan through available live DOM items to match our tracking token target
             const allCards = document.querySelectorAll('.workspace-block-card');
             allCards.forEach(card => {
                 const deleteBtn = card.querySelector('.btn-delete-workspace-component');
                 if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanToken) {
-                    
-                    const baseArchetype = card.getAttribute('data-token');
-                    
-                    // Add new entity Step 2: if new fields exist, then add the javascript version of the identical server-side computations
-                    // 🎯 CLIENT-SIDE RANDOMIZATION SEED EVALUATION MATRIX
-                    if (baseArchetype === 'randInt') {
-                        const minVal = parseInt(card.querySelector('.val-input-min')?.value ?? -9, 10);
-                        const maxVal = parseInt(card.querySelector('.val-input-max')?.value ?? 9, 10);
-                        const stepVal = parseInt(card.querySelector('.val-input-step')?.value ?? 1, 10);
-                        
-                        if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-                            const pool = [];
-                            let current = minVal;
-                            while (current <= maxVal) {
-                                pool.push(current);
-                                current += stepVal;
-                            }
-                            if (pool.length > 0) {
-                                // Read our random factor string
-                                const seedAttr = card.getAttribute('data-shuffle-seed');
-                                
-                                let targetIndex = 0;
-                                if (seedAttr) {
-                                    // 🚀 CRITICAL FIX: Direct fractional translation. 
-                                    // This guarantees an unpredictable jump every single time across any sized pool.
-                                    const randomMultiplier = parseFloat(seedAttr);
-                                    targetIndex = Math.floor(randomMultiplier * pool.length);
-                                } else {
-                                    // Fallback deterministic default index for when the card first cold-loads 
-                                    // from the database before a user clicks refresh
-                                    const baseTextSeed = cleanToken.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                                    targetIndex = baseTextSeed % pool.length;
-                                }
-                                
-                                // Defensively clamp index to prevent array index out of bounds exceptions
-                                if (targetIndex >= pool.length) targetIndex = pool.length - 1;
-                                if (targetIndex < 0) targetIndex = 0;
-
-                                evaluationValue = pool[targetIndex].toString();
-                            }
-                        }
-                    } else if (baseArchetype === 'rand') {
-                        const minVal = parseFloat(card.querySelector('.val-input-min')?.value ?? 0.0);
-                        const maxVal = parseFloat(card.querySelector('.val-input-max')?.value ?? 1.0);
-                        const stepVal = parseFloat(card.querySelector('.val-input-step')?.value ?? 0.01);
-
-                        if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-                            // Calculate the max number of intervals mathematically (O(1) Memory Safe)
-                            const totalRange = maxVal - minVal;
-                            const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
-
-                            if (maxSteps >= 0) {
-                                const seedAttr = card.getAttribute('data-shuffle-seed');
-                                let targetStepMultiplier = 0;
-
-                                if (seedAttr) {
-                                    const randomMultiplier = parseFloat(seedAttr);
-                                    targetStepMultiplier = Math.floor(randomMultiplier * (maxSteps + 1));
-                                } else {
-                                    const baseTextSeed = cleanToken.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                                    targetStepMultiplier = baseTextSeed % (maxSteps + 1);
-                                    if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
-                                }
-
-                                // Clamp the step multiplier inside bounds
-                                if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
-                                if (targetStepMultiplier < 0) targetStepMultiplier = 0;
-
-                                let finalValue = minVal + (targetStepMultiplier * stepVal);
-                                if (finalValue > maxVal) finalValue = maxVal;
-
-                                // Dynamically calculate precision format length based on step size decimal places
-                                const stepStr = stepVal.toString();
-                                let decimalPlaces = 4;
-                                if (stepStr.includes('.')) {
-                                    decimalPlaces = stepStr.split('.')[1].length;
-                                }
-
-                                evaluationValue = finalValue.toFixed(decimalPlaces);
-                            }
-                        }
-                    } else if (baseArchetype === 'primeFactors') {
-                        let targetNum = parseInt(card.querySelector('.val-input-number')?.value ?? 12, 10);
-                        
-                        if (!isNaN(targetNum) && targetNum > 1) {
-                            const factors = [];
-                            
-                            // Extract factors of 2
-                            while (targetNum % 2 === 0) {
-                                factors.push(2);
-                                targetNum = Math.floor(targetNum / 2);
-                            }
-                            
-                            // Check odd factors up to the square root
-                            let factor = 3;
-                            while (factor * factor <= targetNum) {
-                                while (targetNum % factor === 0) {
-                                    factors.push(factor);
-                                    targetNum = Math.floor(targetNum / factor);
-                                }
-                                factor += 2;
-                            }
-                            
-                            // If anything remains, it must be prime
-                            if (targetNum > 1) {
-                                factors.push(targetNum);
-                            }
-                            
-                            evaluationValue = factors.join(', ');
-                        } else {
-                            evaluationValue = ""; // Graceful empty fallback if boundaries are invalid (< 2)
-                        }
-                    }
-                    else if (baseArchetype === 'formula') {
-                        evaluationValue = card.querySelector('.val-input-formula')?.value.trim() || '3*x + 5';
-                    }
-                    
-                    // If client-side processing didn't catch the token or fields are completely blank, 
-                    // fall back gracefully onto the initial server token string attribute
-                    if (evaluationValue === null || evaluationValue === '') {
-                        evaluationValue = card.getAttribute('data-simulated-value');
-                    }
+                    // Execute calculation engine matrix mapping dependencies down recursively
+                    evaluationValue = evaluateSingleCardOutput(card, cleanToken);
                 }
             });
 
@@ -725,24 +904,36 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const inputValues = {};
 
+                // 🎯 REPLACEMENT STRATEGY: Loop dynamically over your wrappers 
+                // to support both raw user entries AND nested token output dependencies.
+                const inputWrappers = card.querySelectorAll('.linked-input-wrapper');
+                
                 // Add new entity Step 3: if new fields exist, then add them here so I can extract the values
-                const minEl = card.querySelector('.val-input-min');
-                const maxEl = card.querySelector('.val-input-max');
-                const stepEl = card.querySelector('.val-input-step');
 
-                if (minEl) inputValues.min = minEl.value;
-                if (maxEl) inputValues.max = maxEl.value;
-                if (stepEl) inputValues.step = stepEl.value;
+                if (inputWrappers.length > 0) {
+                    inputWrappers.forEach(wrapper => {
+                        const inputKey = wrapper.getAttribute('data-input-key'); // e.g., "min", "max", "number to factor"
+                        const boundToken = wrapper.getAttribute('data-bound-token'); // e.g., "<randInt1>" or null
+                        
+                        if (boundToken) {
+                            // Link is active: grab the cross-referenced variable token tag string directly
+                            inputValues[inputKey] = boundToken;
+                        } else {
+                            // No link active: fall back to the standard input field value
+                            const inputField = wrapper.querySelector('input');
+                            if (inputField) {
+                                inputValues[inputKey] = inputField.value.trim();
+                            }
+                        }
+                    });
+                } else {
+                    // 🛡️ Safe fallback block for legacy nodes (like formula/mathAnswer) 
+                    // until you choose to wrap them in .linked-input-wrapper structures as well.
+                    const formulaEl = card.querySelector('.val-input-formula');
+                    if (formulaEl) inputValues.formula = formulaEl.value.trim();
 
-                const formulaEl = card.querySelector('.val-input-formula');
-                if (formulaEl) inputValues.formula = formulaEl.value.trim();
-
-                const correctFormulaEl = card.querySelector('.val-input-correct-formula');
-                if (correctFormulaEl) inputValues.correct_formula = correctFormulaEl.value.trim();
-
-                const numberEl = card.querySelector('.val-input-number');
-                if (numberEl) {
-                    inputValues['number to factor'] = numberEl.value;
+                    const correctFormulaEl = card.querySelector('.val-input-correct-formula');
+                    if (correctFormulaEl) inputValues.correct_formula = correctFormulaEl.value.trim();
                 }
 
                 // 🚀 FIX: Send the clean base database token, and pass the indexed tracking sequence string separately
@@ -752,7 +943,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     inputs: inputValues
                 });
             });
-
+            
             const payload = {
                 title: titleValue,
                 body_html: canvasHtml,
@@ -804,4 +995,121 @@ document.addEventListener('DOMContentLoaded', function() {
         const csrfInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
         return csrfInput ? csrfInput.value : '';
     }
+
+    // -------------------------------------------------------------
+    // DYNAMIC INPUT CHAINING / TOKEN LINKING CONTROLLER
+    // -------------------------------------------------------------
+    document.body.addEventListener('click', function(e) {
+        const linkBtn = e.target.closest('.btn-input-link-trigger');
+        if (!linkBtn) return;
+        
+        e.stopPropagation();
+        const wrapper = linkBtn.closest('.linked-input-wrapper');
+        const dropdown = wrapper.querySelector('.linkable-tokens-dropdown');
+        
+        // ❌ UNLINK ACTION: If the field is already linked, hitting the "X" resets it
+        if (linkBtn.classList.contains('is-linked')) {
+            wrapper.removeAttribute('data-bound-token');
+            wrapper.querySelector('label').style.display = 'block'; // Show input field again
+            
+            const badge = wrapper.querySelector('.linked-token-pill');
+            if (badge) badge.remove();
+            
+            linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+            linkBtn.className = 'btn-input-link-trigger';
+            linkBtn.style.color = '#94a3b8';
+            linkBtn.style.borderColor = '#cbd5e1';
+            updateWorkspaceSimulationPreview();
+            return;
+        }
+
+        // Toggle dropdown open status
+        if (dropdown.style.display === 'block') {
+            dropdown.style.display = 'none';
+            return;
+        }
+
+        // Close all other dropdown open channels
+        document.querySelectorAll('.linkable-tokens-dropdown').forEach(d => d.style.display = 'none');
+
+        // 🔍 RE-INDEX COMPATIBILITY BY INSPECTING LIVE ACTIVE DOM SIDEBAR CARDS
+        const targetType = wrapper.getAttribute('data-input-type'); // e.g., 'integer'
+        const currentCard = linkBtn.closest('.workspace-block-card');
+        const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
+        
+        let availableOptionsHtml = '';
+        
+        activeCards.forEach(card => {
+            // Prevent linking a card back into itself
+            if (card === currentCard) return;
+
+            const deleteBtn = card.querySelector('.btn-delete-workspace-component');
+            if (!deleteBtn) return;
+
+            const indexedToken = deleteBtn.getAttribute('data-indexed-token'); // e.g., "randInt2"
+            const baseArchetype = card.getAttribute('data-token');             // e.g., "randInt"
+
+            // Compute output configurations dynamically based on the model token archetype specifications
+            let derivedOutputs = [];
+            if (baseArchetype === 'randInt') derivedOutputs = ['integer'];
+            else if (baseArchetype === 'rand') derivedOutputs = ['double'];
+            else if (baseArchetype === 'formula') derivedOutputs = ['double', 'integer', 'formula'];
+            else if (baseArchetype === 'matrix') derivedOutputs = ['matrix'];
+            
+            // Check if the output configuration satisfies the data field expectation rules
+            if (derivedOutputs.includes(targetType)) {
+                availableOptionsHtml += `
+                    <button type="button" class="select-link-token-option" data-target-token="<${indexedToken}>" style="width: 100%; text-align: left; padding: 6px 12px; background: none; border: none; font-size: 0.75rem; cursor: pointer; transition: background 0.15s; color: #334155;">
+                        &lt;${indexedToken}&gt;
+                    </button>
+                `;
+            }
+        });
+
+        if (!availableOptionsHtml) {
+            availableOptionsHtml = `<div style="padding: 6px 12px; font-size: 0.7rem; color: #94a3b8; font-style: italic;">No matching outputs</div>`;
+        }
+
+        dropdown.innerHTML = availableOptionsHtml;
+        dropdown.style.display = 'block';
+    });
+
+    // Handle token option assignment action click events
+    document.body.addEventListener('click', function(e) {
+        const optionBtn = e.target.closest('.select-link-token-option');
+        if (!optionBtn) return;
+
+        e.stopPropagation();
+        const chosenTokenString = optionBtn.getAttribute('data-target-token'); // "<randInt1>"
+        const wrapper = optionBtn.closest('.linked-input-wrapper');
+        const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
+        
+        // Hide the input field label completely
+        wrapper.querySelector('label').style.display = 'none';
+        
+        // Save dependency configuration explicitly onto the node wrapper properties
+        wrapper.setAttribute('data-bound-token', chosenTokenString);
+
+        // Inject the visual element capsule tracking pill design
+        const pill = document.createElement('span');
+        pill.className = 'linked-token-pill';
+        pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-center;';
+        pill.innerText = chosenTokenString;
+        wrapper.insertBefore(pill, linkBtn);
+
+        // 🎯 Transform link icon to an active red delete close asset marker
+        linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+        linkBtn.className = 'btn-input-link-trigger is-linked';
+        linkBtn.style.color = '#ef4444';
+        linkBtn.style.borderColor = '#fca5a5';
+
+        // Close options dropdown picker instance frame
+        wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+        updateWorkspaceSimulationPreview();
+    });
+
+    // Close options dropdown panels automatically if clicking outward away from tracking structures
+    document.addEventListener('click', function() {
+        document.querySelectorAll('.linkable-tokens-dropdown').forEach(d => d.style.display = 'none');
+    });
 });

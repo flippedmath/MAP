@@ -634,22 +634,22 @@ class BaseEntity:
     Abstract validation base class for processing structural configurations
     against seeded format patterns stored in the EntityType table.
     """
-    def __init__(self, data, pattern_blueprint):
-        self.data = data  # The raw input object provided by the user workspace
+    def __init__(self, data, pattern_blueprint, all_entities_payload=None):
+        self.data = data  # The raw inputs dictionary mapping (e.g. {"min": "100", "max": "<randInt2>"})
         self.pattern_blueprint = pattern_blueprint  # The matched format_pattern dictionary
+        # 🎯 TRACK SIBLINGS: Keep a reference to all sibling entities in the draft
+        self.all_entities_payload = all_entities_payload or []
         self.cleaned_data = {}
+        self.runtime_values = {} # 🎯 Holds real numbers for validation/evaluation
         self.errors = {}
 
     def is_valid(self):
-        """
-        Executes structural audit verification against the configuration input object.
-        Returns True if the data conforms to the schema rules, otherwise False.
-        """
         self.errors = {}
         self.cleaned_data = {}
+        self.runtime_values = {} # Reset
         
+        provided_inputs = self.data
         blueprint_inputs = self.pattern_blueprint.get("inputs", {})
-        provided_inputs = self.data.get("inputs", {})
         
         if not isinstance(provided_inputs, dict):
             self.errors["inputs"] = "The provided inputs field must be a structured key-value map."
@@ -663,21 +663,73 @@ class BaseEntity:
             if input_key not in provided_inputs:
                 if has_default:
                     self.cleaned_data[input_key] = default_value
+                    self.runtime_values[input_key] = default_value
                     continue
                 else:
                     self.errors[input_key] = f"Missing required configuration property: '{input_key}'."
                     continue
 
             user_value = provided_inputs[input_key]
+            value_to_validate = user_value
             
+            if isinstance(user_value, str) and re.match(r"^<([^>]+)>$", user_value.strip()):
+                try:
+                    value_to_validate = self.resolve_token_dependency(user_value)
+                except ValidationError as e:
+                    self.errors[input_key] = e.message
+                    continue
+
             try:
-                self.cleaned_data[input_key] = self.validate_field_type(
-                    input_key, user_value, expected_field_type
+                # Type-check the calculated raw value (converts string numbers to actual ints/floats)
+                validated_result = self.validate_field_type(
+                    input_key, value_to_validate, expected_field_type
                 )
+                
+                # Runtime values always get the native type-casted value (e.g. 220)
+                self.runtime_values[input_key] = validated_result
+                
+                # Cleaned data retains the blueprint layout pointer for the database write (e.g. "<randInt2>")
+                self.cleaned_data[input_key] = user_value
+                    
             except ValidationError as e:
                 self.errors[input_key] = e.message
 
         return len(self.errors) == 0
+
+    def resolve_token_dependency(self, token_string):
+        """
+        Recursively extracts the real-time simulation output value of a cross-referenced token tag.
+        """
+        clean_sequence_token = token_string.replace("<", "").replace(">", "").strip() # e.g. "randInt2"
+        
+        # Locate the targeted dependency configuration inside the sibling payload array context
+        target_payload = next(
+            (item for item in self.all_entities_payload if item.get("sequence_token") == clean_sequence_token),
+            None
+        )
+        
+        if not target_payload:
+            raise ValidationError(f"Linked reference token <{clean_sequence_token}> could not be found in active workspace components.")
+
+        # Avoid local circular lookups by importing factory at execution time
+        
+        token_archetype = target_payload.get("token")
+        token_inputs = target_payload.get("inputs", {})
+        token_blueprint = get_blueprint_for_token(token_archetype) # Fetch its blueprint dictionary profile
+        
+        # Build dependency engine instances, passing along the complete array context stack
+        dependency_validator = get_entity_validator(
+            token_archetype, 
+            token_inputs, 
+            token_blueprint, 
+            all_entities_payload=self.all_entities_payload
+        )
+        
+        if not dependency_validator.is_valid():
+            raise ValidationError(f"Dependency error: Linked component <{clean_sequence_token}> has outstanding validation errors.")
+            
+        # Execute child computation tree evaluation recursively!
+        return dependency_validator.evaluate_output()
 
     def validate_field_type(self, key, value, field_type):
         if field_type == "integer":
@@ -716,7 +768,7 @@ class BaseEntity:
         Calculates and produces evaluated simulation content data for live engine previews.
         """
         raise NotImplementedError("Child entity component sub-classes must override evaluate_output() configuration mappings.")
-    
+        
 
 class RandomIntegerEntity(BaseEntity):
     """
@@ -726,10 +778,11 @@ class RandomIntegerEntity(BaseEntity):
         if not super().is_valid():
             return False
             
-        min_val = self.cleaned_data.get("min")
-        max_val = self.cleaned_data.get("max")
-        step_val = self.cleaned_data.get("step")
-        exclude_raw = self.cleaned_data.get("exclude", "")
+        # 🎯 READ FROM runtime_values GUARANTEES NATIVE PYTHON NUMERICAL TYPES
+        min_val = self.runtime_values.get("min")
+        max_val = self.runtime_values.get("max")
+        step_val = self.runtime_values.get("step")
+        exclude_raw = self.runtime_values.get("exclude", "")
 
         if min_val is not None and max_val is not None and min_val > max_val:
             self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
@@ -747,7 +800,7 @@ class RandomIntegerEntity(BaseEntity):
                 parsed_integers.append(int(item))
             
             if "exclude" not in self.errors:
-                self.cleaned_data["exclude_array"] = parsed_integers
+                self.runtime_values["exclude_array"] = parsed_integers
 
         return len(self.errors) == 0
 
@@ -755,13 +808,12 @@ class RandomIntegerEntity(BaseEntity):
         """
         🎯 CALCULATES REAL DYNAMIC INTEGERS ACCORDING TO USER PROPERTIES
         """
-        # Ensure fallback defaults exist if validation hasn't filled them or if running dynamically
-        min_val = self.cleaned_data.get("min") if self.cleaned_data.get("min") is not None else -9
-        max_val = self.cleaned_data.get("max") if self.cleaned_data.get("max") is not None else 9
-        step_val = self.cleaned_data.get("step") if self.cleaned_data.get("step") is not None else 1
-        exclude_set = set(self.cleaned_data.get("exclude_array", []))
+        # Read from runtime_values first, fallback to standard defaults if empty
+        min_val = self.runtime_values.get("min") if self.runtime_values.get("min") is not None else -9
+        max_val = self.runtime_values.get("max") if self.runtime_values.get("max") is not None else 9
+        step_val = self.runtime_values.get("step") if self.runtime_values.get("step") is not None else 1
+        exclude_set = set(self.runtime_values.get("exclude_array", []))
 
-        # Generate a list of available numbers matching our specific step increments
         possible_values = []
         current = min_val
         while current <= max_val:
@@ -769,7 +821,6 @@ class RandomIntegerEntity(BaseEntity):
                 possible_values.append(current)
             current += step_val
 
-        # If exclusions wiped out every single digit option, fall back inside boundaries safely
         if not possible_values:
             return str(min_val)
 
@@ -785,9 +836,9 @@ class RandomDoubleEntity(BaseEntity):
         if not super().is_valid():
             return False
             
-        min_val = self.cleaned_data.get("min")
-        max_val = self.cleaned_data.get("max")
-        step_val = self.cleaned_data.get("step")
+        min_val = self.runtime_values.get("min")
+        max_val = self.runtime_values.get("max")
+        step_val = self.runtime_values.get("step")
 
         # 2. Add domain-specific validation constraints for ranges and intervals
         if min_val is not None and max_val is not None and min_val > max_val:
@@ -804,9 +855,9 @@ class RandomDoubleEntity(BaseEntity):
         without instantiating large lists or hitting floating-point accumulation drift.
         """
         # Ensure safe fallbacks exist if unvalidated or missing
-        min_val = self.cleaned_data.get("min") if self.cleaned_data.get("min") is not None else 0.0
-        max_val = self.cleaned_data.get("max") if self.cleaned_data.get("max") is not None else 1.0
-        step_val = self.cleaned_data.get("step") if self.cleaned_data.get("step") is not None else 0.01
+        min_val = self.runtime_values.get("min") if self.runtime_values.get("min") is not None else 0.0
+        max_val = self.runtime_values.get("max") if self.runtime_values.get("max") is not None else 1.0
+        step_val = self.runtime_values.get("step") if self.runtime_values.get("step") is not None else 0.01
 
         # Defensive fallback if bounds are invalid
         if min_val >= max_val:
@@ -855,7 +906,7 @@ class PrimeFactorsEntity(BaseEntity):
             return False
             
         # Assuming the input key in your schema is named "number"
-        target_num = self.cleaned_data.get("number to factor")
+        target_num = self.runtime_values.get("number to factor")
 
         if target_num is not None:
             if target_num <= 1:
@@ -869,7 +920,7 @@ class PrimeFactorsEntity(BaseEntity):
         Breaks the number down into its prime factors using trial division.
         """
         # Ensure a safe fallback default if unvalidated or missing
-        n = self.cleaned_data.get("number to factor") if self.cleaned_data.get("number to factor") is not None else 12
+        n = self.runtime_values.get("number to factor") if self.runtime_values.get("number to factor") is not None else 12
 
         # Defensive guard rails
         if n <= 1:
@@ -973,7 +1024,7 @@ class MatrixEntity(BaseEntity):
         return str(cells)
     
 
-def get_entity_validator(token_string, data_payload, pattern_blueprint):
+def get_entity_validator(token_string, data_payload, pattern_blueprint, all_entities_payload=None):
     """
     Factory helper utility that returns the matching validation engine sub-class
     configured to handle target structural verification logic mappings.
@@ -981,8 +1032,8 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint):
     # Map token names to dedicated sub-classes
     validator_mapping = {
         "randInt": RandomIntegerEntity,
-        "rand": RandomDoubleEntity,          # 🎯 Registered
-        "primeFactors": PrimeFactorsEntity,  # 🎯 Registered
+        "rand": RandomDoubleEntity,
+        "primeFactors": PrimeFactorsEntity,
         "formula": FormulaEntity,
         "matrix": MatrixEntity,
         "matrixAnswer": MatrixEntity,
@@ -990,6 +1041,19 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint):
     
     # Fallback to base configuration validator if a custom token model isn't written yet
     validator_class = validator_mapping.get(token_string, BaseEntity)
-    return validator_class(data_payload, pattern_blueprint)
+    
+    # 🎯 Pass down the global sibling token list to the instantiator context
+    return validator_class(data_payload, pattern_blueprint, all_entities_payload=all_entities_payload)
 
-
+def get_blueprint_for_token(token_string):
+    """
+    Helper to fetch a blueprint dictionary directly by its 
+    EntityType name during background recursive token resolution.
+    """
+    try:
+        EntityType = apps.get_model('assessment_tool', 'EntityType')
+        record = EntityType.objects.get(name=token_string)
+        pattern = record.format_pattern
+        return json.loads(pattern) if isinstance(pattern, str) else pattern
+    except Exception:
+        return {}

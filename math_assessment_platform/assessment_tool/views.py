@@ -1867,8 +1867,10 @@ def save_problem_workspace(request, problem_id):
     cached_patterns = {}
 
     # 🎯 STEP A: VALIDATION LOOP (Before touch transactions)
+    # Create an array list to store our successfully built validator engines
+    validated_engines = []
+
     for index, entity_data in enumerate(user_inputs):
-        # Use the clean base token for database blueprint schema matching
         token_id = entity_data.get("token") 
         if not token_id:
             return JsonResponse({"success": False, "error": f"Missing 'token' identity string at index [{index}]."}, status=400)
@@ -1884,7 +1886,14 @@ def save_problem_workspace(request, problem_id):
                 return JsonResponse({"success": False, "error": f"Token configuration type '{token_id}' is invalid."}, status=400)
 
         blueprint = cached_patterns[token_id]
-        validator = get_entity_validator(token_id, entity_data, blueprint)
+        provided_fields = entity_data.get("inputs", {})
+        
+        validator = get_entity_validator(
+            token_id, 
+            provided_fields, 
+            blueprint, 
+            all_entities_payload=user_inputs
+        )
 
         if not validator.is_valid():
             error_details = ", ".join([f"[{k}]: {v}" for k, v in validator.errors.items()])
@@ -1893,6 +1902,14 @@ def save_problem_workspace(request, problem_id):
                 "success": False,
                 "error": f"Validation failed for '{friendly_name}' component: {error_details}"
             }, status=422)
+            
+        # 🎯 KEEP VALIDATOR REFERENCE FOR STEP B
+        validated_engines.append({
+            "token_id": token_id,
+            "sequence_token": entity_data.get("sequence_token", token_id),
+            "validator": validator,
+            "blueprint": blueprint
+        })
 
     # 🎯 STEP B: ATOMIC DATABASE SAVE TRANSACTION
     with transaction.atomic():
@@ -1915,16 +1932,19 @@ def save_problem_workspace(request, problem_id):
         EntitySegment.objects.filter(problem=problem).delete()
 
         # 4. Commit verified segments safely
-        for entity_data in user_inputs:
-            token_id = entity_data.get("token")
-            sequence_token = entity_data.get("sequence_token", token_id) # e.g., "randInt1"
-            blueprint = cached_patterns[token_id]
+        # 🎯 FIX: Loop over our validated_engines array list context instead of raw user_inputs!
+        for engine_item in validated_engines:
+            token_id = engine_item["token_id"]
+            sequence_token = engine_item["sequence_token"]
+            blueprint = engine_item["blueprint"]
+            validator = engine_item["validator"]
             
-            provided_inputs = entity_data.get("inputs", {})
-            points_value = provided_inputs.get("points") or blueprint.get("points", {}).get("default", 0.0)
+            # Extract directly from the dynamic cleaned_data map
+            content_payload = dict(validator.cleaned_data)
+            
+            points_value = content_payload.get("points") or blueprint.get("points", {}).get("default", 0.0)
             
             # Combine the user parameters and append display configurations to content payload JSON
-            content_payload = dict(provided_inputs)
             content_payload["answer_field"] = blueprint.get("answer_field", False)
             content_payload["sequence_token"] = sequence_token 
 
@@ -1932,7 +1952,6 @@ def save_problem_workspace(request, problem_id):
             if blueprint_default in [True, False]:
                 default_answer_fallback = blueprint_default
             else:
-                # If it's a string, try parsing it, or fall back to False to satisfy NOT NULL safely
                 if str(blueprint_default).lower() in ['true', '1', 'yes']:
                     default_answer_fallback = True
                 else:
