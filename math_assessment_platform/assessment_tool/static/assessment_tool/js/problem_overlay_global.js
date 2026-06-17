@@ -169,6 +169,14 @@ document.addEventListener('DOMContentLoaded', function() {
         const matchingTokenData = tokenSourceArray.find(item => item.token === token);
         const tokenNoteHint = matchingTokenData ? (matchingTokenData.note || '') : '';
 
+        // Helper function to prevent inserting literal token strings into type="number" inputs
+        const safeNumValue = (val, fallback) => {
+            if (typeof val === 'string' && val.trim().match(/^<([^>]+)>$/)) {
+                return fallback; // Return the standard numeric default for the HTML attribute
+            }
+            return val ?? fallback;
+        };
+
         let fieldsHtml = '';
         // Add new entity Step 1: if new fields exist, then add the html here for the new entity
         if (token === 'randInt') {
@@ -176,7 +184,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
                     <div class="linked-input-wrapper" data-input-key="min" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
                         <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: 
-                            <input type="number" class="val-input-min" value="${savedValues.min ?? -9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                            <input type="number" class="val-input-min" value="${safeNumValue(savedValues.min, -9)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                         </label>
                         <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                         <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
@@ -184,7 +192,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     <div class="linked-input-wrapper" data-input-key="max" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
                         <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: 
-                            <input type="number" class="val-input-max" value="${savedValues.max ?? 9}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                            <input type="number" class="val-input-max" value="${safeNumValue(savedValues.max, 9)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                         </label>
                         <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                         <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
@@ -192,7 +200,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     <div class="linked-input-wrapper" data-input-key="step" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
                         <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: 
-                            <input type="number" class="val-input-step" value="${savedValues.step ?? 1}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                            <input type="number" class="val-input-step" value="${safeNumValue(savedValues.step, 1)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                         </label>
                         <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                         <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
@@ -203,17 +211,17 @@ document.addEventListener('DOMContentLoaded', function() {
             fieldsHtml = `
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
                     <div class="linked-input-wrapper" data-input-key="min" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: <input type="number" step="any" class="val-input-min" value="${savedValues.min ?? 0.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: <input type="number" step="any" class="val-input-min" value="${safeNumValue(savedValues.min, 0.0)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
                         <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                         <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
                     </div>
                     <div class="linked-input-wrapper" data-input-key="max" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: <input type="number" step="any" class="val-input-max" value="${savedValues.max ?? 1.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: <input type="number" step="any" class="val-input-max" value="${safeNumValue(savedValues.max, 1.0)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
                         <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                         <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
                     </div>
                     <div class="linked-input-wrapper" data-input-key="step" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: <input type="number" step="any" class="val-input-step" value="${savedValues.step ?? 0.01}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: <input type="number" step="any" class="val-input-step" value="${safeNumValue(savedValues.step, 0.01)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
                         <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                         <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
                     </div>
@@ -223,7 +231,7 @@ document.addEventListener('DOMContentLoaded', function() {
             fieldsHtml = `
                 <div class="linked-input-wrapper" data-input-key="number to factor" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
                     <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Number to Factor: 
-                        <input type="number" class="val-input-number" value="${savedValues['number to factor'] ?? 12}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        <input type="number" class="val-input-number" value="${safeNumValue(savedValues['number to factor'], 12)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                     </label>
                     <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                     <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
@@ -343,9 +351,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // -------------------------------------------------------------
-    // RECURSIVE DEPENDENCY RESOLUTION HELPER
+    // RECURSIVE DEPENDENCY RESOLUTION HELPER (WITH CYCLE DETECTION)
     // -------------------------------------------------------------
-    function getLiveComponentValue(card, inputKey, defaultFallback) {
+    function getLiveComponentValue(card, inputKey, defaultFallback, visitedTokens = []) {
         if (!card) return defaultFallback;
         
         // Find the specific wrapper container for this input parameter field
@@ -360,6 +368,11 @@ document.addEventListener('DOMContentLoaded', function() {
         if (boundToken) {
             const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
             
+            // 🛑 CYCLE BREAK ENGINE: If this token is already being calculated in this call stack branch
+            if (visitedTokens.includes(cleanTargetToken)) {
+                return defaultFallback;
+            }
+
             // Scan the DOM to locate the source variable component card
             const allCards = document.querySelectorAll('.workspace-block-card');
             let matchedValue = defaultFallback;
@@ -367,7 +380,8 @@ document.addEventListener('DOMContentLoaded', function() {
             allCards.forEach(sourceCard => {
                 const deleteBtn = sourceCard.querySelector('.btn-delete-workspace-component');
                 if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
-                    matchedValue = evaluateSingleCardOutput(sourceCard, cleanTargetToken);
+                    // Forward current tracking ledger plus the target token down the stack
+                    matchedValue = evaluateSingleCardOutput(sourceCard, cleanTargetToken, [...visitedTokens, cleanTargetToken]);
                 }
             });
             return matchedValue;
@@ -379,13 +393,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Isolate the core calculation matrix out of the main loop so it can be resolved recursively
-    function evaluateSingleCardOutput(card, tokenIdentifier) {
+    function evaluateSingleCardOutput(card, tokenIdentifier, visitedTokens = []) {
         const baseArchetype = card.getAttribute('data-token');
 
         if (baseArchetype === 'randInt') {
-            const minVal = parseInt(getLiveComponentValue(card, 'min', -9), 10);
-            const maxVal = parseInt(getLiveComponentValue(card, 'max', 9), 10);
-            const stepVal = parseInt(getLiveComponentValue(card, 'step', 1), 10);
+            const minVal = parseInt(getLiveComponentValue(card, 'min', -9, visitedTokens), 10);
+            const maxVal = parseInt(getLiveComponentValue(card, 'max', 9, visitedTokens), 10);
+            const stepVal = parseInt(getLiveComponentValue(card, 'step', 1, visitedTokens), 10);
             
             if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
                 const pool = [];
@@ -406,14 +420,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } 
         else if (baseArchetype === 'rand') {
-            const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0));
-            const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0));
-            const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01));
-            // Your rand resolution...
+            const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0, visitedTokens));
+            const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0, visitedTokens));
+            const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01, visitedTokens));
             return minVal.toString(); 
         }
         else if (baseArchetype === 'primeFactors') {
-            let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12), 10);
+            let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12, visitedTokens), 10);
             if (!isNaN(targetNum) && targetNum > 1) {
                 const factors = [];
                 while (targetNum % 2 === 0) { factors.push(2); targetNum = Math.floor(targetNum / 2); }
@@ -450,9 +463,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // -------------------------------------------------------------
-        // INNER RECURSIVE VALUE RESOLUTION ENGINE
+        // INNER RECURSIVE VALUE RESOLUTION ENGINE (WITH CYCLE DETECTION)
         // -------------------------------------------------------------
-        function getLiveComponentValue(card, inputKey, defaultFallback) {
+        function getLiveComponentValue(card, inputKey, defaultFallback, visitedTokens = []) {
             if (!card) return defaultFallback;
             
             // Query for standard linkage structural container wrappers
@@ -467,14 +480,21 @@ document.addEventListener('DOMContentLoaded', function() {
             const boundToken = wrapper.getAttribute('data-bound-token');
             if (boundToken) {
                 const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
+                
+                // 🛑 CYCLE BREAK ENGINE: Prevent infinite recursive call stack loops
+                if (visitedTokens.includes(cleanTargetToken)) {
+                    return defaultFallback;
+                }
+
                 const activeCards = document.querySelectorAll('.workspace-block-card');
                 let resolvedValue = defaultFallback;
 
                 activeCards.forEach(srcCard => {
                     const deleteBtn = srcCard.querySelector('.btn-delete-workspace-component');
+                    // 🚀 FIXED: Changed 'cleanToken' to 'cleanTargetToken' to match correct scope variables
                     if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
                         // Recursively compute value based on the linked element card branch configuration
-                        resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken);
+                        resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken, [...visitedTokens, cleanTargetToken]);
                     }
                 });
                 return resolvedValue;
@@ -485,14 +505,14 @@ document.addEventListener('DOMContentLoaded', function() {
             return (nativeInput && nativeInput.value !== '') ? nativeInput.value.trim() : defaultFallback;
         }
 
-        function evaluateSingleCardOutput(card, tokenIdentifier) {
+        function evaluateSingleCardOutput(card, tokenIdentifier, visitedTokens = []) {
             const baseArchetype = card.getAttribute('data-token');
             let val = null;
 
             if (baseArchetype === 'randInt') {
-                const minVal = parseInt(getLiveComponentValue(card, 'min', -9), 10);
-                const maxVal = parseInt(getLiveComponentValue(card, 'max', 9), 10);
-                const stepVal = parseInt(getLiveComponentValue(card, 'step', 1), 10);
+                const minVal = parseInt(getLiveComponentValue(card, 'min', -9, visitedTokens), 10);
+                const maxVal = parseInt(getLiveComponentValue(card, 'max', 9, visitedTokens), 10);
+                const stepVal = parseInt(getLiveComponentValue(card, 'step', 1, visitedTokens), 10);
                 
                 if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
                     const pool = [];
@@ -513,9 +533,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } 
             else if (baseArchetype === 'rand') {
-                const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0));
-                const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0));
-                const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01));
+                const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0, visitedTokens));
+                const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0, visitedTokens));
+                const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01, visitedTokens));
 
                 if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
                     const totalRange = maxVal - minVal;
@@ -549,8 +569,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } 
             else if (baseArchetype === 'primeFactors') {
-                // 🎯 LOOKUP BY DYNAMIC blue-printed dictionary parameter key string
-                let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12), 10);
+                let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12, visitedTokens), 10);
                 
                 if (!isNaN(targetNum) && targetNum > 1) {
                     const factors = [];
@@ -575,7 +594,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             else if (baseArchetype === 'formula') {
-                val = getLiveComponentValue(card, 'formula', '3*x + 5');
+                val = getLiveComponentValue(card, 'formula', '3*x + 5', visitedTokens);
             }
 
             // Fallback cleanly onto seed attribute markers if evaluation results output blank string/null maps
@@ -1093,7 +1112,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Inject the visual element capsule tracking pill design
         const pill = document.createElement('span');
         pill.className = 'linked-token-pill';
-        pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-center;';
+        pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
         pill.innerText = chosenTokenString;
         wrapper.insertBefore(pill, linkBtn);
 
