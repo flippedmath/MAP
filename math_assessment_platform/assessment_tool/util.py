@@ -776,6 +776,128 @@ class RandomIntegerEntity(BaseEntity):
         return str(random.choice(possible_values))
 
 
+class RandomDoubleEntity(BaseEntity):
+    """
+    Validation engine for the 'rand' token pattern (Random Double/Decimal).
+    """
+    def is_valid(self):
+        # 1. Execute parent class validation to guarantee type checking (e.g., matching "double" inputs)
+        if not super().is_valid():
+            return False
+            
+        min_val = self.cleaned_data.get("min")
+        max_val = self.cleaned_data.get("max")
+        step_val = self.cleaned_data.get("step")
+
+        # 2. Add domain-specific validation constraints for ranges and intervals
+        if min_val is not None and max_val is not None and min_val > max_val:
+            self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
+
+        if step_val is not None and step_val <= 0:
+            self.errors["step"] = "Step decimal interval must be a positive number greater than 0."
+
+        return len(self.errors) == 0
+
+    def evaluate_output(self):
+        """
+        🎯 MEMORY SAFE CALCULATION: Computes random decimal steps mathematically 
+        without instantiating large lists or hitting floating-point accumulation drift.
+        """
+        # Ensure safe fallbacks exist if unvalidated or missing
+        min_val = self.cleaned_data.get("min") if self.cleaned_data.get("min") is not None else 0.0
+        max_val = self.cleaned_data.get("max") if self.cleaned_data.get("max") is not None else 1.0
+        step_val = self.cleaned_data.get("step") if self.cleaned_data.get("step") is not None else 0.01
+
+        # Defensive fallback if bounds are invalid
+        if min_val >= max_val:
+            return str(round(min_val, 4))
+
+        # 1. Find the total distance/span
+        total_range = max_val - min_val
+
+        # 2. Determine how many whole steps fit into this range.
+        # Adding a tiny epsilon (1e-9) safely protects against rounding precision loss
+        # dividing float thresholds (e.g., ensuring 0.3 / 0.1 evaluates cleanly to 3 steps).
+        max_steps = int((total_range + 1e-9) // step_val)
+
+        if max_steps <= 0:
+            return str(round(min_val, 4))
+
+        # 3. Choose a random step multiplier between 0 and max_steps inclusive
+        random_step_multiplier = random.randint(0, max_steps)
+
+        # 4. Multiply step size by our random multiplier to get the offset
+        result_value = min_val + (random_step_multiplier * step_val)
+
+        # 5. Cap the calculation defensively to prevent float math from overshooting max_val
+        if result_value > max_val:
+            result_value = max_val
+
+        # 6. Determine decimal places in step_val to dynamically round the outcome
+        # (e.g., if step is 0.001, we want to snap string display to 3 decimal spots)
+        step_str = str(step_val)
+        if '.' in step_str:
+            decimal_places = len(step_str.split('.')[1])
+        else:
+            decimal_places = 4 # default sensible baseline fallback
+
+        return str(round(result_value, decimal_places))
+    
+
+class PrimeFactorsEntity(BaseEntity):
+    """
+    Validation and evaluation engine for the 'primeFactors' token pattern.
+    Expects an input field (e.g., 'number') to break down into its prime components.
+    """
+    def is_valid(self):
+        # 1. Execute parent validation to guarantee types match structural blueprints
+        if not super().is_valid():
+            return False
+            
+        # Assuming the input key in your schema is named "number"
+        target_num = self.cleaned_data.get("number to factor")
+
+        if target_num is not None:
+            if target_num <= 1:
+                self.errors["number"] = "The input number must be a positive integer greater than 1."
+
+        return len(self.errors) == 0
+
+    def evaluate_output(self):
+        """
+        🎯 COMPUTES PRIME FACTORS MATHEMATICALLY
+        Breaks the number down into its prime factors using trial division.
+        """
+        # Ensure a safe fallback default if unvalidated or missing
+        n = self.cleaned_data.get("number to factor") if self.cleaned_data.get("number to factor") is not None else 12
+
+        # Defensive guard rails
+        if n <= 1:
+            return ""
+
+        factors = []
+        
+        # Pull out the factor of 2 first
+        while n % 2 == 0:
+            factors.append(2)
+            n //= 2
+            
+        # Check odd factors up to the square root of n
+        factor = 3
+        while factor * factor <= n:
+            while n % factor == 0:
+                factors.append(factor)
+                n //= factor
+            factor += 2
+            
+        # If n is still greater than 1, then the remaining n must be prime
+        if n > 1:
+            factors.append(n)
+
+        # Format output cleanly as a comma-separated string (e.g., "2, 2, 3")
+        return ", ".join(str(f) for f in factors)
+    
+
 class FormulaEntity(BaseEntity):
     """
     Validation engine for the 'formula' token pattern.
@@ -859,6 +981,8 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint):
     # Map token names to dedicated sub-classes
     validator_mapping = {
         "randInt": RandomIntegerEntity,
+        "rand": RandomDoubleEntity,          # 🎯 Registered
+        "primeFactors": PrimeFactorsEntity,  # 🎯 Registered
         "formula": FormulaEntity,
         "matrix": MatrixEntity,
         "matrixAnswer": MatrixEntity,

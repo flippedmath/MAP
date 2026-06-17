@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const tokenNoteHint = matchingTokenData ? (matchingTokenData.note || '') : '';
 
         let fieldsHtml = '';
-
+        // Add new entity Step 1: if new fields exist, then add the html here for the new entity
         if (token === 'randInt') {
             fieldsHtml = `
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
@@ -179,7 +179,24 @@ document.addEventListener('DOMContentLoaded', function() {
                     <label style="font-size: 0.75rem; color: #475569;">Step: <input type="number" class="val-input-step" value="${savedValues.step ?? 1}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
                 </div>
             `;
-        } else if (token === 'formula') {
+        } else if (token === 'rand') {
+            fieldsHtml = `
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;">
+                    <label style="font-size: 0.75rem; color: #475569;">Min: <input type="number" step="any" class="val-input-min" value="${savedValues.min ?? 0.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                    <label style="font-size: 0.75rem; color: #475569;">Max: <input type="number" step="any" class="val-input-max" value="${savedValues.max ?? 1.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                    <label style="font-size: 0.75rem; color: #475569;">Step: <input type="number" step="any" class="val-input-step" value="${savedValues.step ?? 0.01}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;"></label>
+                </div>
+            `;
+        } else if (token === 'primeFactors') {
+            fieldsHtml = `
+                <div style="display: grid; grid-template-columns: 1fr; gap: 6px;">
+                    <label style="font-size: 0.75rem; color: #475569;">Number to Factor: 
+                        <input type="number" class="val-input-number" value="${savedValues['number to factor'] ?? 12}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:2px; border:1px solid #cbd5e1; border-radius:4px;">
+                    </label>
+                </div>
+            `;
+        }
+        else if (token === 'formula') {
             fieldsHtml = `
                 <label style="font-size: 0.75rem; color: #475569;">Formula expression string: 
                     <input type="text" class="val-input-formula" value="${savedValues.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
@@ -200,9 +217,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 <span style="font-weight: 600; font-size: 0.85rem; color: ${headerColor};"><i class="fas fa-cube"></i> &lt;${indexedTokenString}&gt;</span>
                 <div style="display: flex; align-items: center; gap: 8px;">
                     
-                    <button type="button" class="btn-refresh-workspace-component-value" title="Shuffle simulation instance sample value" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, transform 0.15s;">
-                        <i class="fas fa-redo-alt"></i>
-                    </button>
+                    ${token !== 'primeFactors' ? `
+                        <button type="button" class="btn-refresh-workspace-component-value" title="Shuffle simulation instance sample value" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, transform 0.15s;">
+                            <i class="fas fa-redo-alt"></i>
+                        </button>
+                    ` : ''}
 
                     <span style="font-size: 0.77rem; background:${isVariable ? '#e0f2fe' : '#dcfce7'}; color:${isVariable ? '#0369a1' : '#166534'}; padding:1px 6px; border-radius:10px; font-weight:500;">${typeBadgeText}</span>
                     
@@ -302,6 +321,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     const baseArchetype = card.getAttribute('data-token');
                     
+                    // Add new entity Step 2: if new fields exist, then add the javascript version of the identical server-side computations
                     // 🎯 CLIENT-SIDE RANDOMIZATION SEED EVALUATION MATRIX
                     if (baseArchetype === 'randInt') {
                         const minVal = parseInt(card.querySelector('.val-input-min')?.value ?? -9, 10);
@@ -339,7 +359,79 @@ document.addEventListener('DOMContentLoaded', function() {
                                 evaluationValue = pool[targetIndex].toString();
                             }
                         }
-                    } else if (baseArchetype === 'formula') {
+                    } else if (baseArchetype === 'rand') {
+                        const minVal = parseFloat(card.querySelector('.val-input-min')?.value ?? 0.0);
+                        const maxVal = parseFloat(card.querySelector('.val-input-max')?.value ?? 1.0);
+                        const stepVal = parseFloat(card.querySelector('.val-input-step')?.value ?? 0.01);
+
+                        if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
+                            // Calculate the max number of intervals mathematically (O(1) Memory Safe)
+                            const totalRange = maxVal - minVal;
+                            const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
+
+                            if (maxSteps >= 0) {
+                                const seedAttr = card.getAttribute('data-shuffle-seed');
+                                let targetStepMultiplier = 0;
+
+                                if (seedAttr) {
+                                    const randomMultiplier = parseFloat(seedAttr);
+                                    targetStepMultiplier = Math.floor(randomMultiplier * (maxSteps + 1));
+                                } else {
+                                    const baseTextSeed = cleanToken.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                                    targetStepMultiplier = baseTextSeed % (maxSteps + 1);
+                                    if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
+                                }
+
+                                // Clamp the step multiplier inside bounds
+                                if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
+                                if (targetStepMultiplier < 0) targetStepMultiplier = 0;
+
+                                let finalValue = minVal + (targetStepMultiplier * stepVal);
+                                if (finalValue > maxVal) finalValue = maxVal;
+
+                                // Dynamically calculate precision format length based on step size decimal places
+                                const stepStr = stepVal.toString();
+                                let decimalPlaces = 4;
+                                if (stepStr.includes('.')) {
+                                    decimalPlaces = stepStr.split('.')[1].length;
+                                }
+
+                                evaluationValue = finalValue.toFixed(decimalPlaces);
+                            }
+                        }
+                    } else if (baseArchetype === 'primeFactors') {
+                        let targetNum = parseInt(card.querySelector('.val-input-number')?.value ?? 12, 10);
+                        
+                        if (!isNaN(targetNum) && targetNum > 1) {
+                            const factors = [];
+                            
+                            // Extract factors of 2
+                            while (targetNum % 2 === 0) {
+                                factors.push(2);
+                                targetNum = Math.floor(targetNum / 2);
+                            }
+                            
+                            // Check odd factors up to the square root
+                            let factor = 3;
+                            while (factor * factor <= targetNum) {
+                                while (targetNum % factor === 0) {
+                                    factors.push(factor);
+                                    targetNum = Math.floor(targetNum / factor);
+                                }
+                                factor += 2;
+                            }
+                            
+                            // If anything remains, it must be prime
+                            if (targetNum > 1) {
+                                factors.push(targetNum);
+                            }
+                            
+                            evaluationValue = factors.join(', ');
+                        } else {
+                            evaluationValue = ""; // Graceful empty fallback if boundaries are invalid (< 2)
+                        }
+                    }
+                    else if (baseArchetype === 'formula') {
                         evaluationValue = card.querySelector('.val-input-formula')?.value.trim() || '3*x + 5';
                     }
                     
@@ -633,6 +725,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const inputValues = {};
 
+                // Add new entity Step 3: if new fields exist, then add them here so I can extract the values
                 const minEl = card.querySelector('.val-input-min');
                 const maxEl = card.querySelector('.val-input-max');
                 const stepEl = card.querySelector('.val-input-step');
@@ -646,6 +739,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const correctFormulaEl = card.querySelector('.val-input-correct-formula');
                 if (correctFormulaEl) inputValues.correct_formula = correctFormulaEl.value.trim();
+
+                const numberEl = card.querySelector('.val-input-number');
+                if (numberEl) {
+                    inputValues['number to factor'] = numberEl.value;
+                }
 
                 // 🚀 FIX: Send the clean base database token, and pass the indexed tracking sequence string separately
                 inputsPayloadList.push({

@@ -258,21 +258,24 @@ class Command(BaseCommand):
         self.stdout.write(self.style.NOTICE(f"Found token template for token '{target_token}'. Synchronizing table record..."))
 
         with transaction.atomic():
-            # 🎯 FIXED: pass an empty dict structure {} instead of None to fulfill the database's NOT NULL constraint
+            serialized_format_pattern = json.dumps(blueprint)
+            serialized_insert_entity_pattern = json.dumps({})
+            serialized_entity_name_list = json.dumps([blueprint["entity_name_list"]])
+
             entity_type_obj, created = EntityType.objects.using('default').get_or_create(
                 name=blueprint["token"],
                 defaults={
-                    "format_pattern": blueprint,
-                    "insert_entity_pattern": {},
-                    "entity_name_list": [blueprint["entity_name_list"]]
+                    "format_pattern": serialized_format_pattern,
+                    "insert_entity_pattern": serialized_insert_entity_pattern,
+                    "entity_name_list": serialized_entity_name_list
                 }
             )
             
-            # If the record already existed, synchronize it with the latest structure
+            # If the record already existed, synchronize it with the latest structure safely
             if not created:
-                entity_type_obj.format_pattern = blueprint
-                entity_type_obj.insert_entity_pattern = {}
-                entity_type_obj.entity_name_list = [blueprint["entity_name_list"]]
+                entity_type_obj.format_pattern = serialized_format_pattern
+                entity_type_obj.insert_entity_pattern = serialized_insert_entity_pattern
+                entity_type_obj.entity_name_list = serialized_entity_name_list
                 entity_type_obj.save()
 
         status_text = "CREATED fresh rows successfully" if created else "UPDATED active schema maps successfully"
