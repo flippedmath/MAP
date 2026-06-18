@@ -121,7 +121,13 @@ document.addEventListener('DOMContentLoaded', function() {
             const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
             const latestCard = builtCards[builtCards.length - 1];
             if (latestCard && segment.simulated_value !== undefined) {
-                latestCard.setAttribute('data-simulated-value', segment.simulated_value);
+                if (segment.simulated_value !== undefined) {
+                    latestCard.setAttribute('data-simulated-value', segment.simulated_value);
+                }
+                // Restore the shuffle seed attribute to persist randomized evaluations between overlay sessions
+                if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
+                    latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
+                }
             }
         });
 
@@ -304,6 +310,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         containerElement.appendChild(card);
 
+        // 🎯 FIX: Bake a permanent random shuffle seed onto the newly created node immediately
+        // if one doesn't exist, ensuring un-shuffled entities get saved with a static seed value.
+        if (!card.hasAttribute('data-shuffle-seed') || card.getAttribute('data-shuffle-seed') === '') {
+            card.setAttribute('data-shuffle-seed', Math.random().toString());
+        }
+
         // 🎯 NEW REHYDRATION RE-LINKING MATRIX
         // Scan all newly created input wrappers on this card to check if their saved values are tokens
         const newlyCreatedWrappers = card.querySelectorAll('.linked-input-wrapper');
@@ -348,6 +360,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateWorkspaceSimulationPreview();
             }
         });
+
+        // Trigger simulation update to reflect changes
+        updateWorkspaceSimulationPreview();
     }
 
     // -------------------------------------------------------------
@@ -917,6 +932,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 const baseToken = card.getAttribute('data-token'); // e.g., "randInt"
                 if (!baseToken) return;
 
+                // 🎯 GRAB THE SHUFFLE SEED VALUE TO PERSIST THROUGH THE DATABASE PIPELINE
+                const shuffleSeedValue = card.getAttribute('data-shuffle-seed') || '';
                 // Find the delete button to read the custom calculated sequential label string
                 const deleteBtn = card.querySelector('.btn-delete-workspace-component');
                 const indexedTokenString = deleteBtn ? deleteBtn.getAttribute('data-indexed-token') : baseToken; // e.g., "randInt1"
@@ -959,6 +976,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 inputsPayloadList.push({
                     token: baseToken,                       // Keeps Django's database lookup clean (e.g. "randInt")
                     sequence_token: indexedTokenString,    // Lets the backend know its order index (e.g. "randInt1")
+                    shuffle_seed: shuffleSeedValue,
                     inputs: inputValues
                 });
             });

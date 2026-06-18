@@ -1907,6 +1907,7 @@ def save_problem_workspace(request, problem_id):
         validated_engines.append({
             "token_id": token_id,
             "sequence_token": entity_data.get("sequence_token", token_id),
+            "shuffle_seed": entity_data.get("shuffle_seed", ""),
             "validator": validator,
             "blueprint": blueprint
         })
@@ -1936,6 +1937,7 @@ def save_problem_workspace(request, problem_id):
         for engine_item in validated_engines:
             token_id = engine_item["token_id"]
             sequence_token = engine_item["sequence_token"]
+            shuffle_seed = engine_item["shuffle_seed"]
             blueprint = engine_item["blueprint"]
             validator = engine_item["validator"]
             
@@ -1947,6 +1949,7 @@ def save_problem_workspace(request, problem_id):
             # Combine the user parameters and append display configurations to content payload JSON
             content_payload["answer_field"] = blueprint.get("answer_field", False)
             content_payload["sequence_token"] = sequence_token 
+            content_payload["shuffle_seed"] = shuffle_seed
 
             blueprint_default = blueprint.get("default_answer")
             if blueprint_default in [True, False]:
