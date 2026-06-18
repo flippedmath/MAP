@@ -44,4 +44,5 @@ urlpatterns = [
     path('course/api/assessment/<int:assessment_id>/submit-evaluation/', views.submit_student_assessment_evaluation, name='submit_assessment_evaluation'),
     path('api/problem/<int:problem_id>/save-workspace/', views.save_problem_workspace, name='save_problem_workspace'),
     path('problem/<int:problem_id>/workspace/', views.problem_workspace_editor, name='problem_workspace_editor'),
+    path('assessment/api/validate-component-preview/', views.validate_component_preview, name='validate_component_preview'),
 ]

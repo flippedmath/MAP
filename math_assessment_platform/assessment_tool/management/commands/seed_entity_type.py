@@ -50,7 +50,54 @@ class Command(BaseCommand):
             "output": ["double", "integer", "formula"],
             "entity_name_list": "Dynamic Variables",
             "disabled": False,
-            "note": "The input can be a LaTeX formula, or typed out. 'y = 4*x^3 + 2*x^2 + 5*x - 7' is equivalent to 'y = 4*x**3 + 2*x**2 + 5*x - 7'"
+            "note": (
+                "<div style='font-family: system-ui, sans-serif; font-size: 0.75rem; color: #1e293b; max-width: 480px; max-height: 400px; overflow-y: auto; padding-right: 4px;'>"
+                
+                # --- SECTION 1: ALGEBRA ---
+                "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>1. Algebra Components</p>"
+                "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>"
+                "  <thead>"
+                "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Math Notation</th><th style='padding: 3px;'>Valid SymPy String Example</th><th style='padding: 3px;'>Valid LaTeX</th><th style='padding: 3px;'>Syntax Breakdown</th></tr>"
+                "  </thead>"
+                "  <tbody>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(2x + 5\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"2*x + 5\"</td><td style='padding: 3px; font-family: monospace;'>\"2x + 5\"</td><td style='padding: 3px; color: #475569;'>Implicit multiplication is fine in LaTeX but requires * in SymPy.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(x^2 - 4\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"x**2 - 4\"</td><td style='padding: 3px; font-family: monospace;'>\"x^2 - 4\"</td><td style='padding: 3px; color: #475569;'>LaTeX uses ^ for powers; SymPy strictly requires **.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\frac{x+1}{x-1}\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"(x + 1) / (x - 1)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\frac{x+1}{x-1}\"</td><td style='padding: 3px; color: #475569;'>LaTeX uses \\frac{num}{den}; SymPy uses standard / division.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\sqrt{x+2}\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"sqrt(x + 2)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\sqrt{x + 2}\"</td><td style='padding: 3px; color: #475569;'>SymPy uses sqrt(); LaTeX wraps the inner terms in curly brackets {}.</td></tr>"
+                "  </tbody>"
+                "</table>"
+
+                # --- SECTION 2: TRIGONOMETRY ---
+                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>2. Trigonometry Components</p>"
+                "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>"
+                "  <thead>"
+                "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Math Notation</th><th style='padding: 3px;'>Valid SymPy String Example</th><th style='padding: 3px;'>Valid LaTeX</th><th style='padding: 3px;'>Syntax Breakdown</th></tr>"
+                "  </thead>"
+                "  <tbody>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\sin(x)\\cos(x)\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"sin(x) * cos(x)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\sin(x)\\cos(x)\"</td><td style='padding: 3px; color: #475569;'>LaTeX functions start with backslashes; SymPy uses plain Python functions.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\tan^2(x)\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"tan(x)**2\"</td><td style='padding: 3px; font-family: monospace;'>\"\\tan^2(x)\"</td><td style='padding: 3px; color: #475569;'>LaTeX places the power right after the function name; SymPy puts it at the end.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\arcsin(x)\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"asin(x)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\arcsin(x)\" or r\"\\sin^{-1}(x)\"</td><td style='padding: 3px; color: #475569;'>SymPy shortens inverse functions to asin, acos, and atan.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\sin(2\\pi x)\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"sin(2 * pi * x)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\sin(2\\pi x)\"</td><td style='padding: 3px; color: #475569;'>Pi is represented as \\pi in LaTeX and simply pi in SymPy.</td></tr>"
+                "  </tbody>"
+                "</table>"
+
+                # --- SECTION 3: CALCULUS ---
+                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>3. Calculus Components</p>"
+                "<table style='width: 100%; border-collapse: collapse; text-align: left;'>"
+                "  <thead>"
+                "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Calculus Operation</th><th style='padding: 3px;'>Math Notation</th><th style='padding: 3px;'>Valid SymPy String Example</th><th style='padding: 3px;'>Valid LaTeX</th><th style='padding: 3px;'>Syntax Breakdown</th></tr>"
+                "  </thead>"
+                "  <tbody>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>Derivative</td><td style='padding: 3px;'>\\(\\frac{d}{dx}(x^3)\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"diff(x**3, x)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\frac{d}{dx}(x^3)\"</td><td style='padding: 3px; color: #475569;'>LaTeX visually structures the fraction; SymPy uses functional diff(expr, var).</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>Higher-Order Derivative</td><td style='padding: 3px;'>\\(\\frac{d^2}{dx^2}(\\sin(x))\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"diff(sin(x), x, 2)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\frac{d^2}{dx^2}(\\sin(x))\"</td><td style='padding: 3px; color: #475569;'>LaTeX adds powers to the d and dx; SymPy appends the order number at the end.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>Indefinite Integral</td><td style='padding: 3px;'>\\(\\int e^x dx\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"integrate(exp(x), x)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\int e^x dx\"</td><td style='padding: 3px; color: #475569;'>LaTeX uses \\int; SymPy uses integrate() and converts \\(e^{x}\\) to exp(x).</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>Definite Integral</td><td style='padding: 3px;'>\\(\\int_{0}^{1} x^2 dx\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"integrate(x**2, (x, 0, 1))\"</td><td style='padding: 3px; font-family: monospace;'>\"\\int_{0}^{1} x^2 dx\"</td><td style='padding: 3px; color: #475569;'>LaTeX applies bounds with _ and ^; SymPy bundles them into a tuple (var, lower, upper).</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>Limit</td><td style='padding: 3px;'>\\(\\lim_{x \\to 0} \\frac{\\sin(x)}{x}\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"limit(sin(x)/x, x, 0)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\lim_{x \\to 0} \\frac{\\sin(x)}{x}\"</td><td style='padding: 3px; color: #475569;'>LaTeX uses \\lim_{x \\to 0}; SymPy structures it as limit(expr, var, point).</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>Limit to Infinity</td><td style='padding: 3px;'>\\(\\lim_{x \\to \\infty} \\frac{1}{x}\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>\"limit(1/x, x, oo)\"</td><td style='padding: 3px; font-family: monospace;'>\"\\lim_{x \\to \\infty} \\frac{1}{x}\"</td><td style='padding: 3px; color: #475569;'>Infinity is \\infty in LaTeX, but is written as two lowercase letters oo in SymPy.</td></tr>"
+                "  </tbody>"
+                "</table>"
+                "</div>"
+            )
         },
         {
             "name": "Matrix",

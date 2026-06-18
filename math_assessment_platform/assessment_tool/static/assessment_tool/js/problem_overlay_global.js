@@ -129,6 +129,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
                 }
             }
+
+            // Bind the live change listener to rehydrated formulas
+            if (segment.token === 'formula' && latestCard) {
+                bindLiveFormulaEvaluation(latestCard);
+            }
         });
 
         checkEmptyColumns();
@@ -246,9 +251,47 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         else if (token === 'formula') {
             fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569;">Formula expression string: 
-                    <input type="text" class="val-input-formula" value="${savedValues.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
+                <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
+                    
+                    <div class="linked-input-wrapper" data-input-key="formula" data-input-type="text" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Formula expression string: 
+                            <input type="text" class="val-input-formula" value="${savedValues.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        </label>
+                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        
+                        <div class="linked-input-wrapper" data-input-key="solve method" data-input-type="text" style="display: flex; flex-direction: column; gap: 4px;">
+                            <label style="font-size: 0.75rem; color: #475569;">Solve Method:</label>
+                            <select class="val-input-solve-method" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <option value="leave as formula" ${(savedValues['solve method'] || 'leave as formula') === 'leave as formula' ? 'selected' : ''}>leave as formula</option>
+                                <option value="simplify" ${savedValues['solve method'] === 'simplify' ? 'selected' : ''}>simplify</option>
+                                <option value="expand polynomial" ${savedValues['solve method'] === 'expand polynomial' ? 'selected' : ''}>expand polynomial</option>
+                                <option value="solve for _" ${savedValues['solve method'] === 'solve for _' ? 'selected' : ''}>solve for _</option>
+                            </select>
+                        </div>
+
+                        <div class="linked-input-wrapper" data-input-key="variables" data-input-type="text" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
+                            <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Variables (comma-separated): 
+                                <input type="text" class="val-input-variables" value="${savedValues.variables || ''}" placeholder="e.g. x, y" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                            </label>
+                            <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                        </div>
+                        
+                    </div>
+
+                    <div class="linked-input-wrapper" data-input-key="solve for _" data-input-type="text" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Solve For Target: 
+                            <input type="text" class="val-input-solve-for" value="${savedValues['solve for _'] || ''}" placeholder="e.g. x" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        </label>
+                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+
+                </div>
             `;
         } else if (token === 'mathAnswer') {
             fieldsHtml = `
@@ -296,12 +339,6 @@ document.addEventListener('DOMContentLoaded', function() {
             refreshIconBtn.onmouseleave = () => refreshIconBtn.style.color = '#94a3b8';
         }
 
-        const infoIcon = card.querySelector('.fa-info-circle');
-        if (infoIcon) {
-            infoIcon.onmouseenter = () => infoIcon.style.color = '#64748b';
-            infoIcon.onmouseleave = () => infoIcon.style.color = '#94a3b8';
-        }
-
         const trashIcon = card.querySelector('.btn-delete-workspace-component');
         if (trashIcon) {
             trashIcon.onmouseenter = () => trashIcon.style.color = '#ef4444';
@@ -314,6 +351,10 @@ document.addEventListener('DOMContentLoaded', function() {
         // if one doesn't exist, ensuring un-shuffled entities get saved with a static seed value.
         if (!card.hasAttribute('data-shuffle-seed') || card.getAttribute('data-shuffle-seed') === '') {
             card.setAttribute('data-shuffle-seed', Math.random().toString());
+        }
+
+        if (token === 'formula') {
+            bindLiveFormulaEvaluation(card);
         }
 
         // 🎯 NEW REHYDRATION RE-LINKING MATRIX
@@ -456,11 +497,66 @@ document.addEventListener('DOMContentLoaded', function() {
             return "";
         }
         else if (baseArchetype === 'formula') {
+            // 🎯 Fall back to your database/backend evaluated snapshot attribute
+            const cachedPreview = card.getAttribute('data-simulated-value');
+            if (cachedPreview) {
+                return cachedPreview;
+            }
+            
+            // Absolute baseline fallback if a network sync hasn't occurred yet
             const formulaField = card.querySelector('.val-input-formula');
             return formulaField ? formulaField.value.trim() : '';
         }
 
         return card.getAttribute('data-simulated-value') || '';
+    }
+
+    function bindLiveFormulaEvaluation(card) {
+        const inputs = card.querySelectorAll('.val-input-formula, .val-input-solve-method, .val-input-variables, .val-input-solve-for');
+        
+        inputs.forEach(input => {
+            input.addEventListener('change', async () => {
+                const payloadInputs = {
+                    "formula": card.querySelector('.val-input-formula')?.value.trim() || "",
+                    "solve method": card.querySelector('.val-input-solve-method')?.value || "leave as formula",
+                    "variables": card.querySelector('.val-input-variables')?.value.trim() || "",
+                    "solve for _": card.querySelector('.val-input-solve-for')?.value.trim() || ""
+                };
+
+                try {
+                    const response = await fetch('/assessment/api/validate-component-preview/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCsrfToken() // 🎯 CONNECTED: Uses your existing helper function
+                        },
+                        body: JSON.stringify({
+                            token: 'formula',
+                            sequence_token: card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token'),
+                            inputs: payloadInputs
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.success) {
+                        card.setAttribute('data-simulated-value', data.evaluated_output);
+                        // Clear any previous text errors if you have a display mechanism
+                        card.style.border = "1px solid #e2e8f0"; 
+                    } else {
+                        // Soft-fail visual clue (turns border red on compilation syntax error)
+                        card.style.border = "1px solid #ef4444";
+                        console.warn("Formula calculation issue:", data.error);
+                    }
+
+                    // 🎯 CONNECTED: Fires your existing global canvas recalculation view engine
+                    updateWorkspaceSimulationPreview();
+
+                } catch (err) {
+                    console.error("Failed to synchronize formula evaluation state:", err);
+                }
+            });
+        });
     }
 
     // -------------------------------------------------------------
@@ -948,22 +1044,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 if (inputWrappers.length > 0) {
                     inputWrappers.forEach(wrapper => {
-                        const inputKey = wrapper.getAttribute('data-input-key'); // e.g., "min", "max", "number to factor"
+                        const inputKey = wrapper.getAttribute('data-input-key'); // e.g., "min", "max", "formula", "solve method"
                         const boundToken = wrapper.getAttribute('data-bound-token'); // e.g., "<randInt1>" or null
                         
                         if (boundToken) {
                             // Link is active: grab the cross-referenced variable token tag string directly
                             inputValues[inputKey] = boundToken;
                         } else {
-                            // No link active: fall back to the standard input field value
-                            const inputField = wrapper.querySelector('input');
-                            if (inputField) {
-                                inputValues[inputKey] = inputField.value.trim();
+                            // 🎯 FIXED: Now looks for both standard text inputs AND dropdown select configurations!
+                            const interactiveField = wrapper.querySelector('input, select');
+                            if (interactiveField) {
+                                inputValues[inputKey] = interactiveField.value.trim();
                             }
                         }
                     });
                 } else {
-                    // 🛡️ Safe fallback block for legacy nodes (like formula/mathAnswer) 
+                    // 🛡️ Safe fallback block for legacy nodes (like mathAnswer) 
                     // until you choose to wrap them in .linked-input-wrapper structures as well.
                     const formulaEl = card.querySelector('.val-input-formula');
                     if (formulaEl) inputValues.formula = formulaEl.value.trim();

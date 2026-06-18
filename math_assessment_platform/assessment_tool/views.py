@@ -40,6 +40,8 @@ from django.utils import timezone
 import re
 from django.template.loader import render_to_string
 import traceback
+from django.views.decorators.csrf import csrf_protect
+import sympy as sp
 
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
@@ -2103,3 +2105,77 @@ def problem_workspace_editor(request, problem_id):
         "answer_fields_options": answer_fields_options,
         "loaded_segments": loaded_segments
     })
+
+
+@csrf_protect
+@require_POST
+def validate_component_preview(request):
+    try:
+        # 1. Parse incoming request JSON
+        data = json.loads(request.body)
+        token = data.get('token')
+        inputs = data.get('inputs', {})
+
+        # If it's a component type that doesn't need calculation, short-circuit gracefully
+        if token != 'formula':
+            return JsonResponse({'success': True, 'evaluated_output': ''})
+
+        # 2. Safely extract your input parameters
+        formula_str = inputs.get('formula', '').strip()
+        solve_method = inputs.get('solve method', 'leave as formula').strip()
+        variables_raw = inputs.get('variables', '')
+        solve_for_str = inputs.get('solve for _', '').strip()
+
+        # If the formula field is empty, clear out the value quietly
+        if not formula_str:
+            return JsonResponse({'success': True, 'evaluated_output': ''})
+
+        # 3. Dynamic Symbol Parsing Context Mapper
+        # Handles strings like "x, y", "x y", or native list arrays ['x', 'y']
+        if isinstance(variables_raw, list):
+            var_list = [str(v).strip() for v in variables_raw if str(v).strip()]
+        else:
+            var_list = [v.strip() for v in variables_raw.replace(',', ' ').split() if v.strip()]
+
+        # Register local variables context for the SymPy evaluation sandbox
+        local_dict = {var: sp.Symbol(var) for var in var_list}
+        if 'pi' not in local_dict:
+            local_dict['pi'] = sp.pi
+
+        # 4. Parse the expression tree without running automatic reduction rules yet
+        parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=False)
+
+        # 5. Math Operation Execution Engine Matrix
+        result = parsed_expr
+        if solve_method == 'simplify':
+            result = sp.simplify(parsed_expr)
+            
+        elif solve_method == 'expand polynomial':
+            result = sp.expand(parsed_expr)
+            
+        elif solve_method == 'solve for _' and solve_for_str:
+            solve_var = sp.Symbol(solve_for_str)
+            # Returns calculated algebraic roots array listing
+            solutions = sp.solve(parsed_expr, solve_var)
+            result = f"{solve_for_str} = {solutions}"
+            
+        else:
+            # 'leave as formula' -> convert to optimized sympify output matching system tokens
+            result = sp.sympify(parsed_expr)
+
+        # Cast calculation output type safely to plain text string
+        output_string = str(result)
+
+        return JsonResponse({
+            'success': True,
+            'evaluated_output': output_string,
+            'error': None
+        })
+
+    except Exception as e:
+        # Gracefully flag compilation/syntax typos (e.g., missing asterisk operators or open brackets)
+        return JsonResponse({
+            'success': False,
+            'evaluated_output': '',
+            'error': f"Math Evaluation Warning: {str(e)}"
+        }, status=400)

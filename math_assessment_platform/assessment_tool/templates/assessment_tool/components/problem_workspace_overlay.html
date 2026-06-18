@@ -56,46 +56,112 @@
     }
 
 /* -------------------------------------------------------------
- * Dynamic Workspace Info Tooltip Overlays
+ * Dynamic Workspace Info Tooltip Overlays (Inner-Column Flush Match)
  * ------------------------------------------------------------- */
-.workspace-info-tooltip-container .workspace-info-tooltip-overlay {
-    visibility: hidden;
-    position: absolute;
-    z-index: 50;
-    bottom: 125%; /* Positions the overlay box directly above the info icon */
-    right: 0;
-    width: 260px;
-    background-color: #1e293b; /* Dark slate look matching design system rules */
-    color: #ffffff;
-    font-size: 0.75rem;
-    line-height: 1.35;
-    font-weight: 400;
-    padding: 8px 12px;
-    border-radius: 6px;
-    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-    opacity: 0;
-    transition: opacity 0.2s ease-in-out, transform 0.2s ease-in-out;
-    transform: translateY(4px);
-    pointer-events: none; /* Prevents overlay flickering when mouse enters bounds */
+
+/* 🎯 THE PARENT ANCHOR: Lock positioning relative to the individual list item card blocks */
+.workspace-component-card.workspace-block-card {
+    position: relative !important;
 }
 
-/* Tooltip Little Indicator Down Arrow triangle pointer */
-.workspace-info-tooltip-container .workspace-info-tooltip-overlay::after {
+.workspace-info-tooltip-container {
+    display: inline-block;
+    cursor: pointer;
+    padding-top: 4px;
+}
+
+.workspace-info-tooltip-container .workspace-info-tooltip-overlay {
+    visibility: hidden;
+    opacity: 0;
+    position: absolute;
+    z-index: 10015;
+    
+    /* 🎯 VERTICAL ALIGNMENT: Positions it perfectly right above the hovered asset block card row */
+    bottom: 102%; 
+    
+    /* 🎯 HORIZONTAL ALIGNMENT: Forces the layout box left border flush to the 20px padding wall */
+    left: 0;
+    right: auto;
+    transform: translateX(calc(-1 * (80%))); /* Dynamically calculates the offset from the icon back to the column edge */
+    
+    /* Matches your red box width boundary beautifully */
+    width: 338px; 
+    max-height: 260px; 
+    
+    /* Dual scrolling axes functionality */
+    overflow-y: auto; 
+    overflow-x: auto; 
+    
+    background-color: #1e293b !important; 
+    padding: 14px;
+    border-radius: 6px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+    
+    pointer-events: auto; 
+    transition: opacity 0.1s ease-in-out;
+}
+
+/* Hover safety net bridge element */
+.workspace-info-tooltip-container .workspace-info-tooltip-overlay::before {
     content: "";
     position: absolute;
     top: 100%;
-    right: 8px;
-    margin-left: -5px;
-    border-width: 5px;
-    border-style: solid;
-    border-color: #1e293b transparent transparent transparent;
+    left: 0;
+    width: 100%;
+    height: 22px;
+    background: transparent;
 }
 
-/* 🎯 Activate visibility instantly on hover trigger matches */
+/* Guard condition to check for structural changes */
+.workspace-info-tooltip-overlay:empty {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+}
+
+/* Table layout settings inside dark slate overlay container */
+.workspace-info-tooltip-overlay table {
+    width: 100%;
+    min-width: 420px; 
+    border-collapse: collapse;
+}
+
+.workspace-info-tooltip-overlay td,
+.workspace-info-tooltip-overlay th {
+    color: #ffffff !important; 
+    font-size: 0.75rem;
+    white-space: normal; 
+    word-break: break-word;
+    padding: 4px 6px;
+}
+
+.workspace-info-tooltip-overlay th {
+    background-color: #334155 !important;
+    font-weight: 600;
+}
+
+/* Color definitions for inline text strings */
+.workspace-info-tooltip-overlay,
+.workspace-info-tooltip-overlay p,
+.workspace-info-tooltip-overlay span,
+.workspace-info-tooltip-overlay div {
+    color: #ffffff !important;
+    font-size: 0.75rem;
+}
+
+.workspace-info-tooltip-overlay strong,
+.workspace-info-tooltip-overlay p[style*='font-weight: bold'] {
+    color: #38bdf8 !important; 
+}
+
+.workspace-info-tooltip-overlay tr td:last-child {
+    color: #cbd5e1 !important;
+}
+
+/* Trigger matching animations hook */
 .workspace-info-tooltip-container:hover .workspace-info-tooltip-overlay {
     visibility: visible;
     opacity: 1;
-    transform: translateY(0);
 }
 </style>
 

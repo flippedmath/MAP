@@ -14,6 +14,7 @@ import random
 import json
 import sympy as sp
 from sympy.parsing.sympy_parser import parse_expr
+from sympy.parsing.latex import parse_latex
 from django.core.exceptions import ValidationError
 
 
@@ -455,30 +456,6 @@ def calculate_midpoint_order(prev="", next=""):
 
 
 class SymPyAssessmentEngine:
-    
-    @classmethod
-    def substitute_tokens(cls, definition_string, evaluated_variables):
-        """Replaces token patterns like <num1> with concrete evaluated string states."""
-        for token, val in evaluated_variables.items():
-            definition_string = definition_string.replace(f"<{token}>", str(val))
-        return definition_string
-
-    @classmethod
-    def evaluate_variable(cls, content_json):
-        """Evaluates structural variables down to individual numeric values or string expressions."""
-        var_type = content_json.get('type')
-        
-        if var_type == 'variable_numeric':
-            minimum = content_json.get('min', -9)
-            maximum = content_json.get('max', 9)
-            step = content_json.get('step', 1)
-            exclude = content_json.get('exclude', [])
-            
-            # Generate valid range numbers
-            choices = [x for x in range(int(minimum), int(maximum) + 1, int(step)) if x not in exclude]
-            return random.choice(choices) if choices else 1
-            
-        return None
 
     @classmethod
     def generate_sympy_decoys(cls, correct_value_str, count=3):
@@ -549,6 +526,84 @@ class SymPyAssessmentEngine:
         except Exception:
             return 0.0, "SYNTAX_PARSE_ERROR"
         
+
+    @classmethod
+    def check_syntax_validity(cls, expression_str: str) -> tuple[bool, str]:
+        """
+        Verifies if an expression string is mathematically readable.
+        Tries standard SymPy parsing first, then falls back to a LaTeX syntax check.
+        Returns: (is_valid, error_message_or_empty_string)
+        """
+        if not expression_str or not isinstance(expression_str, str):
+            return False, "Expression is empty or an invalid data type."
+            
+        # Check A: Standard Python/SymPy expression string match
+        try:
+            parse_expr(expression_str, evaluate=False)
+            return True, ""
+        except Exception as standard_err:
+            # Save the error string to show if LaTeX fallback also fails
+            standard_error_msg = str(standard_err)
+            
+        # Check B: LaTeX notation compilation fallback
+        try:
+            parse_latex(expression_str)
+            return True, ""
+        except Exception as latex_err:
+            # If BOTH fail, provide a detailed message combining the standard breakdown
+            # or pointing out the parser syntax failure.
+            detailed_msg = f"Invalid math syntax: {standard_error_msg} (LaTeX parse note: {str(latex_err)})"
+            return False, detailed_msg
+        
+    @classmethod
+    def evaluate_formula_operations(cls, expression_str: str, method: str, variables: list, solve_for: str) -> str:
+        """
+        Parses a formula string (Standard or LaTeX) and executes algebraic mutations.
+        Methods: 'leave as formula', 'simplify', 'expand polynomial', 'solve for _'
+        """
+
+        if not expression_str:
+            return ""
+
+        # 1. Parse into a live SymPy object (Standard with LaTeX fallback)
+        try:
+            expr = parse_expr(str(expression_str))
+        except Exception:
+            try:
+                expr = parse_latex(str(expression_str))
+            except Exception as e:
+                return f"[Parsing Error: {str(e)}]"
+
+        # 2. Route the expression based on the selected dropdown method choice
+        try:
+            method = method.strip().lower() if method else "leave as formula"
+
+            if method == "simplify":
+                return str(sp.simplify(expr))
+
+            elif method == "expand polynomial":
+                return str(sp.expand(expr))
+
+            elif method == "solve for _":
+                if not solve_for:
+                    return "[Error: No target variable specified to solve for]"
+                
+                # Convert the string target into a SymPy symbol asset
+                target_symbol = sp.Symbol(solve_for.strip())
+                solutions = sp.solve(expr, target_symbol)
+                
+                # Format solution array cleanly for the live teacher preview
+                if not solutions:
+                    return f"No solution found for {solve_for}"
+                return f"{solve_for} = " + ", ".join(str(sol) for sol in solutions)
+
+            # Default fallback: 'leave as formula'
+            return str(expr)
+
+        except Exception as eval_err:
+            return f"[Evaluation Error: {str(eval_err)}]"
+        
+
 
 class EntityValidationError(Exception):
     """Custom exception for mathematical datatype or validation errors in the assessment engine."""
@@ -951,37 +1006,70 @@ class PrimeFactorsEntity(BaseEntity):
 
 class FormulaEntity(BaseEntity):
     """
-    Validation engine for the 'formula' token pattern.
+    Validation and evaluation engine for the 'formula' token pattern.
+    Delegates syntax integrity and mathematical evaluations to SymPyAssessmentEngine.
     """
     def is_valid(self):
-        # Run standard property-type checks first
         if not super().is_valid():
             return False
 
-        formula_text = self.cleaned_data.get("formula")
-        solve_method = self.cleaned_data.get("solve method")
-        solve_for_variable = self.cleaned_data.get("solve for _", "").strip()
-        variables_raw = self.cleaned_data.get("variables", "")
+        formula_expr = self.runtime_values.get("formula", "")
+        solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'solve for _', 'leave as formula', the 'leave as formula' is default
+        variables_str = self.runtime_values.get("variables", "")
+        solve_for_target = self.runtime_values.get("solve for _", "")
 
-        # 1. Rule: Validate cross-field dropdown dependency logic
-        if solve_method == "solve for _" and not solve_for_variable:
-            self.errors["solve for _"] = "You must provide a variable target when the solve method is configured to 'solve for _'."
+        if not formula_expr:
+            self.errors["formula"] = "A mathematical expression or equation string is required."
+        else:
+            is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(str(formula_expr))
+            if not is_valid_syntax:
+                self.errors["formula"] = syntax_error_msg
 
-        # 2. Rule: Validate variables array mapping layout if provided
-        if variables_raw:
-            # Clean comma or space-separated variable strings
-            var_list = [v.strip() for v in re.split(r"[\s,]+", variables_raw) if v.strip()]
-            self.cleaned_data["variables_array"] = var_list
+        parsed_variables = []
+        if variables_str:
+            raw_elements = [v.strip() for v in str(variables_str).split(",") if v.strip()]
+            for item in raw_elements:
+                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', item):
+                    self.errors["variables"] = f"'{item}' is not a valid algebraic variable identifier."
+                    break
+                parsed_variables.append(item)
+        
+        if "variables" not in self.errors:
+            self.runtime_values["parsed_variables_array"] = parsed_variables
 
-            # 3. Rule: Ensure target solve variable matches declared variable options
-            if solve_method == "solve for _" and solve_for_variable not in var_list:
-                self.errors["solve for _"] = f"Target variable '{solve_for_variable}' must exist inside the specified variables index list: {var_list}."
+        # 🎯 CHECKS THE USER'S SELECTED DROPDOWN VALUE ACCORDINGLY
+        if solve_method == "solve for _":
+            if not solve_for_target:
+                self.errors["solve for _"] = "You must specify a target variable when using the 'solve for _' method."
+            elif parsed_variables and (solve_for_target not in parsed_variables):
+                self.errors["solve for _"] = (
+                    f"Target variable '{solve_for_target}' must be present inside your "
+                    f"declared variables list: {parsed_variables}."
+                )
 
         return len(self.errors) == 0
-    
+
     def evaluate_output(self):
-        # Placeholder fallback output for raw layout validation formula variables
-        return self.cleaned_data.get("formula") or "3*x + 5"
+        """
+        🎯 CORE FORCE INTERFACE INTERACTION METHOD
+        Produces real-time SymPy computed math string evaluations for live engine previews.
+        """
+        # Read parameters from runtime values, utilizing safe fallbacks if empty
+        formula_expr = self.runtime_values.get("formula")
+        solve_method = self.runtime_values.get("solve method", "leave as formula")
+        parsed_vars = self.runtime_values.get("parsed_variables_array", [])
+        solve_for_target = self.runtime_values.get("solve for _", "")
+
+        if formula_expr is None:
+            return "3*x + 5"  # Standard placeholder if field is completely blank
+
+        # Outsource the processing to our centralized assessment engine layer
+        return SymPyAssessmentEngine.evaluate_formula_operations(
+            expression_str=str(formula_expr),
+            method=solve_method,
+            variables=parsed_vars,
+            solve_for=solve_for_target
+        )
 
 
 class MatrixEntity(BaseEntity):
