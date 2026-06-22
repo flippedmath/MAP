@@ -1869,7 +1869,6 @@ def save_problem_workspace(request, problem_id):
     cached_patterns = {}
 
     # 🎯 STEP A: VALIDATION LOOP (Before touch transactions)
-    # Create an array list to store our successfully built validator engines
     validated_engines = []
 
     for index, entity_data in enumerate(user_inputs):
@@ -1889,10 +1888,51 @@ def save_problem_workspace(request, problem_id):
 
         blueprint = cached_patterns[token_id]
         provided_fields = entity_data.get("inputs", {})
-        
+
+        substitutions_map = {}
+        cleaned_provided_fields = {}
+
+        # Get the selected solve method to understand requirements context
+        solve_method = provided_fields.get("solve method", "")
+
+        for key, value in provided_fields.items():
+            if key.startswith('sub_'):
+                substitutions_map[key] = value
+            else:
+                cleaned_provided_fields[key] = value
+
+        # 🎯 FIX: Satisfy strict underlying schema validation matrices
+        if token_id == 'formula':
+            if solve_method == 'solve for _':
+                # Frontend relies on 'sub_var' parameters being present for evaluation mode
+                has_substitutions = any(key.startswith('sub_') for key in substitutions_map.keys())
+                
+                if not has_substitutions:
+                    return JsonResponse({
+                        "success": False,
+                        "error": "Validation failed for 'Formula' component: Please add at least one variable substitution row to evaluate."
+                    }, status=422)
+                
+                # 🎯 Snag the first variable token string from the component fields list 
+                # to satisfy the underlying schema form validator's strict requirement.
+                vars_list = [v.strip() for v in cleaned_provided_fields.get('variables', '').split(',') if v.strip()]
+                cleaned_provided_fields['solve for _'] = vars_list[0] if vars_list else "x"
+                
+            elif solve_method == 'simplify':
+                target_var = cleaned_provided_fields.get('solve for _', '').strip()
+                if not target_var:
+                    return JsonResponse({
+                        "success": False,
+                        "error": "Validation failed for 'Formula' component: Please select a target variable to simplify."
+                    }, status=422)
+            else:
+                # Fallback safely to empty string for standard options ('leave as formula', 'expand polynomial')
+                cleaned_provided_fields['solve for _'] = ""
+
+        # Pass the sanitized, structural dictionary fields to your blueprint form validator
         validator = get_entity_validator(
             token_id, 
-            provided_fields, 
+            cleaned_provided_fields, 
             blueprint, 
             all_entities_payload=user_inputs
         )
@@ -1905,13 +1945,14 @@ def save_problem_workspace(request, problem_id):
                 "error": f"Validation failed for '{friendly_name}' component: {error_details}"
             }, status=422)
             
-        # 🎯 KEEP VALIDATOR REFERENCE FOR STEP B
+        # 🎯 SAVE IT HERE: Attach substitutions mapping directly to this payload context wrapper tracking object
         validated_engines.append({
             "token_id": token_id,
             "sequence_token": entity_data.get("sequence_token", token_id),
             "shuffle_seed": entity_data.get("shuffle_seed", ""),
             "validator": validator,
-            "blueprint": blueprint
+            "blueprint": blueprint,
+            "substitutions_map": substitutions_map  # Bound explicitly to this array container node entry
         })
 
     # 🎯 STEP B: ATOMIC DATABASE SAVE TRANSACTION
@@ -1935,16 +1976,22 @@ def save_problem_workspace(request, problem_id):
         EntitySegment.objects.filter(problem=problem).delete()
 
         # 4. Commit verified segments safely
-        # 🎯 FIX: Loop over our validated_engines array list context instead of raw user_inputs!
         for engine_item in validated_engines:
             token_id = engine_item["token_id"]
             sequence_token = engine_item["sequence_token"]
             shuffle_seed = engine_item["shuffle_seed"]
             blueprint = engine_item["blueprint"]
             validator = engine_item["validator"]
+            item_substitutions = engine_item["substitutions_map"]  # 🎯 Read it back safely here
             
             # Extract directly from the dynamic cleaned_data map
             content_payload = dict(validator.cleaned_data)
+
+            # Inject the sub_ mappings back into the content payload dictionary 
+            # so they are saved cleanly in your database row's JSON field
+            if token_id == 'formula':
+                for sub_key, sub_value in item_substitutions.items():
+                    content_payload[sub_key] = sub_value
             
             points_value = content_payload.get("points") or blueprint.get("points", {}).get("default", 0.0)
             
@@ -1972,8 +2019,6 @@ def save_problem_workspace(request, problem_id):
                 is_answer_to_multi_choice=None,
                 space_allocation=None
             )
-            
-            # TODO: wait till 'multipleChoiceAnswer' token is being built before implementing this
 
     return JsonResponse({
         "success": True,

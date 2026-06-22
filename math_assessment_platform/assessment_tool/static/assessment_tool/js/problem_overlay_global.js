@@ -130,10 +130,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
-            // Bind the live change listener to rehydrated formulas
-            if (segment.token === 'formula' && latestCard) {
-                bindLiveFormulaEvaluation(latestCard);
-            }
         });
 
         checkEmptyColumns();
@@ -273,31 +269,34 @@ document.addEventListener('DOMContentLoaded', function() {
                             </select>
                         </div>
 
-                        <div class="linked-input-wrapper" data-input-key="variables" data-input-type="text" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                            <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Variables (comma-separated): 
+                        <div class="linked-input-wrapper" data-input-key="variables" data-input-type="text">
+                            <label style="font-size: 0.75rem; color: #475569; display: block; width: 100%;">Variables (automatically extracted): 
                                 <input type="text" class="val-input-variables" value="${savedValues.variables || ''}" placeholder="e.g. x, y" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                             </label>
-                            <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
                         </div>
                         
                     </div>
 
-                    <div class="linked-input-wrapper" data-input-key="solve for _" data-input-type="text" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Solve For Target: 
-                            <input type="text" class="val-input-solve-for" value="${savedValues['solve for _'] || ''}" placeholder="e.g. x" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                    <div class="row-solve-for-target linked-input-wrapper" data-input-key="solve for _" data-input-type="text" style="position: relative; display: none; flex-direction: column; gap: 4px; width: 100%;">
+                        <label style="font-size: 0.75rem; color: #475569; width: 100%;">Solve For Target variable: 
+                            <select class="val-input-solve-for" data-saved-value="${savedValues['solve for _'] || ''}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                            </select>
                         </label>
-                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+
+                    <div class="row-variable-substitutions" style="display: none; flex-direction: column; gap: 6px; width: 100%; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+                        <span style="font-size: 0.72rem; font-weight: 600; color: #475569;">Variable Substitutions / Evaluations:</span>
+                        
+                        <div class="substitutions-list-container" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                        
+                        <div class="substitution-picker-wrapper" style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
+                            <span style="font-size: 0.75rem; color: #64748b;">Assign value to:</span>
+                            <select class="picker-unused-variables" style="flex-grow: 1; font-size: 0.75rem; padding: 3px; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569;">
+                            </select>
+                        </div>
                     </div>
 
                 </div>
-            `;
-        } else if (token === 'mathAnswer') {
-            fieldsHtml = `
-                <label style="font-size: 0.75rem; color: #475569; display:block; margin-bottom:4px;">Correct Target Formula: 
-                    <input type="text" class="val-input-correct-formula" value="${savedValues.correct_formula || ''}" placeholder="e.g. factor(x**2 - 1)" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                </label>
             `;
         } else {
             fieldsHtml = `<p style="font-size:0.8rem; color:#64748b; margin:0;">Standard attributes container template wrapper.</p>`;
@@ -354,7 +353,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         if (token === 'formula') {
-            bindLiveFormulaEvaluation(card);
+            bindLiveFormulaEvaluation(card, savedValues || {});
         }
 
         // 🎯 NEW REHYDRATION RE-LINKING MATRIX
@@ -511,51 +510,279 @@ document.addEventListener('DOMContentLoaded', function() {
         return card.getAttribute('data-simulated-value') || '';
     }
 
-    function bindLiveFormulaEvaluation(card) {
-        const inputs = card.querySelectorAll('.val-input-formula, .val-input-solve-method, .val-input-variables, .val-input-solve-for');
+    function bindLiveFormulaEvaluation(card, savedValues = {}) {
+        if (card.getAttribute('data-formula-listener-bound') === 'true') {
+            return;
+        }
+        card.setAttribute('data-formula-listener-bound', 'true');
+
+        const variablesField = card.querySelector('.val-input-variables');
+        const solveMethodSelect = card.querySelector('.val-input-solve-method');
+        const solveForSelect = card.querySelector('.val-input-solve-for');
+        const solveForWrapper = card.querySelector('.row-solve-for-target');
         
-        inputs.forEach(input => {
-            input.addEventListener('change', async () => {
-                const payloadInputs = {
-                    "formula": card.querySelector('.val-input-formula')?.value.trim() || "",
-                    "solve method": card.querySelector('.val-input-solve-method')?.value || "leave as formula",
-                    "variables": card.querySelector('.val-input-variables')?.value.trim() || "",
-                    "solve for _": card.querySelector('.val-input-solve-for')?.value.trim() || ""
-                };
+        // 🎯 Target the new Substitution Elements
+        const substitutionsWrapper = card.querySelector('.row-variable-substitutions');
+        const substitutionsContainer = card.querySelector('.substitutions-list-container');
+        const unusedVariablesPicker = card.querySelector('.picker-unused-variables');
 
-                try {
-                    const response = await fetch('/assessment/api/validate-component-preview/', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'X-CSRFToken': getCsrfToken() // 🎯 CONNECTED: Uses your existing helper function
-                        },
-                        body: JSON.stringify({
-                            token: 'formula',
-                            sequence_token: card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token'),
-                            inputs: payloadInputs
-                        })
-                    });
+        if (variablesField) {
+            variablesField.disabled = true;
+            variablesField.readOnly = true;
+            variablesField.style.backgroundColor = '#f1f5f9';
+            variablesField.style.cursor = 'not-allowed';
+        }
 
-                    const data = await response.json();
+        // 🎯 REBUILD THE UNUSED VARIABLES SELECTOR PICKER
+        function refreshUnusedVariablesPicker() {
+            if (!variablesField || !unusedVariablesPicker) return;
 
-                    if (response.ok && data.success) {
-                        card.setAttribute('data-simulated-value', data.evaluated_output);
-                        // Clear any previous text errors if you have a display mechanism
-                        card.style.border = "1px solid #e2e8f0"; 
-                    } else {
-                        // Soft-fail visual clue (turns border red on compilation syntax error)
-                        card.style.border = "1px solid #ef4444";
-                        console.warn("Formula calculation issue:", data.error);
+            // Get all currently extracted variables
+            const allVars = variablesField.value.split(',')
+                .map(v => v.trim())
+                .filter(v => v.length > 0);
+
+            // Find which variables are already drawn in active dynamic input rows
+            const currentlyAssignedVars = Array.from(substitutionsContainer.querySelectorAll('.substitution-row-item'))
+                .map(row => row.getAttribute('data-var-name'));
+
+            // Filter out variables already used
+            const unusedVars = allVars.filter(v => !currentlyAssignedVars.includes(v));
+
+            // Rebuild picker options
+            if (unusedVars.length === 0) {
+                unusedVariablesPicker.parentElement.style.display = 'none'; // Hide selection bar entirely if zero options remain
+            } else {
+                unusedVariablesPicker.parentElement.style.display = 'flex';
+                unusedVariablesPicker.innerHTML = '<option value="">-- choose variable --</option>';
+                unusedVars.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v;
+                    opt.textContent = v;
+                    unusedVariablesPicker.appendChild(opt);
+                });
+            }
+        }
+
+        // 🎯 HELPER FUNCTION TO SPAWN A SUBSTITUTION INPUT LINE
+        function createSubstitutionRow(varName, initialValue = "") {
+            const row = document.createElement('div');
+            row.className = 'substitution-row-item';
+            row.setAttribute('data-var-name', varName);
+            row.style.cssText = 'display: flex; align-items: center; gap: 6px; width: 100%;';
+
+            row.innerHTML = `
+                <span style="font-size: 0.8rem; font-family: monospace; font-weight: bold; min-width: 24px; text-align: right; color: #334155;">${varName} =</span>
+                
+                <div class="linked-input-wrapper" data-input-key="sub_${varName}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
+                    <input type="text" class="val-substitution-input" value="${initialValue}" placeholder="Value or expression" style="flex-grow: 1; font-size: 0.8rem; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px;">
+                    <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.7rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                    <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                </div>
+
+                <button type="button" class="btn-delete-substitution-row" title="Remove assignment" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 4px; transition: color 0.15s;"><i class="fas fa-times-circle"></i></button>
+            `;
+
+            // Bind active styling feedback for delete button hover animations natively
+            const delBtn = row.querySelector('.btn-delete-substitution-row');
+            delBtn.addEventListener('mouseenter', () => delBtn.style.color = '#ef4444');
+            delBtn.addEventListener('mouseleave', () => delBtn.style.color = '#94a3b8');
+
+            // Handle deletion action click
+            delBtn.addEventListener('click', () => {
+                row.remove();
+                refreshUnusedVariablesPicker();
+                // Fire layout refresh event bubble to sync network configuration simulation states
+                unusedVariablesPicker.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+
+            substitutionsContainer.appendChild(row);
+            refreshUnusedVariablesPicker();
+        }
+
+        // 🎯 INITIAL VISIBILITY AND DROPDOWN CONFIG SYNCHRONIZER
+        function syncSolveForDropdown() {
+            const selectedMethod = solveMethodSelect?.value || "leave as formula";
+            
+            // Mode A: simplify view states configuration
+            if (selectedMethod === 'simplify') {
+                solveForWrapper.style.display = 'flex';
+                substitutionsWrapper.style.display = 'none';
+            } 
+            // Mode B: solve for _ view states configuration
+            else if (selectedMethod === 'solve for _') {
+                solveForWrapper.style.display = 'none';
+                substitutionsWrapper.style.display = 'flex';
+                if (solveForSelect) solveForSelect.value = "";
+                refreshUnusedVariablesPicker();
+            } 
+            // Default clear states configuration
+            else {
+                solveForWrapper.style.display = 'none';
+                substitutionsWrapper.style.display = 'none';
+                if (solveForSelect) solveForSelect.value = "";
+                return;
+            }
+
+            // Rebuild select options for the normal 'simplify' target variable field
+            if (selectedMethod === 'simplify' && solveForSelect && variablesField) {
+                const currentVars = variablesField.value.split(',')
+                    .map(v => v.trim())
+                    .filter(v => v.length > 0);
+
+                const previousSelection = solveForSelect.value || solveForSelect.getAttribute('data-saved-value') || "";
+                
+                solveForSelect.innerHTML = '<option value="">-- select target --</option>';
+                currentVars.forEach(v => {
+                    const option = document.createElement('option');
+                    option.value = v;
+                    option.textContent = v;
+                    if (v === previousSelection) option.selected = true;
+                    solveForSelect.appendChild(option);
+                });
+            }
+        }
+
+
+        // Spawn row item instantly upon user option dropdown picking
+        unusedVariablesPicker?.addEventListener('change', (e) => {
+            const pickedVar = e.target.value;
+            if (!pickedVar) return;
+            
+            createSubstitutionRow(pickedVar);
+            e.target.value = ""; // clear selection option index placeholder pointer reset
+            
+            // Dispatch bubbling event upward context framework to trigger automated validation payload execution
+            unusedVariablesPicker.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+
+        // 🎯 UPDATED: Auto-populate flat substitution values (e.g., "sub_z") on load
+        if (savedValues) {
+            Object.entries(savedValues).forEach(([key, vVal]) => {
+                if (key.startsWith('sub_')) {
+                    const varName = key.replace('sub_', '');
+                    
+                    // 1. Re-render row context lines
+                    createSubstitutionRow(varName, vVal); 
+
+                    // 2. Wrap as active token pill if it maps to a dependency container
+                    if (vVal && vVal.startsWith('<') && vVal.endsWith('>')) {
+                        const rowItem = substitutionsContainer.querySelector(`.substitution-row-item[data-var-name="${varName}"]`);
+                        const rowWrapper = rowItem?.querySelector('.linked-input-wrapper');
+                        const linkBtn = rowWrapper?.querySelector('.btn-input-link-trigger');
+                        const inputEl = rowWrapper?.querySelector('.val-substitution-input');
+
+                        if (rowWrapper && linkBtn && inputEl) {
+                            rowWrapper.setAttribute('data-bound-token', vVal);
+                            inputEl.style.display = 'none';
+                            
+                            const pill = document.createElement('span');
+                            pill.className = 'linked-token-pill';
+                            pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
+                            pill.innerText = vVal;
+                            rowWrapper.insertBefore(pill, linkBtn);
+
+                            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+                            linkBtn.className = 'btn-input-link-trigger is-linked';
+                            linkBtn.style.color = '#ef4444';
+                            linkBtn.style.borderColor = '#fca5a5';
+                        }
                     }
-
-                    // 🎯 CONNECTED: Fires your existing global canvas recalculation view engine
-                    updateWorkspaceSimulationPreview();
-
-                } catch (err) {
-                    console.error("Failed to synchronize formula evaluation state:", err);
                 }
             });
+        }
+
+        // Execute state syncer tracking layouts setup
+        syncSolveForDropdown();
+
+        // Core delegation listener hook
+        card.addEventListener('change', async (e) => {
+            const target = e.target;
+
+            // Add validation checking hooks for internal dynamic values inside the substitution inputs too!
+            if (!target.matches('.val-input-formula, .val-input-solve-method, .val-input-solve-for, .val-substitution-input, .picker-unused-variables')) {
+                return;
+            }
+
+            const formulaInputEl = card.querySelector('.val-input-formula');
+            const wrapper = formulaInputEl?.closest('.linked-input-wrapper');
+            
+            card.querySelectorAll('.formula-inline-error-msg').forEach(el => el.remove());
+
+            // Extract substitution list parameters directly to bundle down to API endpoints
+            const substitutionsPayload = {};
+            substitutionsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
+                const vName = row.getAttribute('data-var-name');
+                const vVal = row.querySelector('.val-substitution-input')?.value || "";
+                substitutionsPayload[vName] = vVal;
+            });
+
+            const payloadInputs = {
+                "formula": formulaInputEl?.value.trim() || "",
+                "solve method": solveMethodSelect?.value || "leave as formula",
+                "variables": variablesField?.value.trim() || "",
+                "solve for _": solveForSelect?.value || "",
+                "substitutions": substitutionsPayload // Packed payload container parameters passed seamlessly
+            };
+
+            if (!payloadInputs.formula) {
+                card.style.border = "1px solid #e2e8f0";
+                if (variablesField) variablesField.value = "";
+                substitutionsContainer.innerHTML = "";
+                syncSolveForDropdown();
+                updateWorkspaceSimulationPreview();
+                return;
+            }
+
+            try {
+                const response = await fetch('/assessment/api/validate-component-preview/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCsrfToken()
+                    },
+                    body: JSON.stringify({
+                        token: 'formula',
+                        sequence_token: card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token'),
+                        inputs: payloadInputs
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    card.setAttribute('data-simulated-value', data.evaluated_output);
+                    card.style.border = "1px solid #e2e8f0"; 
+
+                    // Process updated automated parameters listings
+                    const rawFormula = formulaInputEl.value;
+                    const variableMatches = rawFormula.match(/\b[a-zA-Z][0-9]*\b/g) || [];
+                    const uniqueVars = [...new Set(variableMatches)];
+
+                    if (variablesField) {
+                        variablesField.value = uniqueVars.join(', ');
+                    }
+
+                    syncSolveForDropdown();
+
+                } else {
+                    card.style.border = "1px solid #ef4444";
+                    
+                    if (wrapper) {
+                        wrapper.style.flexWrap = 'wrap';
+                        const errorSpan = document.createElement('span');
+                        errorSpan.className = 'formula-inline-error-msg';
+                        errorSpan.style.cssText = 'color: #ef4444; font-size: 0.72rem; flex-basis: 100%; margin-top: 6px; font-weight: 500; display: block;';
+                        errorSpan.innerText = data.error || "Math Evaluation Warning: syntax check failed.";
+                        wrapper.appendChild(errorSpan);
+                    }
+                }
+
+                updateWorkspaceSimulationPreview();
+
+            } catch (err) {
+                console.error("Failed to synchronize formula evaluation state:", err);
+            }
         });
     }
 
@@ -1036,12 +1263,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 const inputValues = {};
 
-                // 🎯 REPLACEMENT STRATEGY: Loop dynamically over your wrappers 
-                // to support both raw user entries AND nested token output dependencies.
-                const inputWrappers = card.querySelectorAll('.linked-input-wrapper');
+                // 🎯 FIXED: Exclude dynamic row wrappers from the main configuration selector block
+                const inputWrappers = card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper)');
                 
-                // Add new entity Step 3: if new fields exist, then add them here so I can extract the values
-
                 if (inputWrappers.length > 0) {
                     inputWrappers.forEach(wrapper => {
                         const inputKey = wrapper.getAttribute('data-input-key'); // e.g., "min", "max", "formula", "solve method"
@@ -1051,16 +1275,43 @@ document.addEventListener('DOMContentLoaded', function() {
                             // Link is active: grab the cross-referenced variable token tag string directly
                             inputValues[inputKey] = boundToken;
                         } else {
-                            // 🎯 FIXED: Now looks for both standard text inputs AND dropdown select configurations!
+                            // Looks for both standard text inputs AND dropdown select configurations!
                             const interactiveField = wrapper.querySelector('input, select');
                             if (interactiveField) {
                                 inputValues[inputKey] = interactiveField.value.trim();
                             }
                         }
                     });
+
+                    // 🎯 FIX: Directly read values if elements exist, removing condition overrides
+                    if (baseToken === 'formula') {
+                        // 1. Snag the explicit target variable dropdown selection value directly if present
+                        const solveForSelect = card.querySelector('.val-input-solve-for');
+                        if (solveForSelect && solveForSelect.value) {
+                            inputValues['solve for _'] = solveForSelect.value.trim();
+                        } else {
+                            // Ensure it defaults to an empty string if no element or value is selected
+                            inputValues['solve for _'] = inputValues['solve for _'] || '';
+                        }
+
+                        // 2. Loop through and capture the substitution rows accurately
+                        card.querySelectorAll('.substitutions-list-container .substitution-row-item').forEach(row => {
+                            const varName = row.getAttribute('data-var-name');
+                            const rowWrapper = row.querySelector('.linked-input-wrapper');
+                            const boundTokenValue = rowWrapper?.getAttribute('data-bound-token');
+                            
+                            if (boundTokenValue) {
+                                inputValues[`sub_${varName}`] = boundTokenValue;
+                            } else {
+                                const inputField = row.querySelector('.val-substitution-input');
+                                if (inputField) {
+                                    inputValues[`sub_${varName}`] = inputField.value.trim();
+                                }
+                            }
+                        });
+                    }
                 } else {
                     // 🛡️ Safe fallback block for legacy nodes (like mathAnswer) 
-                    // until you choose to wrap them in .linked-input-wrapper structures as well.
                     const formulaEl = card.querySelector('.val-input-formula');
                     if (formulaEl) inputValues.formula = formulaEl.value.trim();
 
@@ -1068,7 +1319,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (correctFormulaEl) inputValues.correct_formula = correctFormulaEl.value.trim();
                 }
 
-                // 🚀 FIX: Send the clean base database token, and pass the indexed tracking sequence string separately
+                // 🚀 Send the clean base database token, and pass the indexed tracking sequence string separately
                 inputsPayloadList.push({
                     token: baseToken,                       // Keeps Django's database lookup clean (e.g. "randInt")
                     sequence_token: indexedTokenString,    // Lets the backend know its order index (e.g. "randInt1")
@@ -1143,7 +1394,19 @@ document.addEventListener('DOMContentLoaded', function() {
         // ❌ UNLINK ACTION: If the field is already linked, hitting the "X" resets it
         if (linkBtn.classList.contains('is-linked')) {
             wrapper.removeAttribute('data-bound-token');
-            wrapper.querySelector('label').style.display = 'block'; // Show input field again
+            
+            // 🎯 FIXED: Safely find the input or label to restore viewports accurately without breaking sub_ layouts
+            const labelEl = wrapper.querySelector('label');
+            if (labelEl) {
+                const inputKey = wrapper.getAttribute('data-input-key') || '';
+                // Dynamic sub_ rows use block, standard inputs use default blank flex layouts
+                labelEl.style.display = inputKey.startsWith('sub_') ? 'block' : '';
+            }
+            
+            const rawInput = wrapper.querySelector('input, select');
+            if (rawInput) {
+                rawInput.value = ''; // Reset back to empty string value so user can type/pick fresh
+            }
             
             const badge = wrapper.querySelector('.linked-token-pill');
             if (badge) badge.remove();
@@ -1190,7 +1453,15 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (baseArchetype === 'matrix') derivedOutputs = ['matrix'];
             
             // Check if the output configuration satisfies the data field expectation rules
-            if (derivedOutputs.includes(targetType)) {
+            const inputKey = wrapper.getAttribute('data-input-key') || '';
+            let isCompatible = derivedOutputs.includes(targetType);
+
+            // 🎯 FORCE COMPATIBILITY CHECK: permit substitution inputs to couple with double, integer, or formula tokens
+            if (inputKey.startsWith('sub_')) {
+                isCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
+            }
+
+            if (isCompatible) {
                 availableOptionsHtml += `
                     <button type="button" class="select-link-token-option" data-target-token="<${indexedToken}>" style="width: 100%; text-align: left; padding: 6px 12px; background: none; border: none; font-size: 0.75rem; cursor: pointer; transition: background 0.15s; color: #334155;">
                         &lt;${indexedToken}&gt;
@@ -1213,12 +1484,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!optionBtn) return;
 
         e.stopPropagation();
-        const chosenTokenString = optionBtn.getAttribute('data-target-token'); // "<randInt1>"
+        const chosenTokenString = optionBtn.getAttribute('data-target-token');
         const wrapper = optionBtn.closest('.linked-input-wrapper');
         const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
         
-        // Hide the input field label completely
-        wrapper.querySelector('label').style.display = 'none';
+        // 🎯 FIX: Safely check if a label exists before modifying its display style
+        const labelEl = wrapper.querySelector('label');
+        if (labelEl) {
+            labelEl.style.display = 'none';
+        } else {
+            // If there's no label wrapper, hide the text input element instead
+            const inputEl = wrapper.querySelector('.val-substitution-input');
+            if (inputEl) inputEl.style.display = 'none';
+        }
         
         // Save dependency configuration explicitly onto the node wrapper properties
         wrapper.setAttribute('data-bound-token', chosenTokenString);

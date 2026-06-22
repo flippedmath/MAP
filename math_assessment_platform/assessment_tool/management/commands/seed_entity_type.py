@@ -20,7 +20,7 @@ class Command(BaseCommand):
                 "step": {"field": "integer", "value": ["integer"], "default": 1},
                 "exclude": {"field": "text", "value": ["array(['integer'])"], "default": ""}
             },
-            "output": ["integer"],
+            "output": ["integer", "double"],
             "entity_name_list": "Dynamic Variables",
             "disabled": False,
             "note": "Produces a random integer within the range {min} to {max} (inclusive) ignoring all comma-separated {exclude} values. {step} represents the interval between possible results."
@@ -29,9 +29,9 @@ class Command(BaseCommand):
             "name": "Random Double",
             "token": "rand",
             "inputs": {
-                "min": {"field": "double", "value": ["double"], "default": 0.0},
-                "max": {"field": "double", "value": ["double"], "default": 1.0},
-                "step": {"field": "double", "value": ["double"], "default": 0.01}
+                "min": {"field": "double", "value": ["double", "integer"], "default": 0.0},
+                "max": {"field": "double", "value": ["double", "integer"], "default": 1.0},
+                "step": {"field": "double", "value": ["double", "integer"], "default": 0.01}
             },
             "output": ["double"],
             "entity_name_list": "Dynamic Variables",
