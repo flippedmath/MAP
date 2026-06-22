@@ -358,30 +358,36 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 🎯 NEW REHYDRATION RE-LINKING MATRIX
         // Scan all newly created input wrappers on this card to check if their saved values are tokens
-        const newlyCreatedWrappers = card.querySelectorAll('.linked-input-wrapper');
+        const newlyCreatedWrappers = card.querySelectorAll(
+            '.linked-input-wrapper:not(.substitutions-list-container .linked-input-wrapper)'
+        );
         newlyCreatedWrappers.forEach(wrapper => {
             const inputKey = wrapper.getAttribute('data-input-key');
             const savedValue = savedValues[inputKey];
 
-            // If the saved parameter is a linked token string (e.g., "<randInt4>")
             if (savedValue && typeof savedValue === 'string' && savedValue.trim().match(/^<([^>]+)>$/)) {
                 const cleanTokenString = savedValue.trim();
                 const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
                 
-                // 1. Hide the native fallback input element label text
-                wrapper.querySelector('label').style.display = 'none';
+                // 🚀 FIX: Look for a label element defensively to avoid null crashes
+                const labelEl = wrapper.querySelector('label');
+                if (labelEl) {
+                    labelEl.style.display = 'none';
+                } else {
+                    // Fallback for substitution rows where the input sits directly in the wrapper
+                    const inputEl = wrapper.querySelector('input, select');
+                    if (inputEl) inputEl.style.display = 'none';
+                }
                 
-                // 2. Explicitly stamp the structural relation connection parameter
                 wrapper.setAttribute('data-bound-token', cleanTokenString);
 
-                // 3. Inject the green tracking pill capsule interface design
+                // Inject tracking pill
                 const pill = document.createElement('span');
                 pill.className = 'linked-token-pill';
                 pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
                 pill.innerText = cleanTokenString;
                 wrapper.insertBefore(pill, linkBtn);
 
-                // 4. Pivot the link button into an active red close asset layout element
                 if (linkBtn) {
                     linkBtn.innerHTML = '<i class="fas fa-times"></i>';
                     linkBtn.className = 'btn-input-link-trigger is-linked';

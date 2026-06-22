@@ -45,7 +45,7 @@ class Command(BaseCommand):
                 "formula": {"field": "text", "value": ["string", "array(['formula'])"]},
                 "solve method": {"field": "dropdown", "value": ["string_match(['simplify', 'expand polynomial', 'solve for _', 'leave as formula'])"], "default": "leave as formula"},
                 "variables": {"field": "text", "value": ["array(['string'])"], "default": ""},
-                "solve for _": {"field": "text", "value": ["string_match([\"self('variables')\"])"]}
+                "solve for _": {"field": "text", "value": ["string_match([\"self('variables')\"])", "or_null"], "default": ""}
             },
             "output": ["double", "integer", "formula"],
             "entity_name_list": "Dynamic Variables",
