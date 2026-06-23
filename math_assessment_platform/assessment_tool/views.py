@@ -1916,7 +1916,7 @@ def save_problem_workspace(request, problem_id):
 
         # 🎯 FIX: Satisfy strict underlying schema validation matrices
         if token_id == 'formula':
-            if solve_method == 'solve for _':
+            if solve_method == 'variable substitution':
                 # Frontend relies on 'sub_var' parameters being present for evaluation mode
                 has_substitutions = any(key.startswith('sub_') for key in substitutions_map.keys())
                 
@@ -1929,10 +1929,10 @@ def save_problem_workspace(request, problem_id):
                 # 🎯 Snag the first variable token string from the component fields list 
                 # to satisfy the underlying schema form validator's strict requirement.
                 vars_list = [v.strip() for v in cleaned_provided_fields.get('variables', '').split(',') if v.strip()]
-                cleaned_provided_fields['solve for _'] = vars_list[0] if vars_list else "x"
+                cleaned_provided_fields['variable substitution'] = vars_list[0] if vars_list else "x"
                 
             elif solve_method == 'simplify':
-                target_var = cleaned_provided_fields.get('solve for _', '').strip()
+                target_var = cleaned_provided_fields.get('variable substitution', '').strip()
                 if not target_var:
                     return JsonResponse({
                         "success": False,
@@ -1940,7 +1940,7 @@ def save_problem_workspace(request, problem_id):
                     }, status=422)
             else:
                 # Fallback safely to empty string for standard options ('leave as formula', 'expand polynomial')
-                cleaned_provided_fields['solve for _'] = ""
+                cleaned_provided_fields['variable substitution'] = ""
 
         # Pass the sanitized, structural dictionary fields to your blueprint form validator
         validator = get_entity_validator(
@@ -2222,7 +2222,7 @@ def validate_component_preview(request):
         formula_str = inputs.get('formula', '').strip()
         solve_method = inputs.get('solve method', 'leave as formula').strip()
         variables_raw = inputs.get('variables', '')
-        solve_for_str = inputs.get('solve for _', '').strip()
+        solve_for_str = inputs.get('variable substitution', '').strip()
 
         # 🎯 FIX: Evaluate the boolean checks outside the f-string expression context
         has_double_backslash = '\\\\' in formula_str
@@ -2276,7 +2276,7 @@ def validate_component_preview(request):
         elif solve_method == 'expand polynomial':
             result = sp.expand(parsed_expr)
             
-        elif solve_method == 'solve for _' and solve_for_str:
+        elif solve_method == 'variable substitution' and solve_for_str:
             solve_var = sp.Symbol(solve_for_str)
             solutions = sp.solve(parsed_expr, solve_var)
             result = f"{solve_for_str} = {solutions}"

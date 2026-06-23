@@ -43,9 +43,9 @@ class Command(BaseCommand):
             "token": "formula",
             "inputs": {
                 "formula": {"field": "text", "value": ["string", "array(['formula'])"]},
-                "solve method": {"field": "dropdown", "value": ["string_match(['simplify', 'expand polynomial', 'solve for _', 'leave as formula'])"], "default": "leave as formula"},
+                "solve method": {"field": "dropdown", "value": ["string_match(['simplify', 'expand polynomial', 'variable substitution', 'leave as formula'])"], "default": "leave as formula"},
                 "variables": {"field": "text", "value": ["array(['string'])"], "default": ""},
-                "solve for _": {"field": "text", "value": ["string_match([\"self('variables')\"])", "or_null"], "default": ""}
+                "variable substitution": {"field": "text", "value": ["string_match([\"self('variables')\"])", "or_null"], "default": ""}
             },
             "output": ["double", "integer", "formula"],
             "entity_name_list": "Dynamic Variables",

@@ -268,7 +268,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <option value="leave as formula" ${(savedValues['solve method'] || 'leave as formula') === 'leave as formula' ? 'selected' : ''}>leave as formula</option>
                                 <option value="simplify" ${savedValues['solve method'] === 'simplify' ? 'selected' : ''}>simplify</option>
                                 <option value="expand polynomial" ${savedValues['solve method'] === 'expand polynomial' ? 'selected' : ''}>expand polynomial</option>
-                                <option value="solve for _" ${savedValues['solve method'] === 'solve for _' ? 'selected' : ''}>solve for _</option>
+                                <option value="variable substitution" ${savedValues['solve method'] === 'variable substitution' ? 'selected' : ''}>variable substitution</option>
                             </select>
                         </div>
 
@@ -280,9 +280,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                     </div>
 
-                    <div class="row-solve-for-target linked-input-wrapper" data-input-key="solve for _" data-input-type="text" style="position: relative; display: none; flex-direction: column; gap: 4px; width: 100%;">
+                    <div class="row-solve-for-target linked-input-wrapper" data-input-key="variable substitution" data-input-type="text" style="position: relative; display: none; flex-direction: column; gap: 4px; width: 100%;">
                         <label style="font-size: 0.75rem; color: #475569; width: 100%;">Solve For Target variable: 
-                            <select class="val-input-solve-for" data-saved-value="${savedValues['solve for _'] || ''}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                            <select class="val-input-solve-for" data-saved-value="${savedValues['variable substitution'] || ''}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                             </select>
                         </label>
                     </div>
@@ -557,7 +557,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const formulaVal = getLiveComponentValue(card, 'formula', '', visitedTokens);
             const methodVal = getLiveComponentValue(card, 'solve method', 'leave as formula', visitedTokens);
             const varsVal = getLiveComponentValue(card, 'variables', '', visitedTokens);
-            const solveForVal = getLiveComponentValue(card, 'solve for _', '', visitedTokens);
+            const solveForVal = getLiveComponentValue(card, 'variable substitution', '', visitedTokens);
 
             // 🎯 INSIDE YOUR FORMULA LOOKUP SEGMENT: Diagnostic Start Checkpoints
             const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
@@ -581,7 +581,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     "formula": formulaVal,
                     "solve method": methodVal,
                     "variables": varsVal,
-                    "solve for _": solveForVal,
+                    "variable substitution": solveForVal,
                     "substitutions": subsPayload
                 }
             };
@@ -599,7 +599,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else if (methodVal === 'expand polynomial') {
                 console.log("🔀 [UI Route] Matching 'expand polynomial' placeholder.");
                 return "[Placeholder: Expand Polynomial Method Display]";
-            } else if (methodVal === 'solve for _') {
+            } else if (methodVal === 'variable substitution') {
                 console.log(`🔀 [UI Route] Matching 'solve for ${solveForVal}' placeholder.`);
                 return `[Placeholder: Solve for ${solveForVal || '_'} Method Display]`;
             }
@@ -745,8 +745,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 solveForWrapper.style.display = 'flex';
                 substitutionsWrapper.style.display = 'none';
             } 
-            // Mode B: solve for _ view states configuration
-            else if (selectedMethod === 'solve for _') {
+            // Mode B: variable substitution view states configuration
+            else if (selectedMethod === 'variable substitution') {
                 solveForWrapper.style.display = 'none';
                 substitutionsWrapper.style.display = 'flex';
                 if (solveForSelect) solveForSelect.value = "";
@@ -857,7 +857,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 "formula": formulaInputEl?.value.trim() || "",
                 "solve method": solveMethodSelect?.value || "leave as formula",
                 "variables": variablesField?.value.trim() || "",
-                "solve for _": solveForSelect?.value || "",
+                "variable substitution": solveForSelect?.value || "",
                 "substitutions": substitutionsPayload // Packed payload container parameters passed seamlessly
             };
 
@@ -1330,10 +1330,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         // 1. Snag the explicit target variable dropdown selection value directly if present
                         const solveForSelect = card.querySelector('.val-input-solve-for');
                         if (solveForSelect && solveForSelect.value) {
-                            inputValues['solve for _'] = solveForSelect.value.trim();
+                            inputValues['variable substitution'] = solveForSelect.value.trim();
                         } else {
                             // Ensure it defaults to an empty string if no element or value is selected
-                            inputValues['solve for _'] = inputValues['solve for _'] || '';
+                            inputValues['variable substitution'] = inputValues['variable substitution'] || '';
                         }
 
                         // 2. Loop through and capture the substitution rows accurately

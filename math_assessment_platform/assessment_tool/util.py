@@ -559,7 +559,7 @@ class SymPyAssessmentEngine:
     def evaluate_formula_operations(cls, expression_str: str, method: str, variables: list, solve_for: str) -> str:
         """
         Parses a formula string (Standard or LaTeX) and executes algebraic mutations.
-        Methods: 'leave as formula', 'simplify', 'expand polynomial', 'solve for _'
+        Methods: 'leave as formula', 'simplify', 'expand polynomial', 'variable substitution'
         """
         if not expression_str:
             return ""
@@ -587,7 +587,7 @@ class SymPyAssessmentEngine:
                 # 🚧 Placeholder for future polynomial expansion logic
                 return "[Placeholder: Expand Polynomial Method Display]"
 
-            elif method == "solve for _":
+            elif method == "variable substitution":
                 # 🚧 Placeholder for future algebraic variable isolation logic
                 return f"[Placeholder: Solve for {solve_for or '_'} Method Display]"
 
@@ -1009,9 +1009,9 @@ class FormulaEntity(BaseEntity):
             return False
 
         formula_expr = self.runtime_values.get("formula", "")
-        solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'solve for _', 'leave as formula', the 'leave as formula' is default
+        solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'variable substitution', 'leave as formula', the 'leave as formula' is default
         variables_str = self.runtime_values.get("variables", "")
-        solve_for_target = self.runtime_values.get("solve for _", "")
+        solve_for_target = self.runtime_values.get("variable substitution", "")
 
         if not formula_expr:
             self.errors["formula"] = "A mathematical expression or equation string is required."
@@ -1033,11 +1033,11 @@ class FormulaEntity(BaseEntity):
             self.runtime_values["parsed_variables_array"] = parsed_variables
 
         # 🎯 CHECKS THE USER'S SELECTED DROPDOWN VALUE ACCORDINGLY
-        if solve_method == "solve for _":
+        if solve_method == "variable substitution":
             if not solve_for_target:
-                self.errors["solve for _"] = "You must specify a target variable when using the 'solve for _' method."
+                self.errors["variable substitution"] = "You must specify a target variable when using the 'variable substitution' method."
             elif parsed_variables and (solve_for_target not in parsed_variables):
-                self.errors["solve for _"] = (
+                self.errors["variable substitution"] = (
                     f"Target variable '{solve_for_target}' must be present inside your "
                     f"declared variables list: {parsed_variables}."
                 )
@@ -1053,7 +1053,7 @@ class FormulaEntity(BaseEntity):
         formula_expr = self.runtime_values.get("formula")
         solve_method = self.runtime_values.get("solve method", "leave as formula")
         parsed_vars = self.runtime_values.get("parsed_variables_array", [])
-        solve_for_target = self.runtime_values.get("solve for _", "")
+        solve_for_target = self.runtime_values.get("variable substitution", "")
 
         if formula_expr is None:
             return "3*x + 5"  # Standard placeholder if field is completely blank
