@@ -284,6 +284,7 @@ class Command(BaseCommand):
             "note": "Create a freehand canvas or whiteboard field"
         }
     ]
+    # add a slope field entity, lots of dots in a graph, make slope line on given points
 
     def add_arguments(self, parser):
         parser.add_argument(

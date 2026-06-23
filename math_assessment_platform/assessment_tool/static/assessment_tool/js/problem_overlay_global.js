@@ -252,7 +252,7 @@ document.addEventListener('DOMContentLoaded', function() {
             fieldsHtml = `
                 <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
                     
-                    <div class="linked-input-wrapper" data-input-key="formula" data-input-type="text" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
+                    <div class="linked-input-wrapper" data-input-key="formula" data-input-type="formula" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
                         <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Formula expression string: 
                             <input type="text" class="val-input-formula" value="${savedValues.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                         </label>
@@ -559,9 +559,11 @@ document.addEventListener('DOMContentLoaded', function() {
             const varsVal = getLiveComponentValue(card, 'variables', '', visitedTokens);
             const solveForVal = getLiveComponentValue(card, 'solve for _', '', visitedTokens);
 
-            console.log(`🧐 [evaluateSingleCardOutput] Evaluating formula card. Raw fields read from DOM:`, {
-                formulaVal, methodVal, varsVal, solveForVal
-            });
+            // 🎯 INSIDE YOUR FORMULA LOOKUP SEGMENT: Diagnostic Start Checkpoints
+            const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
+            console.log(`\n--- 🧪 Frontend Simulation Loop: Evaluating Card [${cardId}] ---`);
+            console.log(`Raw formula string pulled from DOM input:`, JSON.stringify(formulaVal));
+            console.log(`Current visited tokens recursion tracking depth:`, [...visitedTokens]);
 
             // 🎯 1. Dynamically scan for active substitution row items to align cache payload perfectly
             const subsPayload = {};
@@ -573,7 +575,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
 
-            // 🎯 2. Structural input validation serialization payload setup (FIXED: Added structural nested 'inputs' tier)
+            // 🎯 2. Structural input validation serialization payload setup
             const inputsPayload = {
                 inputs: {
                     "formula": formulaVal,
@@ -583,17 +585,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     "substitutions": subsPayload
                 }
             };
+            console.log(`Compiled Inputs Payload Dictionary Object:`, JSON.stringify(inputsPayload));
 
             // 🎯 3. Build identical matching cache keys matching network requests
-            const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
-            
-            // This now successfully passes the nested structural block into your string normalizer
             const normalizedKeyString = typeof normalizePayloadKey === 'function' ? normalizePayloadKey(inputsPayload) : JSON.stringify(inputsPayload);
             const cacheKey = `${cardId}_${normalizedKeyString}`;
-
-            // 🎯 TEMP LOG 2: What is the UI looking for?
-            console.log("🔍 [UI READ KEY]:", cacheKey);
-            console.log("📦 [UI READ PAYLOAD OBJECT]:", inputsPayload);
+            console.log(`Generated Simulation Cache Key String: "${cacheKey}"`);
 
             // 🎯 4. Route explicit placeholders directly if not evaluating baseline choices
             if (methodVal === 'simplify') {
@@ -609,30 +606,38 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // 🎯 5. Look up compiled LaTeX out of your global cache dictionary map
             if (formulaLiveLatexCache && formulaLiveLatexCache[cacheKey]) {
-                console.log(`🎯 [CACHE HIT] Found LaTeX in cache for key: "${cacheKey}". Value: "${formulaLiveLatexCache[cacheKey]}"`);
+                console.log(`✅ Cache Hit Found! Cache content being sent to renderer:`, JSON.stringify(formulaLiveLatexCache[cacheKey]));
                 return formulaLiveLatexCache[cacheKey];
             } else {
-                console.log(`💨 [CACHE MISS] No cache entry found for key: "${cacheKey}"`);
+                console.log(`❌ Cache Miss for key: "${cacheKey}". Global cache ledger state:`, formulaLiveLatexCache);
             }
 
             // Fallback to old attribute snapshot context if it has one seeded
             const databaseValueFallback = card.getAttribute('data-simulated-value');
-            if (databaseValueFallback) {
-                console.log(`🗄️ [Fallback] Using data-simulated-value attribute fallback: "${databaseValueFallback}"`);
+            if (databaseValueFallback && databaseValueFallback !== "???") {
+                console.log(`♻️ Cache missing; falling back to historical DOM data-simulated-value attribute snapshot: "${databaseValueFallback}"`);
                 return databaseValueFallback;
             }
 
             // 🎯 6. Fire asynchronous API translation pass if cache is empty
             if (formulaVal && typeof fetchLiveFormulaLatex === 'function') {
-                console.log(`🚀 [Asynchronous Dispatch] Dispatching network request fetchLiveFormulaLatex for Card ID: ${cardId}`);
+                console.log(`📡 Dispatching network call via fetchLiveFormulaLatex for token: ${cardId}`);
                 fetchLiveFormulaLatex(cardId, 'formula', inputsPayload);
             } else {
-                console.warn(`⚠️ [Skip Dispatch] fetchLiveFormulaLatex not triggered. formulaVal empty or function missing.`);
+                console.warn(`⚠️ [Skip Dispatch] fetchLiveFormulaLatex not triggered. formulaVal empty ("${formulaVal}") or execution function missing.`);
+            }
+
+            // 🎯 FIX: Prevent uncompiled, raw backslash strings from cascading straight to KaTeX on a cache miss.
+            // Returning a clean "0" or expression text placeholder safely satisfies the current layout loop render pass 
+            // while the background HTTP fetch flies out to return the real parsed expression structure.
+            if (formulaVal && formulaVal.includes('\\')) {
+                console.log(`🛡️ Safe Guard Triggered: Formula contains raw un-evaluated LaTeX from an upstream token. Returning neutral '0' placeholder for pending network pass.`);
+                return "0";
             }
 
             // Fallback variable assignments if cache hasn't returned yet
             val = formulaVal || '3*x + 5';
-            console.log(`🩹 [Value Fallback] Cache empty. Returning raw formula expression text to preview frame: "${val}"`);
+            console.log(`🕒 Network request pending. Returning transient text layout placeholder: "${val}"`);
         }
 
         if (val === null || val === '') {
@@ -896,7 +901,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     const cacheKey = `${cardId}_${normalizedKeyString}`;
                     
                     if (data.latex_output) {
-                        console.log(`💾 [Change Listener Cache Write] Key: "${cacheKey}" -> LaTeX: "${data.latex_output}"`);
                         formulaLiveLatexCache[cacheKey] = data.latex_output;
                     }
 
@@ -1467,10 +1471,22 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.linkable-tokens-dropdown').forEach(d => d.style.display = 'none');
 
         // 🔍 RE-INDEX COMPATIBILITY BY INSPECTING LIVE ACTIVE DOM SIDEBAR CARDS
-        const targetType = wrapper.getAttribute('data-input-type'); // e.g., 'integer'
+        const targetTypeAttr = wrapper.getAttribute('data-input-type') || ''; // e.g., 'double' or 'integer'
         const currentCard = linkBtn.closest('.workspace-block-card');
         const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
         
+        console.log(`\n--- 🏁 Linker Diagnostics Started ---`);
+        console.log(`Target Input Key: "${wrapper.getAttribute('data-input-key')}"`);
+        console.log(`Target Raw Type Attribute: "${targetTypeAttr}"`);
+
+        // 🎯 1. Normalize the field's accepted types into an array.
+        let acceptedTargetTypes = [targetTypeAttr];
+        if (targetTypeAttr === 'double') {
+            acceptedTargetTypes.push('integer');
+        }
+        console.log(`Normalized Accepted Types Array:`, acceptedTargetTypes);
+        console.log(`Global Database Registry (dynamicVarsTokens):`, dynamicVarsTokens);
+
         let availableOptionsHtml = '';
         
         activeCards.forEach(card => {
@@ -1481,32 +1497,74 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!deleteBtn) return;
 
             const indexedToken = deleteBtn.getAttribute('data-indexed-token'); // e.g., "randInt2"
-            const baseArchetype = card.getAttribute('data-token');             // e.g., "randInt"
+            const baseArchetype = card.getAttribute('data-token');             // e.g., "rand"
 
-            // Compute output configurations dynamically based on the model token archetype specifications
-            let derivedOutputs = [];
-            if (baseArchetype === 'randInt') derivedOutputs = ['integer'];
-            else if (baseArchetype === 'rand') derivedOutputs = ['double'];
-            else if (baseArchetype === 'formula') derivedOutputs = ['double', 'integer', 'formula'];
-            else if (baseArchetype === 'matrix') derivedOutputs = ['matrix'];
+            console.log(`\nEvaluating Sidebar Option Card -> [${indexedToken}] (Archetype: "${baseArchetype}")`);
+
+            // 🎯 2. LOOK UP DATA DIRECTLY FROM YOUR ENTITY_TYPE DATABASE LEDGER
+            const tokenDefinition = dynamicVarsTokens.find(t => t.token === baseArchetype);
             
-            // Check if the output configuration satisfies the data field expectation rules
-            const inputKey = wrapper.getAttribute('data-input-key') || '';
-            let isCompatible = derivedOutputs.includes(targetType);
+            if (!tokenDefinition) {
+                console.error(`❌ DATABASE MISMATCH: No token schema configuration row found matching archetype: "${baseArchetype}" in dynamicVarsTokens ledger.`);
+                return;
+            }
+            
+            console.log(`Found Registry Schema Definition for "${baseArchetype}":`, tokenDefinition);
 
-            // 🎯 FORCE COMPATIBILITY CHECK: permit substitution inputs to couple with double, integer, or formula tokens
+            // 🎯 PARSE FORMAT PATTERN BLUUPRINT FROM THE SEED MODEL DYNAMICALLY
+            let blueprintData = {};
+            if (tokenDefinition.format_pattern) {
+                try {
+                    blueprintData = typeof tokenDefinition.format_pattern === 'string'
+                        ? JSON.parse(tokenDefinition.format_pattern)
+                        : tokenDefinition.format_pattern;
+                } catch (e) {
+                    console.warn(`⚠️ Failed to parse format_pattern for ${baseArchetype}:`, e);
+                }
+            }
+
+            // Extract the output property from the parsed blueprint, or use tokenDefinition properties
+            let rawOutput = blueprintData.output || tokenDefinition.output;
+
+            // Strict fallback default values if the property is missing everywhere
+            if (!rawOutput) {
+                if (baseArchetype === 'randInt') rawOutput = ['integer'];
+                else if (baseArchetype === 'rand') rawOutput = ['double'];
+                else if (baseArchetype === 'formula') rawOutput = ['double', 'integer', 'formula'];
+                else if (baseArchetype === 'matrix') rawOutput = ['matrix'];
+            }
+
+            // Normalize the output property into an array context seamlessly
+            const derivedOutputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
+            
+            console.log(`Normalized Token Source Outputs:`, derivedOutputs);
+
+            // Check if the input key is a template substitution row
+            const inputKey = wrapper.getAttribute('data-input-key') || '';
+            
+            // 🎯 3. Determine compatibility dynamically via array intersection (.some)
+            let isCompatible = derivedOutputs.some(type => acceptedTargetTypes.includes(type));
+            console.log(`Intersection Type Match Result (derivedOutputs vs acceptedTargetTypes): ${isCompatible}`);
+
+            // FORCE COMPATIBILITY OVERRIDE: permit substitution inputs to couple with double, integer, or formula tokens
             if (inputKey.startsWith('sub_')) {
-                isCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
+                const isSubCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
+                isCompatible = isSubCompatible;
             }
 
             if (isCompatible) {
+                console.log(`✅ MATCH SUCCESS: Adding <${indexedToken}> into dropdown list.`);
                 availableOptionsHtml += `
-                    <button type="button" class="select-link-token-option" data-target-token="<${indexedToken}>" style="width: 100%; text-align: left; padding: 6px 12px; background: none; border: none; font-size: 0.75rem; cursor: pointer; transition: background 0.15s; color: #334155;">
+                    <button type="button" class="select-link-token-option" data-target-token="&lt;${indexedToken}&gt;" style="width: 100%; text-align: left; padding: 6px 12px; background: none; border: none; font-size: 0.75rem; cursor: pointer; transition: background 0.15s; color: #334155;">
                         &lt;${indexedToken}&gt;
                     </button>
                 `;
+            } else {
+                console.log(`🚫 MATCH FAILED: <${indexedToken}> is incompatible with fields requiring ${targetTypeAttr}.`);
             }
         });
+
+        console.log(`\n--- 🏁 Linker Diagnostics Complete. Total generated choices: ${availableOptionsHtml ? 'Options Present' : 'Zero Options Found'} ---`);
 
         if (!availableOptionsHtml) {
             availableOptionsHtml = `<div style="padding: 6px 12px; font-size: 0.7rem; color: #94a3b8; font-style: italic;">No matching outputs</div>`;
@@ -1569,30 +1627,22 @@ document.addEventListener('DOMContentLoaded', function() {
     function fetchLiveFormulaLatex(cardId, token, inputsPayload) {
         const cacheKey = `${cardId}_${normalizePayloadKey(inputsPayload)}`;
         
-        console.log(`📡 [fetchLiveFormulaLatex] Triggered for Card: "${cardId}", Token: "${token}"`);
-        console.log(`🔑 [fetchLiveFormulaLatex] Generated CacheKey: "${cacheKey}"`);
-
         // 🎯 THE FIX: Bypass the early return if the cache entry is just a plain-text fallback string
         if (formulaLiveLatexCache[cacheKey]) {
             const cachedVal = formulaLiveLatexCache[cacheKey];
             const isRawTextFallback = /^(Integral|Derivative|Limit|Sum|Matrix)/i.test(cachedVal) || !cachedVal.includes('\\');
             
-            console.log(`🗄️ [fetchLiveFormulaLatex] Existing cache entry found: "${cachedVal}". Is raw text fallback? ${isRawTextFallback}`);
-
             // If it's a real LaTeX expression, skip network traffic. 
             // If it's plain text, break out and force a server validation request!
             if (!isRawTextFallback) {
-                console.log(`🛑 [fetchLiveFormulaLatex] Cache contains valid LaTeX. Aborting redundant network request.`);
                 return;
             }
-            console.log(`🔄 [fetchLiveFormulaLatex] Cache contains plain text fallback. Forcing network refresh...`);
         }
 
         // Fetch CSRF security cookies natively out of the browser layer
         const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
 
         const requestBody = { token: token, inputs: inputsPayload };
-        console.log(`📤 [fetchLiveFormulaLatex] Sending POST Request Payload:`, JSON.stringify(requestBody, null, 2));
 
         fetch('/assessment/api/validate-component-preview/', {
             method: 'POST',
@@ -1603,33 +1653,23 @@ document.addEventListener('DOMContentLoaded', function() {
             body: JSON.stringify({ token: token, inputs: inputsPayload.inputs })
         })
         .then(res => {
-            console.log(`📥 [fetchLiveFormulaLatex] Network HTTP Response Status: ${res.status} (${res.statusText})`);
             // 🎯 FIX: Intercept the 400 Bad Request error payload rather than skipping straight to .catch()
             if (!res.ok) {
                 return res.json().then(errData => {
-                    console.error(`❌ [fetchLiveFormulaLatex] Server returned non-200 error object:`, errData);
                     throw new Error(errData.error || "Syntax Error");
                 });
             }
             return res.json();
         })
         .then(data => {
-            console.log(`📥 [fetchLiveFormulaLatex] Server Raw Response Data JSON:`, data);
-            
             if (data.success && data.latex_output) {
-                console.log(`✅ [fetchLiveFormulaLatex] SUCCESS! Writing server LaTeX to cache: "${data.latex_output}"`);
                 // Pin the output string map directly to our tracking cache dictionary
                 formulaLiveLatexCache[cacheKey] = data.latex_output;
-
-                // 🎯 TEMP LOG 1: What did the network write to?
-                console.log("💾 [NETWORK WRITE KEY]:", cacheKey);
             } else {
-                console.warn(`⚠️ [fetchLiveFormulaLatex] API responded with success=false or missing latex_output. falling back to warning formatting.`);
                 // Handle case where success is false but status code was 200
                 formulaLiveLatexCache[cacheKey] = `\\text{\\color{red}{${data.error || 'Syntax Error'}}}`;
             }
             // Force a layout re-calc pass now that we have the real data
-            console.log(`🔄 [fetchLiveFormulaLatex] Request cycle complete. Triggering layout refresh preview window...`);
             updateWorkspaceSimulationPreview();
         })
         .catch(err => {
@@ -1646,20 +1686,26 @@ document.addEventListener('DOMContentLoaded', function() {
      * Normalizes an inputs object to ensure consistent string serialization keys
      */
     function normalizePayloadKey(inputsPayload) {
-        if (!inputsPayload) return '';
-        
+        // Create a deep copy to prevent side effects on the live payload
         const copy = JSON.parse(JSON.stringify(inputsPayload));
         
         if (copy.inputs && copy.inputs.formula) {
-            const originalForm = copy.inputs.formula;
-            copy.inputs.formula = copy.inputs.formula
-                .replace(/\s+/g, '')     
-                .replace(/\*\*/g, '^');
-            console.log(`🧹 [Normalization Input Formula]: "${originalForm}" -> Normalized to: "${copy.inputs.formula}"`);
+            let fStr = copy.inputs.formula;
+            
+            // 🎯 FIX: If it's a LaTeX string, escape backslashes and strip spaces safely 
+            // to avoid line-continuation evaluation errors in the JS engine
+            if (fStr.includes('\\')) {
+                copy.inputs.formula = fStr
+                    .replace(/\\/g, '\\\\') // Double escape backslashes safely
+                    .replace(/\s+/g, '');   // Minimize whitespace variation
+            } else {
+                // Standard plain text algebraic equation pipeline normalization
+                copy.inputs.formula = fStr
+                    .replace(/\s+/g, '')     
+                    .replace(/\*\*/g, '^');
+            }
         }
         
-        const finalizedString = JSON.stringify(copy);
-        console.log("🧬 [Normalization Resulting Payload String]:", finalizedString);
-        return finalizedString;
+        return JSON.stringify(copy);
     }
 });

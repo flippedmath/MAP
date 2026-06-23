@@ -43,6 +43,19 @@ import traceback
 from django.views.decorators.csrf import csrf_protect
 
 import sympy as sp
+from sympy.parsing.latex import parse_latex
+# 🎯 WORKAROUND MONKEYPATCH: Trick SymPy into accepting antlr4-python3-runtime 4.13.x
+import importlib.metadata
+_orig_version = importlib.metadata.version
+
+def patched_version(package_name):
+    if package_name == 'antlr4-python3-runtime':
+        return '4.11.1'  # Return the exact string SymPy's regex check is looking for
+    return _orig_version(package_name)
+
+# Overwrite the metadata version checker at runtime
+importlib.metadata.version = patched_version
+
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -2159,15 +2172,65 @@ def validate_component_preview(request):
         # 1. Parse incoming request JSON
         data = json.loads(request.body)
         token = data.get('token')
-        inputs = data.get('inputs', {})
+        raw_inputs = data.get('inputs', {})
+
+        # 🎯 ADD THESE PRINT STATEMENTS FOR SERVER-SIDE TELEMETRY
+        print("\n" + "="*60)
+        print("🚀 BACKEND DIAGNOSTICS: validate_component_preview entry")
+        print(f"Targeting Archetype Token: {token}")
+        print(f"Raw inputs payload dict: {raw_inputs}")
+        
+        formula_raw_value = raw_inputs.get('formula', '')
+        print(f"Incoming 'formula' string type: {type(formula_raw_value)}")
+        print(f"Incoming 'formula' string literal content: {formula_raw_value}")
+        print(f"Incoming 'formula' strict python repr value: {repr(formula_raw_value)}")
+        print("="*60 + "\n")
 
         if token != 'formula':
             return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
+
+        # 🎯 HELPER LOGIC: Clean nested dependency string values
+        def clean_nested_formula_value(val):
+            if not isinstance(val, str):
+                return val
+            cleaned = val.strip()
+            
+            # 1. Isolate expressions if they come from linked formula tokens (e.g. 'x = [2, -5]')
+            if '=' in cleaned:
+                parts = cleaned.split('=', 1)
+                right_side = parts[1].strip()
+                
+                if right_side.startswith('[') and right_side.endswith(']'):
+                    elements = right_side[1:-1].split(',')
+                    if elements and elements[0].strip():
+                        cleaned = elements[0].strip()
+                else:
+                    cleaned = right_side
+
+            # 🎯 FIX: Strip out KaTeX visual layouts that break SymPy's ANTLR grammar parser
+            if '\\' in cleaned:
+                cleaned = cleaned.replace('\\limits', '') \
+                                 .replace('\\,', ' ') \
+                                 .replace('\\left', '') \
+                                 .replace('\\right', '') \
+                                 .strip()
+            
+            return cleaned
+
+        inputs = {k: clean_nested_formula_value(v) for k, v in raw_inputs.items()}
 
         formula_str = inputs.get('formula', '').strip()
         solve_method = inputs.get('solve method', 'leave as formula').strip()
         variables_raw = inputs.get('variables', '')
         solve_for_str = inputs.get('solve for _', '').strip()
+
+        # 🎯 FIX: Evaluate the boolean checks outside the f-string expression context
+        has_double_backslash = '\\\\' in formula_str
+        has_single_backslash = '\\' in formula_str
+        print(f"🧪 AFTER CLEANUP HOOK -> formula_str content: {formula_str}")
+        print(f"🧪 AFTER CLEANUP HOOK -> formula_str repr: {repr(formula_str)}")
+        print(f"Contains double backslash: {has_double_backslash}")
+        print(f"Contains single backslash: {has_single_backslash}")
 
         if not formula_str:
             return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
@@ -2178,25 +2241,34 @@ def validate_component_preview(request):
         else:
             var_list = [v.strip() for v in variables_raw.replace(',', ' ').split() if v.strip()]
 
-        # Register local variables context for the SymPy evaluation sandbox
         local_dict = {var: sp.Symbol(var) for var in var_list}
         if 'pi' not in local_dict:
             local_dict['pi'] = sp.pi
 
-        # 🎯 4. CONDITIONAL UN-EVALUATED FUNCTION INTERCEPTION
-        # Only inject un-evaluated classes if we want to leave the formula as-is
         if solve_method == 'leave as formula':
             local_dict['integrate'] = sp.Integral
             local_dict['diff'] = sp.Derivative
             local_dict['limit'] = sp.Limit
-            # You can add any other calculus keywords here (e.g., local_dict['summation'] = sp.Sum)
 
-        # 5. Parse the expression tree safely
-        parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=(solve_method != 'leave as formula'))
+        # 🎯 4. SEAMLESS LATEX VS PLAIN-TEXT PARSING INTERACTION INTERCEPTOR
+        # If the string contains a backslash, parse it as a native LaTeX syntax string
+        if "\\" in formula_str:
+            try:
+                # parse_latex transforms strings like "\frac{x}{2}" into actual SymPy expression trees
+                parsed_expr = parse_latex(formula_str)
+                
+                # If evaluating immediately isn't wanted, hold evaluation down
+                if solve_method != 'leave as formula':
+                    parsed_expr = parsed_expr.doit() # Adjust structural evaluation if needed
+            except Exception as latex_err:
+                raise ValueError(f"LaTeX Parsing Error: {str(latex_err)}")
+        else:
+            # Drop back down to standard plain text algebraic parser fallback rule block
+            parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=(solve_method != 'leave as formula'))
 
         # 6. Math Operation Execution Engine Matrix
         result = parsed_expr
-        latex_result = None  # Track dynamic LaTeX formatting context
+        latex_result = None  
         
         if solve_method == 'simplify':
             result = sp.simplify(parsed_expr)
@@ -2213,10 +2285,8 @@ def validate_component_preview(request):
             latex_result = f"{sp.latex(solve_var)} = \\left\\{{ {latex_solutions} \\right\\}}"
             
         else:
-            # For 'leave as formula', parsed_expr is already structural and un-evaluated
             result = parsed_expr
 
-        # 7. FALLBACK LATEX MATRIX GENERATOR
         if not latex_result:
             latex_result = sp.latex(result)
 
