@@ -22,6 +22,9 @@ document.addEventListener('DOMContentLoaded', function() {
     let dynamicVarsTokens = [];
     let answerFieldsTokens = [];
 
+    // 🎯 Live formula cache to prevent lagging network requests on rendering passes
+    let formulaLiveLatexCache = {};
+
     // Global Workspace Quill Editor Tracker Instance
     let workspaceQuillInstance = null;
 
@@ -331,6 +334,14 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="component-fields-wrapper">${fieldsHtml}</div>
         `;
 
+        // Bind an input event listener to the card structure so any keystroke 
+        // inside the formula card immediately triggers a simulation preview update!
+        if (token === 'formula') {
+            card.addEventListener('input', function() {
+                updateWorkspaceSimulationPreview();
+            });
+        }
+
         // Interactive UI hover transitions
         const refreshIconBtn = card.querySelector('.btn-refresh-workspace-component-value');
         if (refreshIconBtn) {
@@ -412,50 +423,51 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // -------------------------------------------------------------
-    // RECURSIVE DEPENDENCY RESOLUTION HELPER (WITH CYCLE DETECTION)
+    // INNER RECURSIVE VALUE RESOLUTION ENGINE (WITH CYCLE DETECTION)
     // -------------------------------------------------------------
     function getLiveComponentValue(card, inputKey, defaultFallback, visitedTokens = []) {
         if (!card) return defaultFallback;
         
-        // Find the specific wrapper container for this input parameter field
+        // Query for standard linkage structural container wrappers
         const wrapper = card.querySelector(`.linked-input-wrapper[data-input-key="${inputKey}"]`);
         if (!wrapper) {
-            // Fallback for elements without standard linkage wrappers yet (like formula inputs)
-            const inputField = card.querySelector(`[class*="val-input-${inputKey}"]`);
-            return inputField ? inputField.value.trim() : defaultFallback;
+            // Fallback catch-all logic for legacy unbound field classes (like formula)
+            const legacyInput = card.querySelector(`.val-input-${inputKey}`);
+            return legacyInput ? legacyInput.value.trim() : defaultFallback;
         }
 
+        // Check if input parameter context is currently chained to an output token dependency
         const boundToken = wrapper.getAttribute('data-bound-token');
         if (boundToken) {
             const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
             
-            // 🛑 CYCLE BREAK ENGINE: If this token is already being calculated in this call stack branch
+            // 🛑 CYCLE BREAK ENGINE: Prevent infinite recursive call stack loops
             if (visitedTokens.includes(cleanTargetToken)) {
                 return defaultFallback;
             }
 
-            // Scan the DOM to locate the source variable component card
-            const allCards = document.querySelectorAll('.workspace-block-card');
-            let matchedValue = defaultFallback;
+            const activeCards = document.querySelectorAll('.workspace-block-card');
+            let resolvedValue = defaultFallback;
 
-            allCards.forEach(sourceCard => {
-                const deleteBtn = sourceCard.querySelector('.btn-delete-workspace-component');
+            activeCards.forEach(srcCard => {
+                const deleteBtn = srcCard.querySelector('.btn-delete-workspace-component');
                 if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
-                    // Forward current tracking ledger plus the target token down the stack
-                    matchedValue = evaluateSingleCardOutput(sourceCard, cleanTargetToken, [...visitedTokens, cleanTargetToken]);
+                    // Recursively compute value based on the linked element card branch configuration
+                    resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken, [...visitedTokens, cleanTargetToken]);
                 }
             });
-            return matchedValue;
+            return resolvedValue;
         }
 
-        // No link: fallback directly onto the text/numeric input value parameter
-        const inputField = wrapper.querySelector('input');
-        return (inputField && inputField.value !== '') ? inputField.value.trim() : defaultFallback;
+        // No active link: extract current string out of standard native input element field lines
+        const nativeInput = wrapper.querySelector('input');
+        return (nativeInput && nativeInput.value !== '') ? nativeInput.value.trim() : defaultFallback;
     }
 
     // Isolate the core calculation matrix out of the main loop so it can be resolved recursively
     function evaluateSingleCardOutput(card, tokenIdentifier, visitedTokens = []) {
         const baseArchetype = card.getAttribute('data-token');
+        let val = null;
 
         if (baseArchetype === 'randInt') {
             const minVal = parseInt(getLiveComponentValue(card, 'min', -9, visitedTokens), 10);
@@ -476,7 +488,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         targetIndex = baseTextSeed % pool.length;
                     }
                     if (targetIndex >= pool.length) targetIndex = pool.length - 1;
-                    return pool[targetIndex].toString();
+                    val = pool[targetIndex].toString();
                 }
             }
         } 
@@ -484,36 +496,149 @@ document.addEventListener('DOMContentLoaded', function() {
             const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0, visitedTokens));
             const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0, visitedTokens));
             const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01, visitedTokens));
-            return minVal.toString(); 
-        }
+
+            if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
+                const totalRange = maxVal - minVal;
+                const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
+
+                if (maxSteps >= 0) {
+                    const seedAttr = card.getAttribute('data-shuffle-seed');
+                    let targetStepMultiplier = 0;
+
+                    if (seedAttr) {
+                        targetStepMultiplier = Math.floor(parseFloat(seedAttr) * (maxSteps + 1));
+                    } else {
+                        const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                        targetStepMultiplier = baseTextSeed % (maxSteps + 1);
+                        if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
+                    }
+
+                    if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
+                    if (targetStepMultiplier < 0) targetStepMultiplier = 0;
+
+                    let finalValue = minVal + (targetStepMultiplier * stepVal);
+                    if (finalValue > maxVal) finalValue = maxVal;
+
+                    const stepStr = stepVal.toString();
+                    let decimalPlaces = 4;
+                    if (stepStr.includes('.')) {
+                        decimalPlaces = stepStr.split('.')[1].length;
+                    }
+                    val = finalValue.toFixed(decimalPlaces);
+                }
+            }
+        } 
         else if (baseArchetype === 'primeFactors') {
             let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12, visitedTokens), 10);
+            
             if (!isNaN(targetNum) && targetNum > 1) {
                 const factors = [];
-                while (targetNum % 2 === 0) { factors.push(2); targetNum = Math.floor(targetNum / 2); }
+                while (targetNum % 2 === 0) {
+                    factors.push(2);
+                    targetNum = Math.floor(targetNum / 2);
+                }
                 let factor = 3;
                 while (factor * factor <= targetNum) {
-                    while (targetNum % factor === 0) { factors.push(factor); targetNum = Math.floor(targetNum / factor); }
+                    while (targetNum % factor === 0) {
+                        factors.push(factor);
+                        targetNum = Math.floor(targetNum / factor);
+                    }
                     factor += 2;
                 }
-                if (targetNum > 1) factors.push(targetNum);
-                return factors.join(', ');
+                if (targetNum > 1) {
+                    factors.push(targetNum);
+                }
+                val = factors.join(', ');
+            } else {
+                val = "";
             }
-            return "";
         }
         else if (baseArchetype === 'formula') {
-            // 🎯 Fall back to your database/backend evaluated snapshot attribute
-            const cachedPreview = card.getAttribute('data-simulated-value');
-            if (cachedPreview) {
-                return cachedPreview;
-            }
+            const formulaVal = getLiveComponentValue(card, 'formula', '', visitedTokens);
+            const methodVal = getLiveComponentValue(card, 'solve method', 'leave as formula', visitedTokens);
+            const varsVal = getLiveComponentValue(card, 'variables', '', visitedTokens);
+            const solveForVal = getLiveComponentValue(card, 'solve for _', '', visitedTokens);
+
+            console.log(`🧐 [evaluateSingleCardOutput] Evaluating formula card. Raw fields read from DOM:`, {
+                formulaVal, methodVal, varsVal, solveForVal
+            });
+
+            // 🎯 1. Dynamically scan for active substitution row items to align cache payload perfectly
+            const subsPayload = {};
+            card.querySelectorAll('.substitution-row-item').forEach(row => {
+                const varName = row.getAttribute('data-var-name');
+                const inputEl = row.querySelector('input, select');
+                if (varName && inputEl) {
+                    subsPayload[varName] = inputEl.value.trim();
+                }
+            });
+
+            // 🎯 2. Structural input validation serialization payload setup (FIXED: Added structural nested 'inputs' tier)
+            const inputsPayload = {
+                inputs: {
+                    "formula": formulaVal,
+                    "solve method": methodVal,
+                    "variables": varsVal,
+                    "solve for _": solveForVal,
+                    "substitutions": subsPayload
+                }
+            };
+
+            // 🎯 3. Build identical matching cache keys matching network requests
+            const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
             
-            // Absolute baseline fallback if a network sync hasn't occurred yet
-            const formulaField = card.querySelector('.val-input-formula');
-            return formulaField ? formulaField.value.trim() : '';
+            // This now successfully passes the nested structural block into your string normalizer
+            const normalizedKeyString = typeof normalizePayloadKey === 'function' ? normalizePayloadKey(inputsPayload) : JSON.stringify(inputsPayload);
+            const cacheKey = `${cardId}_${normalizedKeyString}`;
+
+            // 🎯 TEMP LOG 2: What is the UI looking for?
+            console.log("🔍 [UI READ KEY]:", cacheKey);
+            console.log("📦 [UI READ PAYLOAD OBJECT]:", inputsPayload);
+
+            // 🎯 4. Route explicit placeholders directly if not evaluating baseline choices
+            if (methodVal === 'simplify') {
+                console.log("🔀 [UI Route] Matching 'simplify' placeholder.");
+                return "[Placeholder: Simplify Method Display]";
+            } else if (methodVal === 'expand polynomial') {
+                console.log("🔀 [UI Route] Matching 'expand polynomial' placeholder.");
+                return "[Placeholder: Expand Polynomial Method Display]";
+            } else if (methodVal === 'solve for _') {
+                console.log(`🔀 [UI Route] Matching 'solve for ${solveForVal}' placeholder.`);
+                return `[Placeholder: Solve for ${solveForVal || '_'} Method Display]`;
+            }
+
+            // 🎯 5. Look up compiled LaTeX out of your global cache dictionary map
+            if (formulaLiveLatexCache && formulaLiveLatexCache[cacheKey]) {
+                console.log(`🎯 [CACHE HIT] Found LaTeX in cache for key: "${cacheKey}". Value: "${formulaLiveLatexCache[cacheKey]}"`);
+                return formulaLiveLatexCache[cacheKey];
+            } else {
+                console.log(`💨 [CACHE MISS] No cache entry found for key: "${cacheKey}"`);
+            }
+
+            // Fallback to old attribute snapshot context if it has one seeded
+            const databaseValueFallback = card.getAttribute('data-simulated-value');
+            if (databaseValueFallback) {
+                console.log(`🗄️ [Fallback] Using data-simulated-value attribute fallback: "${databaseValueFallback}"`);
+                return databaseValueFallback;
+            }
+
+            // 🎯 6. Fire asynchronous API translation pass if cache is empty
+            if (formulaVal && typeof fetchLiveFormulaLatex === 'function') {
+                console.log(`🚀 [Asynchronous Dispatch] Dispatching network request fetchLiveFormulaLatex for Card ID: ${cardId}`);
+                fetchLiveFormulaLatex(cardId, 'formula', inputsPayload);
+            } else {
+                console.warn(`⚠️ [Skip Dispatch] fetchLiveFormulaLatex not triggered. formulaVal empty or function missing.`);
+            }
+
+            // Fallback variable assignments if cache hasn't returned yet
+            val = formulaVal || '3*x + 5';
+            console.log(`🩹 [Value Fallback] Cache empty. Returning raw formula expression text to preview frame: "${val}"`);
         }
 
-        return card.getAttribute('data-simulated-value') || '';
+        if (val === null || val === '') {
+            val = card.getAttribute('data-simulated-value');
+        }
+        return val;
     }
 
     function bindLiveFormulaEvaluation(card, savedValues = {}) {
@@ -760,6 +885,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     card.setAttribute('data-simulated-value', data.evaluated_output);
                     card.style.border = "1px solid #e2e8f0"; 
 
+                    // 🎯 FIX: Build the matching cache key structure and cache the fresh server LaTeX
+                    const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
+                    const inputsPayloadForCache = { inputs: payloadInputs };
+                    
+                    const normalizedKeyString = typeof normalizePayloadKey === 'function' 
+                        ? normalizePayloadKey(inputsPayloadForCache) 
+                        : JSON.stringify(inputsPayloadForCache);
+                        
+                    const cacheKey = `${cardId}_${normalizedKeyString}`;
+                    
+                    if (data.latex_output) {
+                        console.log(`💾 [Change Listener Cache Write] Key: "${cacheKey}" -> LaTeX: "${data.latex_output}"`);
+                        formulaLiveLatexCache[cacheKey] = data.latex_output;
+                    }
+
                     // Process updated automated parameters listings
                     const rawFormula = formulaInputEl.value;
                     const variableMatches = rawFormula.match(/\b[a-zA-Z][0-9]*\b/g) || [];
@@ -806,147 +946,6 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // -------------------------------------------------------------
-        // INNER RECURSIVE VALUE RESOLUTION ENGINE (WITH CYCLE DETECTION)
-        // -------------------------------------------------------------
-        function getLiveComponentValue(card, inputKey, defaultFallback, visitedTokens = []) {
-            if (!card) return defaultFallback;
-            
-            // Query for standard linkage structural container wrappers
-            const wrapper = card.querySelector(`.linked-input-wrapper[data-input-key="${inputKey}"]`);
-            if (!wrapper) {
-                // Fallback catch-all logic for legacy unbound field classes (like formula)
-                const legacyInput = card.querySelector(`.val-input-${inputKey}`);
-                return legacyInput ? legacyInput.value.trim() : defaultFallback;
-            }
-
-            // Check if input parameter context is currently chained to an output token dependency
-            const boundToken = wrapper.getAttribute('data-bound-token');
-            if (boundToken) {
-                const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
-                
-                // 🛑 CYCLE BREAK ENGINE: Prevent infinite recursive call stack loops
-                if (visitedTokens.includes(cleanTargetToken)) {
-                    return defaultFallback;
-                }
-
-                const activeCards = document.querySelectorAll('.workspace-block-card');
-                let resolvedValue = defaultFallback;
-
-                activeCards.forEach(srcCard => {
-                    const deleteBtn = srcCard.querySelector('.btn-delete-workspace-component');
-                    // 🚀 FIXED: Changed 'cleanToken' to 'cleanTargetToken' to match correct scope variables
-                    if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
-                        // Recursively compute value based on the linked element card branch configuration
-                        resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken, [...visitedTokens, cleanTargetToken]);
-                    }
-                });
-                return resolvedValue;
-            }
-
-            // No active link: extract current string out of standard native input element field lines
-            const nativeInput = wrapper.querySelector('input');
-            return (nativeInput && nativeInput.value !== '') ? nativeInput.value.trim() : defaultFallback;
-        }
-
-        function evaluateSingleCardOutput(card, tokenIdentifier, visitedTokens = []) {
-            const baseArchetype = card.getAttribute('data-token');
-            let val = null;
-
-            if (baseArchetype === 'randInt') {
-                const minVal = parseInt(getLiveComponentValue(card, 'min', -9, visitedTokens), 10);
-                const maxVal = parseInt(getLiveComponentValue(card, 'max', 9, visitedTokens), 10);
-                const stepVal = parseInt(getLiveComponentValue(card, 'step', 1, visitedTokens), 10);
-                
-                if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-                    const pool = [];
-                    let current = minVal;
-                    while (current <= maxVal) { pool.push(current); current += stepVal; }
-                    if (pool.length > 0) {
-                        const seedAttr = card.getAttribute('data-shuffle-seed');
-                        let targetIndex = 0;
-                        if (seedAttr) {
-                            targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
-                        } else {
-                            const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                            targetIndex = baseTextSeed % pool.length;
-                        }
-                        if (targetIndex >= pool.length) targetIndex = pool.length - 1;
-                        val = pool[targetIndex].toString();
-                    }
-                }
-            } 
-            else if (baseArchetype === 'rand') {
-                const minVal = parseFloat(getLiveComponentValue(card, 'min', 0.0, visitedTokens));
-                const maxVal = parseFloat(getLiveComponentValue(card, 'max', 1.0, visitedTokens));
-                const stepVal = parseFloat(getLiveComponentValue(card, 'step', 0.01, visitedTokens));
-
-                if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-                    const totalRange = maxVal - minVal;
-                    const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
-
-                    if (maxSteps >= 0) {
-                        const seedAttr = card.getAttribute('data-shuffle-seed');
-                        let targetStepMultiplier = 0;
-
-                        if (seedAttr) {
-                            targetStepMultiplier = Math.floor(parseFloat(seedAttr) * (maxSteps + 1));
-                        } else {
-                            const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                            targetStepMultiplier = baseTextSeed % (maxSteps + 1);
-                            if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
-                        }
-
-                        if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
-                        if (targetStepMultiplier < 0) targetStepMultiplier = 0;
-
-                        let finalValue = minVal + (targetStepMultiplier * stepVal);
-                        if (finalValue > maxVal) finalValue = maxVal;
-
-                        const stepStr = stepVal.toString();
-                        let decimalPlaces = 4;
-                        if (stepStr.includes('.')) {
-                            decimalPlaces = stepStr.split('.')[1].length;
-                        }
-                        val = finalValue.toFixed(decimalPlaces);
-                    }
-                }
-            } 
-            else if (baseArchetype === 'primeFactors') {
-                let targetNum = parseInt(getLiveComponentValue(card, 'number to factor', 12, visitedTokens), 10);
-                
-                if (!isNaN(targetNum) && targetNum > 1) {
-                    const factors = [];
-                    while (targetNum % 2 === 0) {
-                        factors.push(2);
-                        targetNum = Math.floor(targetNum / 2);
-                    }
-                    let factor = 3;
-                    while (factor * factor <= targetNum) {
-                        while (targetNum % factor === 0) {
-                            factors.push(factor);
-                            targetNum = Math.floor(targetNum / factor);
-                        }
-                        factor += 2;
-                    }
-                    if (targetNum > 1) {
-                        factors.push(targetNum);
-                    }
-                    val = factors.join(', ');
-                } else {
-                    val = "";
-                }
-            }
-            else if (baseArchetype === 'formula') {
-                val = getLiveComponentValue(card, 'formula', '3*x + 5', visitedTokens);
-            }
-
-            // Fallback cleanly onto seed attribute markers if evaluation results output blank string/null maps
-            if (val === null || val === '') {
-                val = card.getAttribute('data-simulated-value');
-            }
-            return val;
-        }
 
         // -------------------------------------------------------------
         // HTML LAYOUT PARSING AND FORMATTING REPLACEMENTS
@@ -972,43 +971,76 @@ document.addEventListener('DOMContentLoaded', function() {
         const tokenRegex = /&lt;([^&>]+)&gt;|<([^>]+)>/g;
 
         let simulatedHtml = workingHtml.replace(tokenRegex, function(match, tokenText) {
-            const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim(); // e.g., "primeFactors1"
-            let evaluationValue = null;
-            
-            // Scan through available live DOM items to match our tracking token target
-            const allCards = document.querySelectorAll('.workspace-block-card');
-            allCards.forEach(card => {
-                const deleteBtn = card.querySelector('.btn-delete-workspace-component');
-                if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanToken) {
-                    // Execute calculation engine matrix mapping dependencies down recursively
-                    evaluationValue = evaluateSingleCardOutput(card, cleanToken);
-                }
-            });
+            try {
+                const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim(); 
+                let evaluationValue = null;
+                let baseArchetypeToken = cleanToken.replace(/\d+$/, '').toLowerCase(); // 🎯 Force lowercase natively
+                
+                // Scan through available live DOM items to match our tracking token target
+                const allCards = document.querySelectorAll('.workspace-block-card');
+                allCards.forEach(card => {
+                    const deleteBtn = card.querySelector('.btn-delete-workspace-component');
+                    if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanToken) {
+                        evaluationValue = evaluateSingleCardOutput(card, cleanToken);
+                        // 🎯 Protect against capitalization variant mappings ("Formula" vs "formula")
+                        if (card.getAttribute('data-token')) {
+                            baseArchetypeToken = card.getAttribute('data-token').toLowerCase();
+                        }
+                    }
+                });
 
-            const baseArchetypeToken = cleanToken.replace(/\d+$/, '');
-            const isVar = dynamicVarsTokens.some(v => v.token === baseArchetypeToken);
-            
-            if (isVar) {
-                const displayVal = evaluationValue !== null ? evaluationValue : cleanToken;
-                return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
-            } else if (answerFieldsTokens.some(i => i.token === baseArchetypeToken)) {
-                return `
-                    <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px;">
-                        <input type="text" placeholder="Input slot..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 140px;">
-                    </div>
-                `;
+                const isVar = dynamicVarsTokens.some(v => v.token.toLowerCase() === baseArchetypeToken) || baseArchetypeToken === 'formula';
+                
+                if (isVar) {
+                    const displayVal = evaluationValue !== null ? evaluationValue : cleanToken;
+                    
+                    // 🎯 FIX: Removed data-expr attribute to protect LaTeX escape backslashes from browser string mutations
+                    if (baseArchetypeToken === 'formula' && !displayVal.startsWith('[Placeholder:')) {
+                        return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
+                    }
+                    
+                    // Standard plain text fallback for random numbers/factors badges
+                    return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
+                } else if (answerFieldsTokens.some(i => i.token.toLowerCase() === baseArchetypeToken)) {
+                    return `
+                        <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px;">
+                            <input type="text" placeholder="Input slot..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 140px;">
+                        </div>
+                    `;
+                }
+                return match;
+            } catch (cardError) {
+                // 🎯 SAFE BLOCK DEFENSE: If one card crashes, log it but let the match pass safely 
+                // so the rest of the canvas items can still compile without getting blocked!
+                console.warn(`Token substitution skipped for ${match}:`, cardError);
+                return `<span style="color: red; font-family: monospace;">[Token Error]</span>`;
             }
-            return match;
         });
 
         renderTarget.innerHTML = simulatedHtml;
 
+        // 🎯 Loop through your new live formulas and run KaTeX over them immediately
         if (typeof katex !== 'undefined') {
+            // Render static canvas items
             renderTarget.querySelectorAll('.preview-static-latex').forEach(span => {
                 try {
                     katex.render(span.textContent.trim(), span, { displayMode: false, throwOnError: false });
-                } catch (err) {
-                    console.error(err);
+                } catch (err) { console.error(err); }
+            });
+
+            // Render live dynamic formula token components using the parsed equation strings
+            renderTarget.querySelectorAll('.simulated-math-formula-render').forEach(span => {
+                try {
+                    // 🎯 FIX: Read the layout string natively out of textContent so macros compile perfectly
+                    const expression = span.textContent.trim();
+                    if (expression) {
+                        katex.render(expression, span, { 
+                            displayMode: false, 
+                            throwOnError: false 
+                        });
+                    }
+                } catch (err) { 
+                    console.error("Dynamic formula KaTeX compilation failed:", err); 
                 }
             });
         }
@@ -1529,4 +1561,105 @@ document.addEventListener('DOMContentLoaded', function() {
     document.addEventListener('click', function() {
         document.querySelectorAll('.linkable-tokens-dropdown').forEach(d => d.style.display = 'none');
     });
+
+
+    /**
+     * Dispatches input payloads to the validation matrix engine, caching responses
+     */
+    function fetchLiveFormulaLatex(cardId, token, inputsPayload) {
+        const cacheKey = `${cardId}_${normalizePayloadKey(inputsPayload)}`;
+        
+        console.log(`📡 [fetchLiveFormulaLatex] Triggered for Card: "${cardId}", Token: "${token}"`);
+        console.log(`🔑 [fetchLiveFormulaLatex] Generated CacheKey: "${cacheKey}"`);
+
+        // 🎯 THE FIX: Bypass the early return if the cache entry is just a plain-text fallback string
+        if (formulaLiveLatexCache[cacheKey]) {
+            const cachedVal = formulaLiveLatexCache[cacheKey];
+            const isRawTextFallback = /^(Integral|Derivative|Limit|Sum|Matrix)/i.test(cachedVal) || !cachedVal.includes('\\');
+            
+            console.log(`🗄️ [fetchLiveFormulaLatex] Existing cache entry found: "${cachedVal}". Is raw text fallback? ${isRawTextFallback}`);
+
+            // If it's a real LaTeX expression, skip network traffic. 
+            // If it's plain text, break out and force a server validation request!
+            if (!isRawTextFallback) {
+                console.log(`🛑 [fetchLiveFormulaLatex] Cache contains valid LaTeX. Aborting redundant network request.`);
+                return;
+            }
+            console.log(`🔄 [fetchLiveFormulaLatex] Cache contains plain text fallback. Forcing network refresh...`);
+        }
+
+        // Fetch CSRF security cookies natively out of the browser layer
+        const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+
+        const requestBody = { token: token, inputs: inputsPayload };
+        console.log(`📤 [fetchLiveFormulaLatex] Sending POST Request Payload:`, JSON.stringify(requestBody, null, 2));
+
+        fetch('/assessment/api/validate-component-preview/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': csrftoken
+            },
+            body: JSON.stringify({ token: token, inputs: inputsPayload.inputs })
+        })
+        .then(res => {
+            console.log(`📥 [fetchLiveFormulaLatex] Network HTTP Response Status: ${res.status} (${res.statusText})`);
+            // 🎯 FIX: Intercept the 400 Bad Request error payload rather than skipping straight to .catch()
+            if (!res.ok) {
+                return res.json().then(errData => {
+                    console.error(`❌ [fetchLiveFormulaLatex] Server returned non-200 error object:`, errData);
+                    throw new Error(errData.error || "Syntax Error");
+                });
+            }
+            return res.json();
+        })
+        .then(data => {
+            console.log(`📥 [fetchLiveFormulaLatex] Server Raw Response Data JSON:`, data);
+            
+            if (data.success && data.latex_output) {
+                console.log(`✅ [fetchLiveFormulaLatex] SUCCESS! Writing server LaTeX to cache: "${data.latex_output}"`);
+                // Pin the output string map directly to our tracking cache dictionary
+                formulaLiveLatexCache[cacheKey] = data.latex_output;
+
+                // 🎯 TEMP LOG 1: What did the network write to?
+                console.log("💾 [NETWORK WRITE KEY]:", cacheKey);
+            } else {
+                console.warn(`⚠️ [fetchLiveFormulaLatex] API responded with success=false or missing latex_output. falling back to warning formatting.`);
+                // Handle case where success is false but status code was 200
+                formulaLiveLatexCache[cacheKey] = `\\text{\\color{red}{${data.error || 'Syntax Error'}}}`;
+            }
+            // Force a layout re-calc pass now that we have the real data
+            console.log(`🔄 [fetchLiveFormulaLatex] Request cycle complete. Triggering layout refresh preview window...`);
+            updateWorkspaceSimulationPreview();
+        })
+        .catch(err => {
+            console.warn("Live LaTeX conversion syntax issue:", err);
+            // 🎯 FIX: Explicitly cache the error message so the component un-freezes immediately
+            const cleanMsg = err.message.replace("Error: ", "");
+            formulaLiveLatexCache[cacheKey] = `\\text{\\color{red}{[${cleanMsg}]}}`;
+            // Re-render layout matrices to instantly clear the preview back into an editable state
+            updateWorkspaceSimulationPreview();
+        });
+    }
+
+    /**
+     * Normalizes an inputs object to ensure consistent string serialization keys
+     */
+    function normalizePayloadKey(inputsPayload) {
+        if (!inputsPayload) return '';
+        
+        const copy = JSON.parse(JSON.stringify(inputsPayload));
+        
+        if (copy.inputs && copy.inputs.formula) {
+            const originalForm = copy.inputs.formula;
+            copy.inputs.formula = copy.inputs.formula
+                .replace(/\s+/g, '')     
+                .replace(/\*\*/g, '^');
+            console.log(`🧹 [Normalization Input Formula]: "${originalForm}" -> Normalized to: "${copy.inputs.formula}"`);
+        }
+        
+        const finalizedString = JSON.stringify(copy);
+        console.log("🧬 [Normalization Resulting Payload String]:", finalizedString);
+        return finalizedString;
+    }
 });

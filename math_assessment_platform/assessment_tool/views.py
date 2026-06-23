@@ -41,8 +41,8 @@ import re
 from django.template.loader import render_to_string
 import traceback
 from django.views.decorators.csrf import csrf_protect
-import sympy as sp
 
+import sympy as sp
 
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
@@ -2161,22 +2161,18 @@ def validate_component_preview(request):
         token = data.get('token')
         inputs = data.get('inputs', {})
 
-        # If it's a component type that doesn't need calculation, short-circuit gracefully
         if token != 'formula':
-            return JsonResponse({'success': True, 'evaluated_output': ''})
+            return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
 
-        # 2. Safely extract your input parameters
         formula_str = inputs.get('formula', '').strip()
         solve_method = inputs.get('solve method', 'leave as formula').strip()
         variables_raw = inputs.get('variables', '')
         solve_for_str = inputs.get('solve for _', '').strip()
 
-        # If the formula field is empty, clear out the value quietly
         if not formula_str:
-            return JsonResponse({'success': True, 'evaluated_output': ''})
+            return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
 
         # 3. Dynamic Symbol Parsing Context Mapper
-        # Handles strings like "x, y", "x y", or native list arrays ['x', 'y']
         if isinstance(variables_raw, list):
             var_list = [str(v).strip() for v in variables_raw if str(v).strip()]
         else:
@@ -2187,11 +2183,21 @@ def validate_component_preview(request):
         if 'pi' not in local_dict:
             local_dict['pi'] = sp.pi
 
-        # 4. Parse the expression tree without running automatic reduction rules yet
-        parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=False)
+        # 🎯 4. CONDITIONAL UN-EVALUATED FUNCTION INTERCEPTION
+        # Only inject un-evaluated classes if we want to leave the formula as-is
+        if solve_method == 'leave as formula':
+            local_dict['integrate'] = sp.Integral
+            local_dict['diff'] = sp.Derivative
+            local_dict['limit'] = sp.Limit
+            # You can add any other calculus keywords here (e.g., local_dict['summation'] = sp.Sum)
 
-        # 5. Math Operation Execution Engine Matrix
+        # 5. Parse the expression tree safely
+        parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=(solve_method != 'leave as formula'))
+
+        # 6. Math Operation Execution Engine Matrix
         result = parsed_expr
+        latex_result = None  # Track dynamic LaTeX formatting context
+        
         if solve_method == 'simplify':
             result = sp.simplify(parsed_expr)
             
@@ -2200,27 +2206,32 @@ def validate_component_preview(request):
             
         elif solve_method == 'solve for _' and solve_for_str:
             solve_var = sp.Symbol(solve_for_str)
-            # Returns calculated algebraic roots array listing
             solutions = sp.solve(parsed_expr, solve_var)
             result = f"{solve_for_str} = {solutions}"
             
+            latex_solutions = ", ".join([sp.latex(s) for s in solutions]) if isinstance(solutions, list) else sp.latex(solutions)
+            latex_result = f"{sp.latex(solve_var)} = \\left\\{{ {latex_solutions} \\right\\}}"
+            
         else:
-            # 'leave as formula' -> convert to optimized sympify output matching system tokens
-            result = sp.sympify(parsed_expr)
+            # For 'leave as formula', parsed_expr is already structural and un-evaluated
+            result = parsed_expr
 
-        # Cast calculation output type safely to plain text string
-        output_string = str(result)
+        # 7. FALLBACK LATEX MATRIX GENERATOR
+        if not latex_result:
+            latex_result = sp.latex(result)
 
         return JsonResponse({
             'success': True,
-            'evaluated_output': output_string,
+            'evaluated_output': str(result),
+            'latex_output': latex_result,
             'error': None
         })
 
     except Exception as e:
-        # Gracefully flag compilation/syntax typos (e.g., missing asterisk operators or open brackets)
         return JsonResponse({
             'success': False,
             'evaluated_output': '',
+            'latex_output': '',
             'error': f"Math Evaluation Warning: {str(e)}"
         }, status=400)
+

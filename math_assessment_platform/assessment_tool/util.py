@@ -561,13 +561,14 @@ class SymPyAssessmentEngine:
         Parses a formula string (Standard or LaTeX) and executes algebraic mutations.
         Methods: 'leave as formula', 'simplify', 'expand polynomial', 'solve for _'
         """
-
         if not expression_str:
             return ""
 
         # 1. Parse into a live SymPy object (Standard with LaTeX fallback)
         try:
-            expr = parse_expr(str(expression_str))
+            # 🎯 CRITICAL: evaluate=False prevents SymPy from instantly calculating 
+            # the answer, preserving operations like integrals/derivatives as symbols.
+            expr = parse_expr(str(expression_str), evaluate=False)
         except Exception:
             try:
                 expr = parse_latex(str(expression_str))
@@ -579,26 +580,20 @@ class SymPyAssessmentEngine:
             method = method.strip().lower() if method else "leave as formula"
 
             if method == "simplify":
-                return str(sp.simplify(expr))
+                # 🚧 Placeholder for future simplification logic
+                return "[Placeholder: Simplify Method Display]"
 
             elif method == "expand polynomial":
-                return str(sp.expand(expr))
+                # 🚧 Placeholder for future polynomial expansion logic
+                return "[Placeholder: Expand Polynomial Method Display]"
 
             elif method == "solve for _":
-                if not solve_for:
-                    return "[Error: No target variable specified to solve for]"
-                
-                # Convert the string target into a SymPy symbol asset
-                target_symbol = sp.Symbol(solve_for.strip())
-                solutions = sp.solve(expr, target_symbol)
-                
-                # Format solution array cleanly for the live teacher preview
-                if not solutions:
-                    return f"No solution found for {solve_for}"
-                return f"{solve_for} = " + ", ".join(str(sol) for sol in solutions)
+                # 🚧 Placeholder for future algebraic variable isolation logic
+                return f"[Placeholder: Solve for {solve_for or '_'} Method Display]"
 
-            # Default fallback: 'leave as formula'
-            return str(expr)
+            # 🎯 Default fallback: 'leave as formula'
+            # Convert the unevaluated SymPy object directly into a clean LaTeX math string
+            return sp.latex(expr)
 
         except Exception as eval_err:
             return f"[Evaluation Error: {str(eval_err)}]"
