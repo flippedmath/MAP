@@ -2247,20 +2247,15 @@ def validate_component_preview(request):
             
             # 🎯 FIX: Clean up nested superscript LaTeX formatting (e.g., 2^{2} -> 2**2)
             if '^' in cleaned:
-                # Remove LaTeX braces around exponents first
                 cleaned = cleaned.replace('^{', '**').replace('}', '')
-                # Catch any naked carets
                 cleaned = cleaned.replace('^', '**')
                 
-            # Strip out loose bracket layouts from upstream strings
             if '{' in cleaned or '}' in cleaned:
                 cleaned = cleaned.replace('{', '').replace('}', '')
 
-            # 1. Isolate expressions if they come from linked formula tokens (e.g. 'x = [2, -5]')
             if '=' in cleaned:
                 parts = cleaned.split('=', 1)
                 right_side = parts[1].strip()
-                
                 if right_side.startswith('[') and right_side.endswith(']'):
                     elements = right_side[1:-1].split(',')
                     if elements and elements[0].strip():
@@ -2268,14 +2263,12 @@ def validate_component_preview(request):
                 else:
                     cleaned = right_side
 
-            # Strip out remaining KaTeX visual layouts that break SymPy
             if '\\' in cleaned:
                 cleaned = cleaned.replace('\\limits', '') \
                                  .replace('\\,', ' ') \
                                  .replace('\\left', '') \
                                  .replace('\\right', '') \
                                  .strip()
-            
             return cleaned
 
         inputs = {k: clean_nested_formula_value(v) for k, v in raw_inputs.items()}
@@ -2285,18 +2278,14 @@ def validate_component_preview(request):
         variables_raw = inputs.get('variables', '')
         solve_for_str = inputs.get('variable substitution', '').strip()
 
-        # 🎯 FIX: Evaluate the boolean checks outside the f-string expression context
         has_double_backslash = '\\\\' in formula_str
         has_single_backslash = '\\' in formula_str
         print(f"🧪 AFTER CLEANUP HOOK -> formula_str content: {formula_str}")
         print(f"🧪 AFTER CLEANUP HOOK -> formula_str repr: {repr(formula_str)}")
-        print(f"Contains double backslash: {has_double_backslash}")
-        print(f"Contains single backslash: {has_single_backslash}")
 
         if not formula_str:
             return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
 
-        # 3. Dynamic Symbol Parsing Context Mapper
         if isinstance(variables_raw, list):
             var_list = [str(v).strip() for v in variables_raw if str(v).strip()]
         else:
@@ -2311,23 +2300,16 @@ def validate_component_preview(request):
             local_dict['diff'] = sp.Derivative
             local_dict['limit'] = sp.Limit
 
-        # 🎯 4. SEAMLESS LATEX VS PLAIN-TEXT PARSING INTERACTION INTERCEPTOR
-        # If the string contains a backslash, parse it as a native LaTeX syntax string
         if "\\" in formula_str:
             try:
-                # parse_latex transforms strings like "\frac{x}{2}" into actual SymPy expression trees
                 parsed_expr = parse_latex(formula_str)
-                
-                # If evaluating immediately isn't wanted, hold evaluation down
                 if solve_method != 'leave as formula':
-                    parsed_expr = parsed_expr.doit() # Adjust structural evaluation if needed
+                    parsed_expr = parsed_expr.doit()
             except Exception as latex_err:
                 raise ValueError(f"LaTeX Parsing Error: {str(latex_err)}")
         else:
-            # Drop back down to standard plain text algebraic parser fallback rule block
             parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=(solve_method != 'leave as formula'))
 
-        # 6. Math Operation Execution Engine Matrix
         result = parsed_expr
         latex_result = None  
         
@@ -2338,25 +2320,58 @@ def validate_component_preview(request):
             result = sp.expand(parsed_expr)
             
         elif solve_method == 'variable substitution':
-            # 🎯 1. Extract the substitutions dictionary container from raw_inputs
             subs_dict = raw_inputs.get('substitutions', {})
             
-            # 🎯 2. Build the mapping of symbols to their replacement expressions
+            print("\n" + "🔥" * 25)
+            print("🔬 BACKEND SUBSTITUTION ENGINE DEEP DIVE")
+            print(f"  Target Formula Base Expression Context (parsed_expr): {repr(parsed_expr)}")
+            print(f"  Target Formula Local Variable Dictionary (local_dict): {local_dict}")
+            print(f"  Incoming subs_dict Content: {subs_dict}")
+            
             subs_map = {}
             for var_name, var_value in subs_dict.items():
-                if var_value.strip():  # Skip empty inputs
+                if isinstance(var_value, str) and var_value.strip():
+                    print(f"\n  👉 Processing Substitution for Variable: [{var_name}]")
+                    print(f"     - Raw string received: '{var_value}' (repr: {repr(var_value)})")
+                    
+                    # Clean up LaTeX remnants inside the substitution values before passing to SymPy
+                    cleaned_val = clean_nested_formula_value(var_value)
+                    print(f"     - String after clean_nested_formula_value(): '{cleaned_val}' (repr: {repr(cleaned_val)})")
+                    
                     try:
-                        # Parse the substitution value with evaluate=False so things like "1/2" stay un-evaluated fractions
-                        subs_map[sp.Symbol(var_name)] = sp.parse_expr(var_value, local_dict=local_dict, evaluate=False)
-                    except Exception:
-                        subs_map[sp.Symbol(var_name)] = var_value
+                        if "\\" in cleaned_val or "^{" in var_value:
+                            print("     - Route: LaTeX Parser Selected")
+                            parsed_sub_expr = parse_latex(var_value)
+                        else:
+                            print("     - Route: Standard String Expression Parser Selected")
+                            parsed_sub_expr = sp.parse_expr(cleaned_val, local_dict=local_dict, evaluate=False)
+                        
+                        subs_map[sp.Symbol(var_name)] = parsed_sub_expr
+                        print(f"     ✅ Success! Mapped SymPy object: {repr(parsed_sub_expr)} (type: {type(parsed_sub_expr)})")
+                    except Exception as parse_err:
+                        print(f"     ⚠️ Parser Failed! Exception: {parse_err}")
+                        subs_map[sp.Symbol(var_name)] = cleaned_val
+                        print(f"     - Fallback: Mapped raw string literal instead: {repr(cleaned_val)}")
+                else:
+                    subs_map[sp.Symbol(var_name)] = var_value
 
-            # 🎯 3. Substitute inside the NO-EVALUATE context block
+            print(f"\n  ⚙️ Compiled Substitution Map (subs_map): {subs_map}")
+            
             if subs_map:
-                with sp.evaluate(False):
-                    result = parsed_expr.subs(subs_map)
+                try:
+                    with sp.evaluate(False):
+                        result = parsed_expr.subs(subs_map)
+                    print(f"  🎉 Post-Substitution Expression Object (result): {repr(result)}")
+                    print(f"  🎉 Post-Substitution Plain Text String: {str(result)}")
+                    print(f"  🎉 Post-Substitution LaTeX Generated: {sp.latex(result)}")
+                except Exception as subs_err:
+                    print(f"  ❌ Critical Error during .subs() execution: {subs_err}")
+                    result = parsed_expr
             else:
+                print("  ⚠️ No valid entries found in subs_map. Skipping substitution branch.")
                 result = parsed_expr
+                
+            print("🔥" * 25 + "\n")
             
         else:
             result = parsed_expr
@@ -2372,6 +2387,7 @@ def validate_component_preview(request):
         })
 
     except Exception as e:
+        print(f"❌ COMPILER ENGINE CRASHED: {str(e)}")
         return JsonResponse({
             'success': False,
             'evaluated_output': '',

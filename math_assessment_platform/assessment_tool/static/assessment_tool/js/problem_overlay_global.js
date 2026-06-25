@@ -605,14 +605,12 @@ document.addEventListener('DOMContentLoaded', function() {
             // 🎯 STEP 3: Scrape substitution row badges safely with the local context path
             // 🎯 1. Dynamically scan for active substitution row items to align cache payload perfectly
             const subsPayload = {};
+            // Locate where you scrap card substitution row items in problem_overlay_global.js:
             card.querySelectorAll('.substitution-row-item').forEach(row => {
                 const varName = row.getAttribute('data-var-name');
-                
-                // 🎯 REVISED: Target actual active badges explicitly, excluding dropdown picker menus
-                const tokenBadge = row.querySelector('[data-indexed-token], .linked-component-token, .workspace-token-badge, button[class*="token"], span[class*="token"]');
+                const tokenBadge = row.querySelector('[data-indexed-token], .linked-component-token, .workspace-token-badge');
                 
                 if (varName) {
-                    // Check if we accidentally matched a dropdown menu container instead of an active pill badge
                     if (tokenBadge && !tokenBadge.classList.contains('linkable-tokens-dropdown') && !tokenBadge.closest('.linkable-tokens-dropdown')) {
                         
                         let targetTokenId = tokenBadge.getAttribute('data-indexed-token');
@@ -621,9 +619,22 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                         
                         console.log(`🎯 [Simulation Trace] Found verified embedded token link [${targetTokenId}] for variable [${varName}]`);
-                        subsPayload[varName] = getLiveComponentValue(card, targetTokenId, '0', localVisited);
+                        
+                        let targetCardEl = null;
+                        document.querySelectorAll('.workspace-block-card, .workspace-component-card').forEach(c => {
+                            const delBtn = c.querySelector('.btn-delete-workspace-component');
+                            if (delBtn && delBtn.getAttribute('data-indexed-token') === targetTokenId) {
+                                targetCardEl = c;
+                            }
+                        });
+
+                        const searchContext = targetCardEl || card;
+
+                        // 🎯 THE CRITICAL FIX: Query for the 'formula' field inside the target card, 
+                        // NOT the targetTokenId string itself!
+                        subsPayload[varName] = getLiveComponentValue(searchContext, 'formula', '0', localVisited);
+
                     } else {
-                        // Fall back to reading the standard text or choice option element
                         const inputEl = row.querySelector('input, select');
                         subsPayload[varName] = inputEl ? inputEl.value.trim() : "";
                     }
@@ -879,10 +890,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const formulaInputEl = card.querySelector('.val-input-formula');
             const wrapper = formulaInputEl?.closest('.linked-input-wrapper');
+            const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
             
             card.querySelectorAll('.formula-inline-error-msg').forEach(el => el.remove());
 
-            // 🎯 STEP 1: Extract variables instantly so they exist BEFORE payload generation
             if (formulaInputEl) {
                 const rawFormula = formulaInputEl.value;
                 const variableMatches = rawFormula.match(/\b[a-zA-Z][0-9]*\b/g) || [];
@@ -893,22 +904,53 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
-            // Extract substitution list parameters directly to bundle down to API endpoints
+            // 🎯 FIX: Scrape substitutions while checking for both raw values and linked token elements
             const substitutionsPayload = {};
             substitutionsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
                 const vName = row.getAttribute('data-var-name');
-                const vVal = row.querySelector('.val-substitution-input')?.value || "";
-                substitutionsPayload[vName] = vVal;
+                if (!vName) return;
+
+                // Check if there is an active green capsule linked token pill on this line item
+                const tokenPill = row.querySelector('.linked-token-pill, [data-indexed-token]');
+
+                if (tokenPill) {
+                    let targetTokenId = tokenPill.getAttribute('data-indexed-token');
+                    if (!targetTokenId) {
+                        targetTokenId = tokenPill.innerText.trim().replace(/[<>]/g, '');
+                    }
+
+                    // Find the matching sibling card in the live workspace view
+                    let targetCardEl = null;
+                    document.querySelectorAll('.workspace-block-card, .workspace-component-card').forEach(c => {
+                        const delBtn = c.querySelector('.btn-delete-workspace-component');
+                        if (delBtn && delBtn.getAttribute('data-indexed-token') === targetTokenId) {
+                            targetCardEl = c;
+                        }
+                    });
+
+                    if (targetCardEl) {
+                        // Read its main input or evaluated simulation cache state securely
+                        const internalFormulaInput = targetCardEl.querySelector('.val-input-formula');
+                        substitutionsPayload[vName] = internalFormulaInput ? internalFormulaInput.value.trim() : (targetCardEl.getAttribute('data-simulated-value') || "0");
+                    } else {
+                        substitutionsPayload[vName] = "0";
+                    }
+                } else {
+                    // Standard fallback path if the user is typing directly inside a normal numeric input node element
+                    const inputEl = row.querySelector('.val-substitution-input, input, select');
+                    substitutionsPayload[vName] = inputEl ? inputEl.value.trim() : "";
+                }
             });
 
-            // 🎯 STEP 2: Now payloadInputs gets the freshly updated variables string!
             const payloadInputs = {
                 "formula": formulaInputEl?.value.trim() || "",
                 "solve method": solveMethodSelect?.value || "leave as formula",
-                "variables": variablesField?.value.trim() || "", // Now contains "x, y, z, f"
+                "variables": variablesField?.value.trim() || "", 
                 "variable substitution": solveForSelect?.value || "",
                 "substitutions": substitutionsPayload 
             };
+
+            console.log(`📡 [Card Event Dispatch Triggered] for [${cardId}]`, payloadInputs);
 
             if (!payloadInputs.formula) {
                 card.style.border = "1px solid #e2e8f0";
@@ -928,7 +970,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     },
                     body: JSON.stringify({
                         token: 'formula',
-                        sequence_token: card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token'),
+                        sequence_token: cardId,
                         inputs: payloadInputs
                     })
                 });
@@ -939,14 +981,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     card.setAttribute('data-simulated-value', data.evaluated_output);
                     card.style.border = "1px solid #e2e8f0"; 
 
-                    // 🎯 FIX: Build the matching cache key structure using the exact same footprint
-                    const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
-                    
-                    // Direct reassignment: Ensure it mirrors the exact structure from the simulation loop
-                    // If payloadInputs already contains the "inputs" key, pass it directly.
-                    // Otherwise, ensure it matches your global format structure.
-                    const inputsPayloadForCache = payloadInputs.inputs ? payloadInputs : { inputs: payloadInputs };
-                    
+                    const inputsPayloadForCache = { inputs: payloadInputs };
                     const normalizedKeyString = typeof normalizePayloadKey === 'function' 
                         ? normalizePayloadKey(inputsPayloadForCache) 
                         : JSON.stringify(inputsPayloadForCache);
@@ -955,21 +990,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     if (data.latex_output) {
                         formulaLiveLatexCache[cacheKey] = data.latex_output;
-                        console.log(`📥 Successfully cached server response under key: ${cacheKey}`);
                     }
 
                     syncSolveForDropdown();
                 } else {
                     card.style.border = "1px solid #ef4444";
-                    
-                    if (wrapper) {
-                        wrapper.style.flexWrap = 'wrap';
-                        const errorSpan = document.createElement('span');
-                        errorSpan.className = 'formula-inline-error-msg';
-                        errorSpan.style.cssText = 'color: #ef4444; font-size: 0.72rem; flex-basis: 100%; margin-top: 6px; font-weight: 500; display: block;';
-                        errorSpan.innerText = data.error || "Math Evaluation Warning: syntax check failed.";
-                        wrapper.appendChild(errorSpan);
-                    }
                 }
 
                 updateWorkspaceSimulationPreview();
@@ -983,6 +1008,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // -------------------------------------------------------------
     // LIVE PREVIEW SIMULATION RENDERING ENGINE (DYNAMIC RE-CALCULATION)
     // -------------------------------------------------------------
+    if (window.activeSimulationFetches === undefined) {
+        window.activeSimulationFetches = new Set();
+    }
+
     function updateWorkspaceSimulationPreview() {
         const renderTarget = document.getElementById('simulation-render-target');
         if (!renderTarget) return;
@@ -993,7 +1022,6 @@ document.addEventListener('DOMContentLoaded', function() {
             renderTarget.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Interactive layout testing view builds dynamically here...</p>';
             return;
         }
-
 
         // -------------------------------------------------------------
         // HTML LAYOUT PARSING AND FORMATTING REPLACEMENTS
@@ -1022,7 +1050,7 @@ document.addEventListener('DOMContentLoaded', function() {
             try {
                 const cleanToken = (tokenText || match).replace(/[<>&]/g, '').trim(); 
                 let evaluationValue = null;
-                let baseArchetypeToken = cleanToken.replace(/\d+$/, '').toLowerCase(); // 🎯 Force lowercase natively
+                let baseArchetypeToken = cleanToken.replace(/\d+$/, '').toLowerCase(); 
                 
                 // Scan through available live DOM items to match our tracking token target
                 const allCards = document.querySelectorAll('.workspace-block-card');
@@ -1030,12 +1058,160 @@ document.addEventListener('DOMContentLoaded', function() {
                     const deleteBtn = card.querySelector('.btn-delete-workspace-component');
                     if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanToken) {
                         
-                        // 🎯 FIX: Force each token look-up pass to begin with a completely clean, empty tracking array
+                        // 1. Run the official evaluation pipeline first to resolve linked dependencies
                         evaluationValue = evaluateSingleCardOutput(card, cleanToken, []);
                         
-                        // 🎯 Protect against capitalization variant mappings ("Formula" vs "formula")
                         if (card.getAttribute('data-token')) {
                             baseArchetypeToken = card.getAttribute('data-token').toLowerCase();
+                        }
+
+                        if (baseArchetypeToken === 'formula') {
+                            
+                            // 🎯 FIX: If the official evaluation pipeline already successfully resolved a valid math formula
+                            // expression, use it directly instead of letting a broken manual DOM scrape overwrite it!
+                            if (evaluationValue && !evaluationValue.startsWith('[Placeholder:') && !evaluationValue.includes('formula')) {
+                                console.log(`✅ [Simulation Optimization] Using pre-evaluated expression for ${cleanToken}: ${evaluationValue}`);
+                                // Keep evaluationValue as-is and skip manual cache-checking block
+                            } else {
+                                // 2. Build the structural payload inputs object
+                                const substitutionsPayload = {};
+                                const subsContainer = card.querySelector('.substitutions-entries-list, .substitutions-container');
+                                if (subsContainer) {
+                                    subsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
+                                        const vName = row.getAttribute('data-var-name');
+                                        if (!vName) return;
+                                        
+                                        const selectEl = row.querySelector('select.linked-token-dropdown, .token-selector');
+                                        const tokenBadge = row.querySelector('.linked-token-pill, [data-indexed-token], .token-badge');
+                                        
+                                        let boundToken = null;
+                                        if (selectEl && selectEl.value) {
+                                            boundToken = selectEl.value.trim();
+                                        } else if (tokenBadge) {
+                                            const rawText = tokenBadge.getAttribute('data-indexed-token') || tokenBadge.textContent || "";
+                                            const tokenMatch = rawText.match(/(formula\d+|variable\d+|var\d+)/i);
+                                            if (tokenMatch) {
+                                                boundToken = tokenMatch[1].trim();
+                                            }
+                                        }
+
+                                        if (boundToken) {
+                                            const siblingCard = Array.from(document.querySelectorAll('.workspace-block-card')).find(c => {
+                                                const delBtn = c.querySelector('.btn-delete-workspace-component');
+                                                return delBtn && delBtn.getAttribute('data-indexed-token') === boundToken;
+                                            });
+                                            
+                                            if (siblingCard) {
+                                                // 🎯 FIX: Pull the raw math expression input string rather than its compiled display LaTeX formatting
+                                                const rawFormulaInput = siblingCard.querySelector('.val-input-formula')?.value.trim();
+                                                
+                                                if (rawFormulaInput) {
+                                                    // If the linked card is also performing variable substitutions, fetch its active parameters
+                                                    substitutionsPayload[vName] = `(${rawFormulaInput})`;
+                                                } else {
+                                                    // Fallback safely to the evaluated baseline attribute value
+                                                    const cleanBackup = (siblingCard.getAttribute('data-simulated-value') || "0").replace(/[\\]/g, '').trim();
+                                                    substitutionsPayload[vName] = cleanBackup;
+                                                }
+                                            } else {
+                                                substitutionsPayload[vName] = "0";
+                                            }
+                                        } else {
+                                            const inputEl = row.querySelector('input');
+                                            if (inputEl && inputEl.value.trim() !== "") {
+                                                substitutionsPayload[vName] = inputEl.value.trim();
+                                            } else {
+                                                substitutionsPayload[vName] = vName; 
+                                            }
+                                        }
+                                    });
+                                }
+
+                                let rawFormulaString = card.querySelector('.val-input-formula')?.value.trim() || "";
+                                
+                                if (rawFormulaString.includes('<') || rawFormulaString.includes('&lt;')) {
+                                    rawFormulaString = rawFormulaString.replace(/&lt;([^&>]+)&gt;|<([^>]+)>/g, function(m, tText) {
+                                        const targetToken = (tText || m).replace(/[<>&]/g, '').trim();
+                                        const matchingCard = Array.from(document.querySelectorAll('.workspace-block-card')).find(c => c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') === targetToken);
+                                        if (matchingCard) {
+                                            return evaluateSingleCardOutput(matchingCard, targetToken, [cleanToken]) || "0";
+                                        }
+                                        return "0";
+                                    });
+                                }
+
+                                const payloadInputs = {
+                                    "formula": rawFormulaString,
+                                    "solve method": card.querySelector('.val-input-solve-method')?.value || "leave as formula",
+                                    "variables": card.querySelector('.val-input-variables, input[name="variables"]')?.value.trim() || "",
+                                    "variable substitution": card.querySelector('.val-input-solve-for')?.value || "",
+                                    "substitutions": substitutionsPayload
+                                };
+
+                                // Diagnostic Matrix
+                                console.log(`🔍 [Lazy-Fetch Guard Check] Evaluating ${cleanToken}:`);
+                                console.log(`   -> formula value: "${payloadInputs.formula}"`);
+                                console.log(`   -> formula has brackets:`, (payloadInputs.formula.includes('<') || payloadInputs.formula.includes('&lt;')));
+
+                                const hasUnresolvedSubs = Object.values(payloadInputs.substitutions).some(val => 
+                                    typeof val === 'string' && (val.includes('<') || val.includes('&lt;'))
+                                );
+                                console.log(`   -> substitution payload content:`, JSON.stringify(payloadInputs.substitutions));
+                                console.log(`   -> hasUnresolvedSubs evaluated to:`, hasUnresolvedSubs);
+
+                                if (!payloadInputs.formula || payloadInputs.formula.includes('<') || payloadInputs.formula.includes('&lt;')) {
+                                    console.log(`❌ [Lazy-Fetch Blocked] Dropping due to syntax characters in formula string.`);
+                                    return; 
+                                }
+
+                                if (hasUnresolvedSubs) {
+                                    console.log(`❌ [Lazy-Fetch Blocked] Dropping due to bracket tokens inside substitution values.`);
+                                    return;
+                                }
+
+                                const cachePayload = { inputs: payloadInputs };
+                                const normalizedKeyString = JSON.stringify(cachePayload);
+                                const cacheKey = `${cleanToken}_${normalizedKeyString}`;
+
+                                console.log(`🛰️ [Lazy-Fetch Flight Check] Checking cache key: "${cacheKey}"`);
+                                console.log(`   -> Already cached?`, !!formulaLiveLatexCache[cacheKey]);
+                                console.log(`   -> In-flight active request status?`, window.activeSimulationFetches.has(cacheKey));
+
+                                if (!formulaLiveLatexCache[cacheKey] && !window.activeSimulationFetches.has(cacheKey)) {
+                                    console.log(`🛰️ [Simulation Lazy-Fetch] Cache miss confirmed for ${cleanToken}. Pulling from server...`);
+                                    window.activeSimulationFetches.add(cacheKey);
+
+                                    fetch('/assessment/api/validate-component-preview/', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/json',
+                                            'X-CSRFToken': getCsrfToken()
+                                        },
+                                        body: JSON.stringify({
+                                            token: 'formula',
+                                            sequence_token: cleanToken,
+                                            inputs: payloadInputs
+                                        })
+                                    })
+                                    .then(res => res.json())
+                                    .then(data => {
+                                        window.activeSimulationFetches.delete(cacheKey);
+                                        if (data.success && data.latex_output) {
+                                            formulaLiveLatexCache[cacheKey] = data.latex_output;
+                                            card.setAttribute('data-simulated-value', data.evaluated_output);
+                                            
+                                            console.log(`🎉 [Lazy-Fetch Success] Cached response string for ${cleanToken}`);
+                                            updateWorkspaceSimulationPreview();
+                                        }
+                                    })
+                                    .catch(err => {
+                                        window.activeSimulationFetches.delete(cacheKey);
+                                        console.error("Simulation engine lazy-fetch background check failed:", err);
+                                    });
+                                } else if (formulaLiveLatexCache[cacheKey]) {
+                                    evaluationValue = formulaLiveLatexCache[cacheKey];
+                                }
+                            }
                         }
                     }
                 });
@@ -1045,12 +1221,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (isVar) {
                     const displayVal = evaluationValue !== null ? evaluationValue : cleanToken;
                     
-                    // 🎯 FIX: Removed data-expr attribute to protect LaTeX escape backslashes from browser string mutations
                     if (baseArchetypeToken === 'formula' && !displayVal.startsWith('[Placeholder:')) {
                         return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
                     }
                     
-                    // Standard plain text fallback for random numbers/factors badges
                     return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
                 } else if (answerFieldsTokens.some(i => i.token.toLowerCase() === baseArchetypeToken)) {
                     return `
@@ -1061,8 +1235,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 return match;
             } catch (cardError) {
-                // 🎯 SAFE BLOCK DEFENSE: If one card crashes, log it but let the match pass safely 
-                // so the rest of the canvas items can still compile without getting blocked!
                 console.warn(`Token substitution skipped for ${match}:`, cardError);
                 return `<span style="color: red; font-family: monospace;">[Token Error]</span>`;
             }
@@ -1070,19 +1242,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         renderTarget.innerHTML = simulatedHtml;
 
-        // 🎯 Loop through your new live formulas and run KaTeX over them immediately
         if (typeof katex !== 'undefined') {
-            // Render static canvas items
             renderTarget.querySelectorAll('.preview-static-latex').forEach(span => {
                 try {
                     katex.render(span.textContent.trim(), span, { displayMode: false, throwOnError: false });
                 } catch (err) { console.error(err); }
             });
 
-            // Render live dynamic formula token components using the parsed equation strings
             renderTarget.querySelectorAll('.simulated-math-formula-render').forEach(span => {
                 try {
-                    // 🎯 FIX: Read the layout string natively out of textContent so macros compile perfectly
                     const expression = span.textContent.trim();
                     if (expression) {
                         katex.render(expression, span, { 
@@ -1637,16 +1805,18 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!optionBtn) return;
 
         e.stopPropagation();
-        const chosenTokenString = optionBtn.getAttribute('data-target-token');
+        const chosenTokenString = optionBtn.getAttribute('data-target-token'); // e.g., "<formula3>"
+        
+        // 🎯 FIX: Extract the raw unbracketed ID string (e.g., "formula3") for matching
+        const rawTokenId = chosenTokenString.replace(/[<>]/g, '');
+
         const wrapper = optionBtn.closest('.linked-input-wrapper');
         const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
         
-        // 🎯 FIX: Safely check if a label exists before modifying its display style
         const labelEl = wrapper.querySelector('label');
         if (labelEl) {
             labelEl.style.display = 'none';
         } else {
-            // If there's no label wrapper, hide the text input element instead
             const inputEl = wrapper.querySelector('.val-substitution-input');
             if (inputEl) inputEl.style.display = 'none';
         }
@@ -1657,11 +1827,15 @@ document.addEventListener('DOMContentLoaded', function() {
         // Inject the visual element capsule tracking pill design
         const pill = document.createElement('span');
         pill.className = 'linked-token-pill';
+        
+        // 🎯 FIX: Explicitly bind the clean index key so your scraping compiler loops can read it
+        pill.setAttribute('data-indexed-token', rawTokenId);
+        
         pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
         pill.innerText = chosenTokenString;
         wrapper.insertBefore(pill, linkBtn);
 
-        // 🎯 Transform link icon to an active red delete close asset marker
+        // Transform link icon to an active red delete close asset marker
         linkBtn.innerHTML = '<i class="fas fa-times"></i>';
         linkBtn.className = 'btn-input-link-trigger is-linked';
         linkBtn.style.color = '#ef4444';
@@ -1669,6 +1843,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Close options dropdown picker instance frame
         wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+        
+        // Fire the sync loop preview!
         updateWorkspaceSimulationPreview();
     });
 
