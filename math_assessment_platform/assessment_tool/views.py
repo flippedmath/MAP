@@ -1883,9 +1883,20 @@ def save_problem_workspace(request, problem_id):
 
     # 🎯 STEP A: VALIDATION LOOP (Before touch transactions)
     validated_engines = []
+    # 🎯 FIX: Track tokens that successfully pass validation in this request session
+    locally_validated_tokens = set()
+
+    print("\n" + "="*60)
+    print(f"📥 BEGIN WORKSPACE SAVE VALIDATION FOR PROBLEM ID: {problem_id}")
+    print(f"Total input cards received: {len(user_inputs)}")
+    print("="*60)
 
     for index, entity_data in enumerate(user_inputs):
         token_id = entity_data.get("token") 
+        sequence_token = entity_data.get("sequence_token", token_id) # The unique identifier (e.g., 'formula2')
+        
+        print(f"\n🔍 Processing card [{index}] | Sequence Token: <{sequence_token}> | Type: {token_id}")
+
         if not token_id:
             return JsonResponse({"success": False, "error": f"Missing 'token' identity string at index [{index}]."}, status=400)
 
@@ -1905,68 +1916,106 @@ def save_problem_workspace(request, problem_id):
         substitutions_map = {}
         cleaned_provided_fields = {}
 
-        # Get the selected solve method to understand requirements context
         solve_method = provided_fields.get("solve method", "")
 
         for key, value in provided_fields.items():
-            if key.startswith('sub_'):
+            if key == "substitutions" and isinstance(value, dict):
+                for sub_k, sub_v in value.items():
+                    substitutions_map[f"sub_{sub_k}"] = sub_v
+            elif key.startswith('sub_'):
                 substitutions_map[key] = value
             else:
                 cleaned_provided_fields[key] = value
 
-        # 🎯 FIX: Satisfy strict underlying schema validation matrices
+        # 🎯 STEP A: VALIDATION LOOP
         if token_id == 'formula':
+            # Safe fallbacks if fields are missing or empty strings
+            if not cleaned_provided_fields.get('formula'):
+                print(f"⚠️  [{sequence_token}] Formula field is empty. Injecting fallback '0'.")
+                cleaned_provided_fields['formula'] = "0"
+
             if solve_method == 'variable substitution':
-                # Frontend relies on 'sub_var' parameters being present for evaluation mode
-                has_substitutions = any(key.startswith('sub_') for key in substitutions_map.keys())
+                has_substitutions = len(substitutions_map) > 0 or "substitutions" in provided_fields
                 
+                # If there are no explicit sub_ rows, check if it's linking to an upstream variable/formula card
                 if not has_substitutions:
-                    return JsonResponse({
-                        "success": False,
-                        "error": "Validation failed for 'Formula' component: Please add at least one variable substitution row to evaluate."
-                    }, status=422)
+                    # 🎯 FIX: Changed JS '.contains()' to Python 'in' operator to prevent an AttributeError
+                    is_linked_dependency = any(
+                        f"<{sequence_token}>" in str(entity.get("inputs", {})) or 
+                        sequence_token in str(entity.get("inputs", {}))
+                        for entity in user_inputs if entity.get("sequence_token") != sequence_token
+                    )
+                    
+                    print(f"📋 [{sequence_token}] No substitutions found. Dependency scan linkage status: {is_linked_dependency}")
+                    
+                    if not is_linked_dependency:
+                        return JsonResponse({
+                            "success": False,
+                            "error": f"Validation failed for '{sequence_token}': Please add at least one variable substitution row or link to evaluate."
+                        }, status=422)
                 
-                # 🎯 Snag the first variable token string from the component fields list 
-                # to satisfy the underlying schema form validator's strict requirement.
                 vars_list = [v.strip() for v in cleaned_provided_fields.get('variables', '').split(',') if v.strip()]
-                cleaned_provided_fields['variable substitution'] = vars_list[0] if vars_list else "x"
+                if vars_list and not cleaned_provided_fields.get('variable substitution'):
+                    cleaned_provided_fields['variable substitution'] = vars_list[0]
+                elif not cleaned_provided_fields.get('variable substitution'):
+                    cleaned_provided_fields['variable substitution'] = "x"
                 
             elif solve_method == 'simplify':
                 target_var = cleaned_provided_fields.get('variable substitution', '').strip()
                 if not target_var:
-                    return JsonResponse({
-                        "success": False,
-                        "error": "Validation failed for 'Formula' component: Please select a target variable to simplify."
-                    }, status=422)
+                    cleaned_provided_fields['variable substitution'] = "x" # Safe default fallback override
             else:
-                # Fallback safely to empty string for standard options ('leave as formula', 'expand polynomial')
                 cleaned_provided_fields['variable substitution'] = ""
 
-        # Pass the sanitized, structural dictionary fields to your blueprint form validator
+        # 🧪 DIAGNOSTIC PRINT: Inspect fields sent to validator constructor
+        print(f"⚙️  Sending fields to get_entity_validator for <{sequence_token}>:")
+        print(f"    - Cleaned Fields: {cleaned_provided_fields}")
+        print(f"    - Substitutions Map: {substitutions_map}")
+
+        # 🎯 FIX: Dynamically inject a temporary validation pass flag into upstream payload 
+        # dictionary nodes so that downstream validators know they passed this request session.
+        runtime_payload = []
+        for entity in user_inputs:
+            entity_copy = dict(entity)
+            ent_seq = entity_copy.get("sequence_token")
+            if ent_seq in locally_validated_tokens:
+                # If this sibling token passed verification earlier in the loop, mark it valid in memory
+                entity_copy["is_validated_dependency"] = True
+                entity_copy["outstanding_errors"] = False
+            runtime_payload.append(entity_copy)
+
         validator = get_entity_validator(
             token_id, 
             cleaned_provided_fields, 
             blueprint, 
-            all_entities_payload=user_inputs
+            all_entities_payload=runtime_payload  # 🎯 Pass the runtime annotated payload track
         )
 
         if not validator.is_valid():
             error_details = ", ".join([f"[{k}]: {v}" for k, v in validator.errors.items()])
             friendly_name = blueprint.get("name", token_id)
+            print(f"❌ BACKEND VALIDATION FAILURE FOR {friendly_name} (<{sequence_token}>): {error_details}")
             return JsonResponse({
                 "success": False,
                 "error": f"Validation failed for '{friendly_name}' component: {error_details}"
             }, status=422)
             
-        # 🎯 SAVE IT HERE: Attach substitutions mapping directly to this payload context wrapper tracking object
+        print(f"✅ Card <{sequence_token}> successfully verified.")
+
+        # 🎯 FIX: Register this sequence token identifier as verified
+        if sequence_token:
+            locally_validated_tokens.add(sequence_token)
+
         validated_engines.append({
             "token_id": token_id,
-            "sequence_token": entity_data.get("sequence_token", token_id),
+            "sequence_token": sequence_token,
             "shuffle_seed": entity_data.get("shuffle_seed", ""),
             "validator": validator,
             "blueprint": blueprint,
-            "substitutions_map": substitutions_map  # Bound explicitly to this array container node entry
+            "substitutions_map": substitutions_map
         })
+
+    print("\n💾 All components valid. Proceeding to Atomic Database Write...")
 
     # 🎯 STEP B: ATOMIC DATABASE SAVE TRANSACTION
     with transaction.atomic():
@@ -2033,6 +2082,7 @@ def save_problem_workspace(request, problem_id):
                 space_allocation=None
             )
 
+    print("🎉 Workspace transaction complete!")
     return JsonResponse({
         "success": True,
         "message": f"Workspace structure compiled successfully. Saved {len(user_inputs)} components and canvas."
@@ -2195,6 +2245,17 @@ def validate_component_preview(request):
                 return val
             cleaned = val.strip()
             
+            # 🎯 FIX: Clean up nested superscript LaTeX formatting (e.g., 2^{2} -> 2**2)
+            if '^' in cleaned:
+                # Remove LaTeX braces around exponents first
+                cleaned = cleaned.replace('^{', '**').replace('}', '')
+                # Catch any naked carets
+                cleaned = cleaned.replace('^', '**')
+                
+            # Strip out loose bracket layouts from upstream strings
+            if '{' in cleaned or '}' in cleaned:
+                cleaned = cleaned.replace('{', '').replace('}', '')
+
             # 1. Isolate expressions if they come from linked formula tokens (e.g. 'x = [2, -5]')
             if '=' in cleaned:
                 parts = cleaned.split('=', 1)
@@ -2207,7 +2268,7 @@ def validate_component_preview(request):
                 else:
                     cleaned = right_side
 
-            # 🎯 FIX: Strip out KaTeX visual layouts that break SymPy's ANTLR grammar parser
+            # Strip out remaining KaTeX visual layouts that break SymPy
             if '\\' in cleaned:
                 cleaned = cleaned.replace('\\limits', '') \
                                  .replace('\\,', ' ') \
@@ -2276,13 +2337,26 @@ def validate_component_preview(request):
         elif solve_method == 'expand polynomial':
             result = sp.expand(parsed_expr)
             
-        elif solve_method == 'variable substitution' and solve_for_str:
-            solve_var = sp.Symbol(solve_for_str)
-            solutions = sp.solve(parsed_expr, solve_var)
-            result = f"{solve_for_str} = {solutions}"
+        elif solve_method == 'variable substitution':
+            # 🎯 1. Extract the substitutions dictionary container from raw_inputs
+            subs_dict = raw_inputs.get('substitutions', {})
             
-            latex_solutions = ", ".join([sp.latex(s) for s in solutions]) if isinstance(solutions, list) else sp.latex(solutions)
-            latex_result = f"{sp.latex(solve_var)} = \\left\\{{ {latex_solutions} \\right\\}}"
+            # 🎯 2. Build the mapping of symbols to their replacement expressions
+            subs_map = {}
+            for var_name, var_value in subs_dict.items():
+                if var_value.strip():  # Skip empty inputs
+                    try:
+                        # Parse the substitution value with evaluate=False so things like "1/2" stay un-evaluated fractions
+                        subs_map[sp.Symbol(var_name)] = sp.parse_expr(var_value, local_dict=local_dict, evaluate=False)
+                    except Exception:
+                        subs_map[sp.Symbol(var_name)] = var_value
+
+            # 🎯 3. Substitute inside the NO-EVALUATE context block
+            if subs_map:
+                with sp.evaluate(False):
+                    result = parsed_expr.subs(subs_map)
+            else:
+                result = parsed_expr
             
         else:
             result = parsed_expr

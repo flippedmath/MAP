@@ -1008,14 +1008,24 @@ class FormulaEntity(BaseEntity):
         if not super().is_valid():
             return False
 
+        # 🎯 FIX: Read from runtime_values or fall back cleanly to raw/empty data
         formula_expr = self.runtime_values.get("formula", "")
         solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'variable substitution', 'leave as formula', the 'leave as formula' is default
         variables_str = self.runtime_values.get("variables", "")
         solve_for_target = self.runtime_values.get("variable substitution", "")
 
+        # 🎯 FIX: If it's a variable substitution node, an empty formula field is completely valid!
         if not formula_expr:
-            self.errors["formula"] = "A mathematical expression or equation string is required."
-        else:
+            if solve_method == 'variable substitution':
+                # Seed a safe baseline placeholder in runtime values so SymPy engine doesn't crash
+                self.runtime_values["formula"] = "0"
+                formula_expr = "0"
+            else:
+                self.errors["formula"] = "A mathematical expression or equation string is required."
+                return False
+        
+        # Only check syntax if we have a string to validate
+        if formula_expr:
             is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(str(formula_expr))
             if not is_valid_syntax:
                 self.errors["formula"] = syntax_error_msg
@@ -1032,8 +1042,12 @@ class FormulaEntity(BaseEntity):
         if "variables" not in self.errors:
             self.runtime_values["parsed_variables_array"] = parsed_variables
 
-        # 🎯 CHECKS THE USER'S SELECTED DROPDOWN VALUE ACCORDINGLY
         if solve_method == "variable substitution":
+            # 🎯 FIX: Safe fallback if target variable selection dropdown is empty
+            if not solve_for_target and parsed_variables:
+                solve_for_target = parsed_variables[0]
+                self.runtime_values["variable substitution"] = solve_for_target
+            
             if not solve_for_target:
                 self.errors["variable substitution"] = "You must specify a target variable when using the 'variable substitution' method."
             elif parsed_variables and (solve_for_target not in parsed_variables):

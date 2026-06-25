@@ -441,9 +441,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (boundToken) {
             const cleanTargetToken = boundToken.replace(/[<>]/g, '').trim(); // e.g., "randInt2"
             
+            // 🎯 STEP 1: Verify the loop footprint array is properly isolated
+            const localVisited = Array.isArray(visitedTokens) ? [...visitedTokens] : [];
+
             // 🛑 CYCLE BREAK ENGINE: Prevent infinite recursive call stack loops
-            if (visitedTokens.includes(cleanTargetToken)) {
-                return defaultFallback;
+            if (localVisited.includes(cleanTargetToken)) {
+                // Find current running context identifier if available
+                const contextCardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                
+                // 🎯 FIX: Only treat this as a true circular loop block if the target token 
+                // is completely separate from the active card's evaluation pass context
+                if (cleanTargetToken !== contextCardId) {
+                    return defaultFallback;
+                }
             }
 
             const activeCards = document.querySelectorAll('.workspace-block-card');
@@ -452,8 +462,12 @@ document.addEventListener('DOMContentLoaded', function() {
             activeCards.forEach(srcCard => {
                 const deleteBtn = srcCard.querySelector('.btn-delete-workspace-component');
                 if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanTargetToken) {
+                    // 🎯 STEP 2: Only append the step to the tracking path if it isn't already registered
+                    const nextVisited = localVisited.includes(cleanTargetToken) ? localVisited : [...localVisited, cleanTargetToken];
+                    console.log(`📡 [Gateway Dispatch] getLiveComponentValue is looking up bound target token [${cleanTargetToken}]. Array being passed forward down to next stack frame:`, [...nextVisited]);
+
                     // Recursively compute value based on the linked element card branch configuration
-                    resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken, [...visitedTokens, cleanTargetToken]);
+                    resolvedValue = evaluateSingleCardOutput(srcCard, cleanTargetToken, nextVisited);
                 }
             });
             return resolvedValue;
@@ -466,6 +480,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Isolate the core calculation matrix out of the main loop so it can be resolved recursively
     function evaluateSingleCardOutput(card, tokenIdentifier, visitedTokens = []) {
+        console.log(`📊 [Trace Gateway] evaluateSingleCardOutput invoked for [${tokenIdentifier}]. Raw visitedTokens parameter content passed:`, [...visitedTokens]);
+        
         const baseArchetype = card.getAttribute('data-token');
         let val = null;
 
@@ -554,28 +570,67 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
         else if (baseArchetype === 'formula') {
-            const formulaVal = getLiveComponentValue(card, 'formula', '', visitedTokens);
-            const methodVal = getLiveComponentValue(card, 'solve method', 'leave as formula', visitedTokens);
-            const varsVal = getLiveComponentValue(card, 'variables', '', visitedTokens);
-            const solveForVal = getLiveComponentValue(card, 'variable substitution', '', visitedTokens);
-
-            // 🎯 INSIDE YOUR FORMULA LOOKUP SEGMENT: Diagnostic Start Checkpoints
+            // Locate unique card token descriptor
             const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
+
+            // 🎯 FIX: Isolate the incoming tracking path cleanly
+            const localVisited = Array.isArray(visitedTokens) ? [...visitedTokens] : [];
+            
+            // 🛑 CYCLE BREAK ENGINE: Only block if the card was already visited BEFORE this frame invocation phase.
+            // If localVisited ends with cardId because getLiveComponentValue pushed it forward, that is a valid look-ahead jump, not a loop!
+            const isTrueLoop = localVisited.filter(t => t === cardId).length > 1 || 
+                            (localVisited.includes(cardId) && localVisited[localVisited.length - 1] !== cardId);
+
+            if (isTrueLoop) {
+                console.warn(`🛑 Genuine circular dependency loop blocked for card component [${cardId}]. Tracking trace path:`, [...localVisited]);
+                return "0";
+            }
+
+            // Ensure current card identity is registered in the frame array state if not already pushed
+            if (!localVisited.includes(cardId)) {
+                localVisited.push(cardId);
+            }
+
+            // 🎯 STEP 2: Use the isolated snapshot tracking state for internal lookups
+            const formulaVal = getLiveComponentValue(card, 'formula', '', localVisited);
+            const varsVal = getLiveComponentValue(card, 'variables', '', localVisited);
+            const solveForVal = getLiveComponentValue(card, 'variable substitution', '', localVisited);
+            const selectEl = card.querySelector('.val-input-solve-method');
+            const methodVal = selectEl ? selectEl.value : getLiveComponentValue(card, 'solve method', 'leave as formula', localVisited);
+            
             console.log(`\n--- 🧪 Frontend Simulation Loop: Evaluating Card [${cardId}] ---`);
             console.log(`Raw formula string pulled from DOM input:`, JSON.stringify(formulaVal));
-            console.log(`Current visited tokens recursion tracking depth:`, [...visitedTokens]);
+            console.log(`Current isolated recursion tracking depth:`, [...localVisited]);
 
+            // 🎯 STEP 3: Scrape substitution row badges safely with the local context path
             // 🎯 1. Dynamically scan for active substitution row items to align cache payload perfectly
             const subsPayload = {};
             card.querySelectorAll('.substitution-row-item').forEach(row => {
                 const varName = row.getAttribute('data-var-name');
-                const inputEl = row.querySelector('input, select');
-                if (varName && inputEl) {
-                    subsPayload[varName] = inputEl.value.trim();
+                
+                // 🎯 REVISED: Target actual active badges explicitly, excluding dropdown picker menus
+                const tokenBadge = row.querySelector('[data-indexed-token], .linked-component-token, .workspace-token-badge, button[class*="token"], span[class*="token"]');
+                
+                if (varName) {
+                    // Check if we accidentally matched a dropdown menu container instead of an active pill badge
+                    if (tokenBadge && !tokenBadge.classList.contains('linkable-tokens-dropdown') && !tokenBadge.closest('.linkable-tokens-dropdown')) {
+                        
+                        let targetTokenId = tokenBadge.getAttribute('data-indexed-token');
+                        if (!targetTokenId) {
+                            targetTokenId = tokenBadge.innerText.trim().replace(/[<>]/g, '');
+                        }
+                        
+                        console.log(`🎯 [Simulation Trace] Found verified embedded token link [${targetTokenId}] for variable [${varName}]`);
+                        subsPayload[varName] = getLiveComponentValue(card, targetTokenId, '0', localVisited);
+                    } else {
+                        // Fall back to reading the standard text or choice option element
+                        const inputEl = row.querySelector('input, select');
+                        subsPayload[varName] = inputEl ? inputEl.value.trim() : "";
+                    }
                 }
             });
 
-            // 🎯 2. Structural input validation serialization payload setup
+            // 🎯 STEP 4: Build input payload
             const inputsPayload = {
                 inputs: {
                     "formula": formulaVal,
@@ -587,57 +642,36 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             console.log(`Compiled Inputs Payload Dictionary Object:`, JSON.stringify(inputsPayload));
 
-            // 🎯 3. Build identical matching cache keys matching network requests
+            // 🎯 STEP 5: Verify cache matches identical backend structure keys
             const normalizedKeyString = typeof normalizePayloadKey === 'function' ? normalizePayloadKey(inputsPayload) : JSON.stringify(inputsPayload);
             const cacheKey = `${cardId}_${normalizedKeyString}`;
-            console.log(`Generated Simulation Cache Key String: "${cacheKey}"`);
 
-            // 🎯 4. Route explicit placeholders directly if not evaluating baseline choices
-            if (methodVal === 'simplify') {
-                console.log("🔀 [UI Route] Matching 'simplify' placeholder.");
-                return "[Placeholder: Simplify Method Display]";
-            } else if (methodVal === 'expand polynomial') {
-                console.log("🔀 [UI Route] Matching 'expand polynomial' placeholder.");
-                return "[Placeholder: Expand Polynomial Method Display]";
-            } else if (methodVal === 'variable substitution') {
-                console.log(`🔀 [UI Route] Matching 'solve for ${solveForVal}' placeholder.`);
-                return `[Placeholder: Solve for ${solveForVal || '_'} Method Display]`;
-            }
-
-            // 🎯 5. Look up compiled LaTeX out of your global cache dictionary map
+            // Check global rendering ledger for historical cache hit
             if (formulaLiveLatexCache && formulaLiveLatexCache[cacheKey]) {
                 console.log(`✅ Cache Hit Found! Cache content being sent to renderer:`, JSON.stringify(formulaLiveLatexCache[cacheKey]));
                 return formulaLiveLatexCache[cacheKey];
             } else {
-                console.log(`❌ Cache Miss for key: "${cacheKey}". Global cache ledger state:`, formulaLiveLatexCache);
+                console.log(`❌ Cache Miss for key: "${cacheKey}".`);
             }
 
-            // Fallback to old attribute snapshot context if it has one seeded
+            // Fallback historical DOM attribute snapshot passthrough
             const databaseValueFallback = card.getAttribute('data-simulated-value');
             if (databaseValueFallback && databaseValueFallback !== "???") {
-                console.log(`♻️ Cache missing; falling back to historical DOM data-simulated-value attribute snapshot: "${databaseValueFallback}"`);
                 return databaseValueFallback;
             }
 
-            // 🎯 6. Fire asynchronous API translation pass if cache is empty
-            if (formulaVal && typeof fetchLiveFormulaLatex === 'function') {
-                console.log(`📡 Dispatching network call via fetchLiveFormulaLatex for token: ${cardId}`);
+            // 🎯 STEP 6: Safeguard API payload from corrupted recursion fallbacks
+            // Only fire background HTTP threads if we have a valid, un-shorted math string
+            if (formulaVal && formulaVal !== "0" && typeof fetchLiveFormulaLatex === 'function') {
+                console.log(`📡 Dispatching clean network call via fetchLiveFormulaLatex for token: ${cardId}`);
                 fetchLiveFormulaLatex(cardId, 'formula', inputsPayload);
-            } else {
-                console.warn(`⚠️ [Skip Dispatch] fetchLiveFormulaLatex not triggered. formulaVal empty ("${formulaVal}") or execution function missing.`);
             }
 
-            // 🎯 FIX: Prevent uncompiled, raw backslash strings from cascading straight to KaTeX on a cache miss.
-            // Returning a clean "0" or expression text placeholder safely satisfies the current layout loop render pass 
-            // while the background HTTP fetch flies out to return the real parsed expression structure.
             if (formulaVal && formulaVal.includes('\\')) {
-                console.log(`🛡️ Safe Guard Triggered: Formula contains raw un-evaluated LaTeX from an upstream token. Returning neutral '0' placeholder for pending network pass.`);
                 return "0";
             }
 
-            // Fallback variable assignments if cache hasn't returned yet
-            val = formulaVal || '3*x + 5';
-            console.log(`🕒 Network request pending. Returning transient text layout placeholder: "${val}"`);
+            return formulaVal || '3*x + 5';
         }
 
         if (val === null || val === '') {
@@ -730,6 +764,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 refreshUnusedVariablesPicker();
                 // Fire layout refresh event bubble to sync network configuration simulation states
                 unusedVariablesPicker.dispatchEvent(new Event('change', { bubbles: true }));
+                // 🎯 FORCE RE-EVALUATION PASSTHROUGH AFTER DELETION:
+                if (typeof updateWorkspaceSimulationPreview === 'function') {
+                    updateWorkspaceSimulationPreview();
+                }
             });
 
             substitutionsContainer.appendChild(row);
@@ -832,10 +870,9 @@ document.addEventListener('DOMContentLoaded', function() {
         syncSolveForDropdown();
 
         // Core delegation listener hook
-        card.addEventListener('change', async (e) => {
+        card.addEventListener('input', async (e) => {
             const target = e.target;
 
-            // Add validation checking hooks for internal dynamic values inside the substitution inputs too!
             if (!target.matches('.val-input-formula, .val-input-solve-method, .val-input-solve-for, .val-substitution-input, .picker-unused-variables')) {
                 return;
             }
@@ -845,6 +882,17 @@ document.addEventListener('DOMContentLoaded', function() {
             
             card.querySelectorAll('.formula-inline-error-msg').forEach(el => el.remove());
 
+            // 🎯 STEP 1: Extract variables instantly so they exist BEFORE payload generation
+            if (formulaInputEl) {
+                const rawFormula = formulaInputEl.value;
+                const variableMatches = rawFormula.match(/\b[a-zA-Z][0-9]*\b/g) || [];
+                const uniqueVars = [...new Set(variableMatches)];
+
+                if (variablesField) {
+                    variablesField.value = uniqueVars.join(', ');
+                }
+            }
+
             // Extract substitution list parameters directly to bundle down to API endpoints
             const substitutionsPayload = {};
             substitutionsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
@@ -853,12 +901,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 substitutionsPayload[vName] = vVal;
             });
 
+            // 🎯 STEP 2: Now payloadInputs gets the freshly updated variables string!
             const payloadInputs = {
                 "formula": formulaInputEl?.value.trim() || "",
                 "solve method": solveMethodSelect?.value || "leave as formula",
-                "variables": variablesField?.value.trim() || "",
+                "variables": variablesField?.value.trim() || "", // Now contains "x, y, z, f"
                 "variable substitution": solveForSelect?.value || "",
-                "substitutions": substitutionsPayload // Packed payload container parameters passed seamlessly
+                "substitutions": substitutionsPayload 
             };
 
             if (!payloadInputs.formula) {
@@ -890,9 +939,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     card.setAttribute('data-simulated-value', data.evaluated_output);
                     card.style.border = "1px solid #e2e8f0"; 
 
-                    // 🎯 FIX: Build the matching cache key structure and cache the fresh server LaTeX
+                    // 🎯 FIX: Build the matching cache key structure using the exact same footprint
                     const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || tokenIdentifier;
-                    const inputsPayloadForCache = { inputs: payloadInputs };
+                    
+                    // Direct reassignment: Ensure it mirrors the exact structure from the simulation loop
+                    // If payloadInputs already contains the "inputs" key, pass it directly.
+                    // Otherwise, ensure it matches your global format structure.
+                    const inputsPayloadForCache = payloadInputs.inputs ? payloadInputs : { inputs: payloadInputs };
                     
                     const normalizedKeyString = typeof normalizePayloadKey === 'function' 
                         ? normalizePayloadKey(inputsPayloadForCache) 
@@ -902,19 +955,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     if (data.latex_output) {
                         formulaLiveLatexCache[cacheKey] = data.latex_output;
-                    }
-
-                    // Process updated automated parameters listings
-                    const rawFormula = formulaInputEl.value;
-                    const variableMatches = rawFormula.match(/\b[a-zA-Z][0-9]*\b/g) || [];
-                    const uniqueVars = [...new Set(variableMatches)];
-
-                    if (variablesField) {
-                        variablesField.value = uniqueVars.join(', ');
+                        console.log(`📥 Successfully cached server response under key: ${cacheKey}`);
                     }
 
                     syncSolveForDropdown();
-
                 } else {
                     card.style.border = "1px solid #ef4444";
                     
@@ -985,7 +1029,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 allCards.forEach(card => {
                     const deleteBtn = card.querySelector('.btn-delete-workspace-component');
                     if (deleteBtn && deleteBtn.getAttribute('data-indexed-token') === cleanToken) {
-                        evaluationValue = evaluateSingleCardOutput(card, cleanToken);
+                        
+                        // 🎯 FIX: Force each token look-up pass to begin with a completely clean, empty tracking array
+                        evaluationValue = evaluateSingleCardOutput(card, cleanToken, []);
+                        
                         // 🎯 Protect against capitalization variant mappings ("Formula" vs "formula")
                         if (card.getAttribute('data-token')) {
                             baseArchetypeToken = card.getAttribute('data-token').toLowerCase();
@@ -1196,6 +1243,16 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!data.success) {
                 alert(`Error initializing workspace environment: ${data.error}`);
                 return;
+            }
+
+            // 🎯 CORRECTED FIX: Explicitly target your actual wrapper line element ID
+            if (tokensLedger) {
+                console.log("🧼 Flushing stale visual tokens from the ledger wrapper...");
+                tokensLedger.innerHTML = ''; 
+            }
+
+            if (typeof formulaLiveLatexCache !== 'undefined') {
+                formulaLiveLatexCache = {}; 
             }
 
             // Write live elements arrays straight to mutable global tracking parameters
@@ -1625,7 +1682,12 @@ document.addEventListener('DOMContentLoaded', function() {
      * Dispatches input payloads to the validation matrix engine, caching responses
      */
     function fetchLiveFormulaLatex(cardId, token, inputsPayload) {
-        const cacheKey = `${cardId}_${normalizePayloadKey(inputsPayload)}`;
+
+        console.log(`🔍 DIAGNOSTIC: fetchLiveFormulaLatex called for [${cardId}]. Payload formula value: "${inputsPayload?.inputs?.formula || inputsPayload?.formula}"`);
+
+        // 🎯 CRITICAL FIX: Ensure the key footprint exactly mirrors the card handler's nesting structure
+        const inputsPayloadForCache = inputsPayload.inputs ? inputsPayload : { inputs: inputsPayload };
+        const cacheKey = `${cardId}_${normalizePayloadKey(inputsPayloadForCache)}`;
         
         // 🎯 THE FIX: Bypass the early return if the cache entry is just a plain-text fallback string
         if (formulaLiveLatexCache[cacheKey]) {
@@ -1633,7 +1695,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const isRawTextFallback = /^(Integral|Derivative|Limit|Sum|Matrix)/i.test(cachedVal) || !cachedVal.includes('\\');
             
             // If it's a real LaTeX expression, skip network traffic. 
-            // If it's plain text, break out and force a server validation request!
             if (!isRawTextFallback) {
                 return;
             }
@@ -1642,18 +1703,16 @@ document.addEventListener('DOMContentLoaded', function() {
         // Fetch CSRF security cookies natively out of the browser layer
         const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
 
-        const requestBody = { token: token, inputs: inputsPayload };
-
+        // Fix the outbound fetch arguments to pass the nested payload safely
         fetch('/assessment/api/validate-component-preview/', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrftoken
             },
-            body: JSON.stringify({ token: token, inputs: inputsPayload.inputs })
+            body: JSON.stringify({ token: token, inputs: inputsPayloadForCache.inputs })
         })
         .then(res => {
-            // 🎯 FIX: Intercept the 400 Bad Request error payload rather than skipping straight to .catch()
             if (!res.ok) {
                 return res.json().then(errData => {
                     throw new Error(errData.error || "Syntax Error");
@@ -1663,21 +1722,16 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .then(data => {
             if (data.success && data.latex_output) {
-                // Pin the output string map directly to our tracking cache dictionary
                 formulaLiveLatexCache[cacheKey] = data.latex_output;
             } else {
-                // Handle case where success is false but status code was 200
                 formulaLiveLatexCache[cacheKey] = `\\text{\\color{red}{${data.error || 'Syntax Error'}}}`;
             }
-            // Force a layout re-calc pass now that we have the real data
             updateWorkspaceSimulationPreview();
         })
         .catch(err => {
             console.warn("Live LaTeX conversion syntax issue:", err);
-            // 🎯 FIX: Explicitly cache the error message so the component un-freezes immediately
             const cleanMsg = err.message.replace("Error: ", "");
             formulaLiveLatexCache[cacheKey] = `\\text{\\color{red}{[${cleanMsg}]}}`;
-            // Re-render layout matrices to instantly clear the preview back into an editable state
             updateWorkspaceSimulationPreview();
         });
     }
@@ -1708,4 +1762,41 @@ document.addEventListener('DOMContentLoaded', function() {
         
         return JSON.stringify(copy);
     }
+
+
+    // =============================================================================
+    // REAL-TIME COMPONENT LIVE-SYNC DISPATCHER
+    // =============================================================================
+    (function() {
+        const debouncedNetworkDispatches = {};
+
+        function triggerLiveSync(e) {
+            const target = e.target;
+            // Target any inputs or select dropdowns inside a formula workspace component card
+            const card = target.closest('.workspace-component-card[data-archetype="formula"]');
+            
+            if (card) {
+                const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (!cardId) return;
+
+                // Clear previous timeout for this specific card to debounce keystrokes
+                if (debouncedNetworkDispatches[cardId]) {
+                    clearTimeout(debouncedNetworkDispatches[cardId]);
+                }
+
+                // Set a brief delay so it fires after the user pauses typing or selecting
+                debouncedNetworkDispatches[cardId] = setTimeout(() => {
+                    console.log(`⚡ Live control change detected on [${cardId}]. Forcing simulation loop refresh...`);
+                    
+                    if (typeof updateWorkspaceSimulationPreview === 'function') {
+                        updateWorkspaceSimulationPreview();
+                    }
+                }, 300); // 300ms window
+            }
+        }
+
+        // Attach event listeners to the document level to catch dynamic elements bubbling up
+        document.addEventListener('input', triggerLiveSync);
+        document.addEventListener('change', triggerLiveSync);
+    })();
 });
