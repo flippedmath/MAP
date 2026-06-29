@@ -2219,179 +2219,165 @@ def problem_workspace_editor(request, problem_id):
 @require_POST
 def validate_component_preview(request):
     try:
-        # 1. Parse incoming request JSON
-        data = json.loads(request.body)
-        token = data.get('token')
-        raw_inputs = data.get('inputs', {})
+        # 1. Parse batch incoming request payload arrays
+        payload = json.loads(request.body)
+        entities_list = payload.get('entities', [])
+        trigger_token = payload.get('trigger_token', None)
 
-        # 🎯 ADD THESE PRINT STATEMENTS FOR SERVER-SIDE TELEMETRY
-        print("\n" + "="*60)
-        print("🚀 BACKEND DIAGNOSTICS: validate_component_preview entry")
-        print(f"Targeting Archetype Token: {token}")
-        print(f"Raw inputs payload dict: {raw_inputs}")
-        
-        formula_raw_value = raw_inputs.get('formula', '')
-        print(f"Incoming 'formula' string type: {type(formula_raw_value)}")
-        print(f"Incoming 'formula' string literal content: {formula_raw_value}")
-        print(f"Incoming 'formula' strict python repr value: {repr(formula_raw_value)}")
-        print("="*60 + "\n")
+        if not entities_list:
+            return JsonResponse({'success': True, 'updated_cache': {}})
 
-        if token != 'formula':
-            return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
+        # Map entities into a lookup dictionary for fast resolution
+        entity_pool = {item['token'].lower(): item for item in entities_list}
+        updated_cache = {}
 
-        # 🎯 HELPER LOGIC: Clean nested dependency string values
-        def clean_nested_formula_value(val):
-            if not isinstance(val, str):
-                return val
-            cleaned = val.strip()
+        # -------------------------------------------------------------
+        # SERVER-SIDE RECURSIVE VALUE SOLVER
+        # -------------------------------------------------------------
+        def resolve_entity_value(token_id, visited=None):
+            token_id = token_id.lower()
+            if visited is None:
+                visited = set()
             
-            # 🎯 FIX: Clean up nested superscript LaTeX formatting (e.g., 2^{2} -> 2**2)
-            if '^' in cleaned:
-                cleaned = cleaned.replace('^{', '**').replace('}', '')
-                cleaned = cleaned.replace('^', '**')
+            if token_id in visited:
+                return "0"  # Prevent cyclic graph infinity loops
+            visited.add(token_id)
+
+            # Check if this node was already computed in this pass
+            if token_id in updated_cache:
+                return updated_cache[token_id]['evaluated_output']
+
+            if token_id not in entity_pool:
+                return "0"
+
+            entity_data = entity_pool[token_id]
+            inputs = entity_data.get('inputs', {})
+            
+            formula_str = inputs.get('formula', '').strip()
+            solve_method = inputs.get('solve method', 'leave as formula').strip()
+            variables_raw = inputs.get('variables', '')
+
+            # 🎯 FIX 1: Extract individual dynamic 'sub_var' items from root inputs payload dictionary
+            subs_map = inputs.get('substitutions', {}) or {}
+            if not isinstance(subs_map, dict):
+                subs_map = {}
                 
-            if '{' in cleaned or '}' in cleaned:
-                cleaned = cleaned.replace('{', '').replace('}', '')
+            # Merge any flat parameters sent as "sub_x": "value" directly into our map
+            for k, v in inputs.items():
+                if k.startswith('sub_') and v is not None:
+                    var_name = k.replace('sub_', '').strip()
+                    subs_map[var_name] = v
 
-            if '=' in cleaned:
-                parts = cleaned.split('=', 1)
-                right_side = parts[1].strip()
-                if right_side.startswith('[') and right_side.endswith(']'):
-                    elements = right_side[1:-1].split(',')
-                    if elements and elements[0].strip():
-                        cleaned = elements[0].strip()
+            # 1. Recursively resolve pointer references inside the substitution entries mapping
+            resolved_subs = {}
+            for var_name, var_value in subs_map.items():
+                if isinstance(var_value, str) and var_value.startswith('<') and var_value.endswith('>'):
+                    target_token = var_value.replace('<', '').replace('>', '').strip()
+                    # Recursively resolve the linked token entity's evaluation output string
+                    resolved_subs[var_name] = f"({resolve_entity_value(target_token, visited.copy())})"
                 else:
-                    cleaned = right_side
+                    resolved_subs[var_name] = var_value
 
-            if '\\' in cleaned:
-                cleaned = cleaned.replace('\\limits', '') \
-                                 .replace('\\,', ' ') \
-                                 .replace('\\left', '') \
-                                 .replace('\\right', '') \
-                                 .strip()
-            return cleaned
+            # 2. Recursively resolve pointer references written inside the raw formula string text itself
+            def bracket_replacer(match):
+                target_token = match.group(1) if match.group(1) else match.group(2)
+                target_token = target_token.strip()
+                return f"({resolve_entity_value(target_token, visited.copy())})"
 
-        inputs = {k: clean_nested_formula_value(v) for k, v in raw_inputs.items()}
+            processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
 
-        formula_str = inputs.get('formula', '').strip()
-        solve_method = inputs.get('solve method', 'leave as formula').strip()
-        variables_raw = inputs.get('variables', '')
-        solve_for_str = inputs.get('variable substitution', '').strip()
-
-        has_double_backslash = '\\\\' in formula_str
-        has_single_backslash = '\\' in formula_str
-        print(f"🧪 AFTER CLEANUP HOOK -> formula_str content: {formula_str}")
-        print(f"🧪 AFTER CLEANUP HOOK -> formula_str repr: {repr(formula_str)}")
-
-        if not formula_str:
-            return JsonResponse({'success': True, 'evaluated_output': '', 'latex_output': ''})
-
-        if isinstance(variables_raw, list):
-            var_list = [str(v).strip() for v in variables_raw if str(v).strip()]
-        else:
-            var_list = [v.strip() for v in variables_raw.replace(',', ' ').split() if v.strip()]
-
-        local_dict = {var: sp.Symbol(var) for var in var_list}
-        if 'pi' not in local_dict:
-            local_dict['pi'] = sp.pi
-
-        if solve_method == 'leave as formula':
-            local_dict['integrate'] = sp.Integral
-            local_dict['diff'] = sp.Derivative
-            local_dict['limit'] = sp.Limit
-
-        if "\\" in formula_str:
-            try:
-                parsed_expr = parse_latex(formula_str)
-                if solve_method != 'leave as formula':
-                    parsed_expr = parsed_expr.doit()
-            except Exception as latex_err:
-                raise ValueError(f"LaTeX Parsing Error: {str(latex_err)}")
-        else:
-            parsed_expr = sp.parse_expr(formula_str, local_dict=local_dict, evaluate=(solve_method != 'leave as formula'))
-
-        result = parsed_expr
-        latex_result = None  
-        
-        if solve_method == 'simplify':
-            result = sp.simplify(parsed_expr)
-            
-        elif solve_method == 'expand polynomial':
-            result = sp.expand(parsed_expr)
-            
-        elif solve_method == 'variable substitution':
-            subs_dict = raw_inputs.get('substitutions', {})
-            
-            print("\n" + "🔥" * 25)
-            print("🔬 BACKEND SUBSTITUTION ENGINE DEEP DIVE")
-            print(f"  Target Formula Base Expression Context (parsed_expr): {repr(parsed_expr)}")
-            print(f"  Target Formula Local Variable Dictionary (local_dict): {local_dict}")
-            print(f"  Incoming subs_dict Content: {subs_dict}")
-            
-            subs_map = {}
-            for var_name, var_value in subs_dict.items():
-                if isinstance(var_value, str) and var_value.strip():
-                    print(f"\n  👉 Processing Substitution for Variable: [{var_name}]")
-                    print(f"     - Raw string received: '{var_value}' (repr: {repr(var_value)})")
-                    
-                    # Clean up LaTeX remnants inside the substitution values before passing to SymPy
-                    cleaned_val = clean_nested_formula_value(var_value)
-                    print(f"     - String after clean_nested_formula_value(): '{cleaned_val}' (repr: {repr(cleaned_val)})")
-                    
-                    try:
-                        if "\\" in cleaned_val or "^{" in var_value:
-                            print("     - Route: LaTeX Parser Selected")
-                            parsed_sub_expr = parse_latex(var_value)
-                        else:
-                            print("     - Route: Standard String Expression Parser Selected")
-                            parsed_sub_expr = sp.parse_expr(cleaned_val, local_dict=local_dict, evaluate=False)
-                        
-                        subs_map[sp.Symbol(var_name)] = parsed_sub_expr
-                        print(f"     ✅ Success! Mapped SymPy object: {repr(parsed_sub_expr)} (type: {type(parsed_sub_expr)})")
-                    except Exception as parse_err:
-                        print(f"     ⚠️ Parser Failed! Exception: {parse_err}")
-                        subs_map[sp.Symbol(var_name)] = cleaned_val
-                        print(f"     - Fallback: Mapped raw string literal instead: {repr(cleaned_val)}")
-                else:
-                    subs_map[sp.Symbol(var_name)] = var_value
-
-            print(f"\n  ⚙️ Compiled Substitution Map (subs_map): {subs_map}")
-            
-            if subs_map:
-                try:
-                    with sp.evaluate(False):
-                        result = parsed_expr.subs(subs_map)
-                    print(f"  🎉 Post-Substitution Expression Object (result): {repr(result)}")
-                    print(f"  🎉 Post-Substitution Plain Text String: {str(result)}")
-                    print(f"  🎉 Post-Substitution LaTeX Generated: {sp.latex(result)}")
-                except Exception as subs_err:
-                    print(f"  ❌ Critical Error during .subs() execution: {subs_err}")
-                    result = parsed_expr
+            # 3. Build variables mapping local dictionary context
+            if isinstance(variables_raw, list):
+                var_list = [str(v).strip() for v in variables_raw if str(v).strip()]
             else:
-                print("  ⚠️ No valid entries found in subs_map. Skipping substitution branch.")
+                var_list = [v.strip() for v in variables_raw.replace(',', ' ').split() if v.strip()]
+
+            local_dict = {var: sp.Symbol(var) for var in var_list}
+            if 'pi' not in local_dict:
+                local_dict['pi'] = sp.pi
+
+            if solve_method == 'leave as formula' or solve_method == 'variable substitution':
+                local_dict['integrate'] = sp.Integral
+                local_dict['diff'] = sp.Derivative
+                local_dict['limit'] = sp.Limit
+
+            # 4. Parse Math Expression Node via SymPy
+            if not processed_formula:
+                evaluated_output = ""
+                latex_output = ""
+            else:
+                if "\\" in processed_formula:
+                    from sympy.parsing.latex import parse_latex
+                    parsed_expr = parse_latex(processed_formula)
+                    if solve_method != 'leave as formula' and solve_method != 'variable substitution':
+                        parsed_expr = parsed_expr.doit()
+                else:
+                    # Parse expression with evaluate=False to keep standard layout presentation intact
+                    parsed_expr = sp.parse_expr(processed_formula, local_dict=local_dict, evaluate=False)
+
                 result = parsed_expr
                 
-            print("🔥" * 25 + "\n")
-            
-        else:
-            result = parsed_expr
+                if solve_method == 'simplify':
+                    # 🚀 FIX: Force evaluation via .doit() to resolve locked numbers/symbols tree branches, 
+                    # then run simplify() to collect terms and reduce cleanly.
+                    result = sp.simplify(parsed_expr.doit())
+                elif solve_method == 'expand polynomial':
+                    result = sp.expand(parsed_expr.doit())
+                elif solve_method == 'factor polynomial':
+                    result = sp.factor(parsed_expr.doit())
+                elif solve_method == 'variable substitution':
+                    sympy_subs_map = {}
+                    for v_name, v_val in resolved_subs.items():
+                        if isinstance(v_val, str) and v_val.strip():
+                            try:
+                                # 🎯 FIX 2: Parse replacement expressions safely with evaluate=False to prevent structural collapse
+                                sympy_subs_map[sp.Symbol(v_name)] = sp.parse_expr(str(v_val), local_dict=local_dict, evaluate=False)
+                            except Exception:
+                                sympy_subs_map[sp.Symbol(v_name)] = v_val
+                        else:
+                            if v_val != "":
+                                sympy_subs_map[sp.Symbol(v_name)] = v_val
+                    
+                    if sympy_subs_map:
+                        # Perform substitution within an unevaluated SymPy block context
+                        with sp.evaluate(False):
+                            result = parsed_expr.subs(sympy_subs_map)
 
-        if not latex_result:
-            latex_result = sp.latex(result)
+                evaluated_output = str(result)
+                latex_output = sp.latex(result)
+
+            # 🚀 FIX: Automatically extract remaining variables/free symbols from the evaluated result
+            # We exclude 'pi' so it isn't listed as an adjustable variable choice
+            extracted_vars = []
+            if processed_formula and hasattr(result, 'free_symbols'):
+                extracted_vars = [str(sym) for sym in result.free_symbols if str(sym) != 'pi']
+                extracted_vars.sort()
+
+            # 5. Populate local caching maps
+            updated_cache[token_id] = {
+                'evaluated_output': evaluated_output,
+                'latex_output': latex_output,
+                'extracted_variables': ", ".join(extracted_vars)
+            }
+            return evaluated_output
+
+        # Execute top-down evaluation loop over all requested entities
+        for token_key in list(entity_pool.keys()):
+            resolve_entity_value(token_key)
 
         return JsonResponse({
             'success': True,
-            'evaluated_output': str(result),
-            'latex_output': latex_result,
+            'updated_cache': updated_cache,
             'error': None
         })
 
     except Exception as e:
-        print(f"❌ COMPILER ENGINE CRASHED: {str(e)}")
+        print(f"❌ COMPILER BATCH CONTEXT CRASHED: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return JsonResponse({
             'success': False,
-            'evaluated_output': '',
-            'latex_output': '',
+            'updated_cache': {},
             'error': f"Math Evaluation Warning: {str(e)}"
         }, status=400)
 

@@ -559,7 +559,7 @@ class SymPyAssessmentEngine:
     def evaluate_formula_operations(cls, expression_str: str, method: str, variables: list, solve_for: str) -> str:
         """
         Parses a formula string (Standard or LaTeX) and executes algebraic mutations.
-        Methods: 'leave as formula', 'simplify', 'expand polynomial', 'variable substitution'
+        Methods: 'leave as formula', 'simplify', 'expand polynomial', 'factor polynomial', 'variable substitution'
         """
         if not expression_str:
             return ""
@@ -586,6 +586,10 @@ class SymPyAssessmentEngine:
             elif method == "expand polynomial":
                 # 🚧 Placeholder for future polynomial expansion logic
                 return "[Placeholder: Expand Polynomial Method Display]"
+
+            elif method == "factor polynomial":
+                # 🚧 Placeholder for future polynomial de-expansion logic
+                return "[Placeholder: Factor Polynomial Method Display]"            
 
             elif method == "variable substitution":
                 # 🚧 Placeholder for future algebraic variable isolation logic
@@ -1010,7 +1014,7 @@ class FormulaEntity(BaseEntity):
 
         # 🎯 FIX: Read from runtime_values or fall back cleanly to raw/empty data
         formula_expr = self.runtime_values.get("formula", "")
-        solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'variable substitution', 'leave as formula', the 'leave as formula' is default
+        solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'factor polynomial', 'variable substitution', 'leave as formula', the 'leave as formula' is default
         variables_str = self.runtime_values.get("variables", "")
         solve_for_target = self.runtime_values.get("variable substitution", "")
 

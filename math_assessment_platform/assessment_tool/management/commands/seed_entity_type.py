@@ -43,7 +43,7 @@ class Command(BaseCommand):
             "token": "formula",
             "inputs": {
                 "formula": {"field": "text", "value": ["string", "array(['formula'])"]},
-                "solve method": {"field": "dropdown", "value": ["string_match(['simplify', 'expand polynomial', 'variable substitution', 'leave as formula'])"], "default": "leave as formula"},
+                "solve method": {"field": "dropdown", "value": ["string_match(['simplify', 'expand polynomial', 'factor polynomial', 'variable substitution', 'leave as formula'])"], "default": "leave as formula"},
                 "variables": {"field": "text", "value": ["array(['string'])"], "default": ""},
                 "variable substitution": {"field": "text", "value": ["string_match([\"self('variables')\"])", "or_null"], "default": ""}
             },
@@ -52,7 +52,7 @@ class Command(BaseCommand):
             "disabled": False,
             "note": (
                 "<div style='font-family: system-ui, sans-serif; font-size: 0.75rem; color: #1e293b; max-width: 480px; max-height: 400px; overflow-y: auto; padding-right: 4px;'>"
-                
+                "<p style='padding: 3px; color: #475569;'>When multiplying '*' must be used between terms. When identifying 'power of', two asterix should be used between the terms --> '**'</p>"
                 # --- SECTION 1: ALGEBRA ---
                 "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>1. Algebra Components</p>"
                 "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>"
