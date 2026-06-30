@@ -683,6 +683,9 @@ def validate_entity_node_datatype(entity_segment_obj):
     return True
 
 
+import random
+import re
+
 class BaseEntity:
     """
     Abstract validation base class for processing structural configurations
@@ -691,11 +694,37 @@ class BaseEntity:
     def __init__(self, data, pattern_blueprint, all_entities_payload=None):
         self.data = data  # The raw inputs dictionary mapping (e.g. {"min": "100", "max": "<randInt2>"})
         self.pattern_blueprint = pattern_blueprint  # The matched format_pattern dictionary
-        # 🎯 TRACK SIBLINGS: Keep a reference to all sibling entities in the draft
         self.all_entities_payload = all_entities_payload or []
         self.cleaned_data = {}
         self.runtime_values = {} # 🎯 Holds real numbers for validation/evaluation
         self.errors = {}
+
+    def resolve_numeric_value(self, input_key, default_fallback=0):
+        """
+        🎯 GENERALIZED UTILITY METHOD
+        Safely extracts and resolves a numeric input field key down to a clean integer/float primitive.
+        Handles direct numbers, numeric string digits, and recursive token macro definitions uniformly.
+        """
+        val = self.runtime_values.get(input_key)
+        
+        if val is None:
+            val = self.data.get(input_key) if isinstance(self.data, dict) else None
+
+        if val is None:
+            return default_fallback
+
+        if isinstance(val, str) and re.match(r"^<([^>]+)>$", val.strip()):
+            try:
+                val = self.resolve_token_dependency(val)
+            except Exception:
+                return default_fallback
+
+        try:
+            if isinstance(val, str):
+                val = val.strip()
+            return int(float(val)) if "." not in str(val) else float(val)
+        except (ValueError, TypeError):
+            return default_fallback
 
     def is_valid(self):
         self.errors = {}
@@ -734,15 +763,10 @@ class BaseEntity:
                     continue
 
             try:
-                # Type-check the calculated raw value (converts string numbers to actual ints/floats)
                 validated_result = self.validate_field_type(
                     input_key, value_to_validate, expected_field_type
                 )
-                
-                # Runtime values always get the native type-casted value (e.g. 220)
                 self.runtime_values[input_key] = validated_result
-                
-                # Cleaned data retains the blueprint layout pointer for the database write (e.g. "<randInt2>")
                 self.cleaned_data[input_key] = user_value
                     
             except ValidationError as e:
@@ -754,24 +778,27 @@ class BaseEntity:
         """
         Recursively extracts the real-time simulation output value of a cross-referenced token tag.
         """
-        clean_sequence_token = token_string.replace("<", "").replace(">", "").strip() # e.g. "randInt2"
+        clean_sequence_token = token_string.replace("<", "").replace(">", "").strip()
         
-        # Locate the targeted dependency configuration inside the sibling payload array context
+        print(f"    🔗 [DEPENDENCY RESOLVER] Linking asset detected: {token_string}")
+        print(f"        Searching active workspace ledger for signature: '{clean_sequence_token}'")
+
         target_payload = next(
-            (item for item in self.all_entities_payload if item.get("sequence_token") == clean_sequence_token),
+            (item for item in self.all_entities_payload if (item.get("sequence_token") or item.get("indexed_token") or "") == clean_sequence_token),
             None
         )
         
         if not target_payload:
+            print(f"        ❌ [DEPENDENCY ERROR] Reference tracker could not locate '{clean_sequence_token}' inside structural map.")
             raise ValidationError(f"Linked reference token <{clean_sequence_token}> could not be found in active workspace components.")
-
-        # Avoid local circular lookups by importing factory at execution time
         
         token_archetype = target_payload.get("token")
         token_inputs = target_payload.get("inputs", {})
-        token_blueprint = get_blueprint_for_token(token_archetype) # Fetch its blueprint dictionary profile
+        token_blueprint = get_blueprint_for_token(token_archetype)
         
-        # Build dependency engine instances, passing along the complete array context stack
+        print(f"        📍 Located Parent Entity: Archetype='{token_archetype}', Inputs={token_inputs}")
+        print(f"        🔄 Instantiating temporary sub-engine validator to evaluate upstream value...")
+
         dependency_validator = get_entity_validator(
             token_archetype, 
             token_inputs, 
@@ -780,10 +807,12 @@ class BaseEntity:
         )
         
         if not dependency_validator.is_valid():
+            print(f"        ❌ [DEPENDENCY CRASH] Upstream asset <{clean_sequence_token}> failed inner integrity checks: {getattr(dependency_validator, 'errors', {})}")
             raise ValidationError(f"Dependency error: Linked component <{clean_sequence_token}> has outstanding validation errors.")
             
-        # Execute child computation tree evaluation recursively!
-        return dependency_validator.evaluate_output()
+        resolved_value = dependency_validator.evaluate_output()
+        print(f"        💎 [DEPENDENCY SUCCESS] Inter-component pipeline resolved {token_string} ➔ '{resolved_value}'")
+        return resolved_value
 
     def validate_field_type(self, key, value, field_type):
         if field_type == "integer":
@@ -793,7 +822,6 @@ class BaseEntity:
                 return int(value)
             except:
                 raise ValidationError(f"Value for '{key}' must be a valid integer.")
-            
         elif field_type == "double":
             if value == "" or value is None:
                 return None
@@ -801,28 +829,21 @@ class BaseEntity:
                 return float(value)
             except:
                 raise ValidationError(f"Value for '{key}' must be a numeric decimal or double.")
-            
         elif field_type in ["text", "paragraph"]:
             if getattr(value, 'strip', None) and value.strip() == "":
                 return None
             if not isinstance(value, str):
                 raise ValidationError(f"Value for '{key}' must be a valid text string.")
             return value.strip()
-            
         elif field_type == "dropdown":
             if not isinstance(value, str):
                 raise ValidationError(f"Selected option for '{key}' must be a string identifier.")
             return value
-            
         return value
 
     def evaluate_output(self):
-        """
-        🎯 CORE FORCE INTERFACE INTERACTION METHOD
-        Calculates and produces evaluated simulation content data for live engine previews.
-        """
-        raise NotImplementedError("Child entity component sub-classes must override evaluate_output() configuration mappings.")
-        
+        raise NotImplementedError("Child entity component sub-classes must override evaluate_output().")
+    
 
 class RandomIntegerEntity(BaseEntity):
     """
@@ -832,22 +853,29 @@ class RandomIntegerEntity(BaseEntity):
         if not super().is_valid():
             return False
             
-        # 🎯 READ FROM runtime_values GUARANTEES NATIVE PYTHON NUMERICAL TYPES
-        min_val = self.runtime_values.get("min")
-        max_val = self.runtime_values.get("max")
-        step_val = self.runtime_values.get("step")
+        min_val = self.resolve_numeric_value("min", default_fallback=-9)
+        max_val = self.resolve_numeric_value("max", default_fallback=9)
+        step_val = self.resolve_numeric_value("step", default_fallback=1)
         exclude_raw = self.runtime_values.get("exclude", "")
 
-        if min_val is not None and max_val is not None and min_val > max_val:
+        if min_val > max_val:
             self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
 
-        if step_val is not None and step_val <= 0:
+        if step_val <= 0:
             self.errors["step"] = "Step value interval must be a positive integer greater than 0."
 
         if exclude_raw:
             elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
             parsed_integers = []
             for item in elements:
+                if re.match(r"^<([^>]+)>$", item):
+                    try:
+                        resolved_item = self.resolve_token_dependency(item)
+                        parsed_integers.append(int(float(resolved_item)))
+                        continue
+                    except Exception:
+                        pass
+                        
                 if not re.match(r"^-?\d+$", item):
                     self.errors["exclude"] = f"Value '{item}' inside exclude filter is not a valid integer."
                     break
@@ -862,11 +890,15 @@ class RandomIntegerEntity(BaseEntity):
         """
         🎯 CALCULATES REAL DYNAMIC INTEGERS ACCORDING TO USER PROPERTIES
         """
-        # Read from runtime_values first, fallback to standard defaults if empty
-        min_val = self.runtime_values.get("min") if self.runtime_values.get("min") is not None else -9
-        max_val = self.runtime_values.get("max") if self.runtime_values.get("max") is not None else 9
-        step_val = self.runtime_values.get("step") if self.runtime_values.get("step") is not None else 1
+        min_val = self.resolve_numeric_value("min", default_fallback=-9)
+        max_val = self.resolve_numeric_value("max", default_fallback=9)
+        step_val = self.resolve_numeric_value("step", default_fallback=1)
         exclude_set = set(self.runtime_values.get("exclude_array", []))
+
+        print(f"    🎲 [RandomIntegerEntity] Processing pool calculations:")
+        print(f"        Bounds Range: {min_val} to {max_val} (Using Step Step Intervals: {step_val})")
+        if exclude_set:
+            print(f"        Exclusion Filter active elements: {exclude_set}")
 
         possible_values = []
         current = min_val
@@ -876,9 +908,12 @@ class RandomIntegerEntity(BaseEntity):
             current += step_val
 
         if not possible_values:
+            print(f"        ⚠️ No legal entries matched requirements! Falling back to min_val boundary default.")
             return str(min_val)
 
-        return str(random.choice(possible_values))
+        selected_choice = str(random.choice(possible_values))
+        print(f"        ⚡ Choices pool matrix generated: {possible_values} ➔ Selected choice: '{selected_choice}'")
+        return selected_choice
 
 
 class RandomDoubleEntity(BaseEntity):
@@ -886,108 +921,97 @@ class RandomDoubleEntity(BaseEntity):
     Validation engine for the 'rand' token pattern (Random Double/Decimal).
     """
     def is_valid(self):
-        # 1. Execute parent class validation to guarantee type checking (e.g., matching "double" inputs)
         if not super().is_valid():
             return False
             
-        min_val = self.runtime_values.get("min")
-        max_val = self.runtime_values.get("max")
-        step_val = self.runtime_values.get("step")
+        min_val = self.resolve_numeric_value("min", default_fallback=0.0)
+        max_val = self.resolve_numeric_value("max", default_fallback=1.0)
+        step_val = self.resolve_numeric_value("step", default_fallback=0.01)
 
-        # 2. Add domain-specific validation constraints for ranges and intervals
-        if min_val is not None and max_val is not None and min_val > max_val:
+        if min_val > max_val:
             self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
 
-        if step_val is not None and step_val <= 0:
+        if step_val <= 0:
             self.errors["step"] = "Step decimal interval must be a positive number greater than 0."
 
         return len(self.errors) == 0
 
     def evaluate_output(self):
         """
-        🎯 MEMORY SAFE CALCULATION: Computes random decimal steps mathematically 
-        without instantiating large lists or hitting floating-point accumulation drift.
+        🎯 MEMORY SAFE CALCULATION: Computes random decimal steps mathematically
         """
-        # Ensure safe fallbacks exist if unvalidated or missing
-        min_val = self.runtime_values.get("min") if self.runtime_values.get("min") is not None else 0.0
-        max_val = self.runtime_values.get("max") if self.runtime_values.get("max") is not None else 1.0
-        step_val = self.runtime_values.get("step") if self.runtime_values.get("step") is not None else 0.01
+        min_val = self.resolve_numeric_value("min", default_fallback=0.0)
+        max_val = self.resolve_numeric_value("max", default_fallback=1.0)
+        step_val = self.resolve_numeric_value("step", default_fallback=0.01)
 
-        # Defensive fallback if bounds are invalid
+        print(f"    🎲 [RandomDoubleEntity] Computing dynamic float configurations:")
+        print(f"        Resolved Bounds Range: {min_val} to {max_val} (Step decimal interval: {step_val})")
+
         if min_val >= max_val:
-            return str(round(min_val, 4))
+            val_out = str(round(min_val, 4))
+            print(f"        ⚠️ Boundary logic guard triggered (min >= max) ➔ Output fallback: '{val_out}'")
+            return val_out
 
-        # 1. Find the total distance/span
         total_range = max_val - min_val
-
-        # 2. Determine how many whole steps fit into this range.
-        # Adding a tiny epsilon (1e-9) safely protects against rounding precision loss
-        # dividing float thresholds (e.g., ensuring 0.3 / 0.1 evaluates cleanly to 3 steps).
         max_steps = int((total_range + 1e-9) // step_val)
 
         if max_steps <= 0:
-            return str(round(min_val, 4))
+            val_out = str(round(min_val, 4))
+            print(f"        ⚠️ Steps interval range calculated as zero or empty ➔ Output fallback: '{val_out}'")
+            return val_out
 
-        # 3. Choose a random step multiplier between 0 and max_steps inclusive
         random_step_multiplier = random.randint(0, max_steps)
-
-        # 4. Multiply step size by our random multiplier to get the offset
         result_value = min_val + (random_step_multiplier * step_val)
 
-        # 5. Cap the calculation defensively to prevent float math from overshooting max_val
         if result_value > max_val:
             result_value = max_val
 
-        # 6. Determine decimal places in step_val to dynamically round the outcome
-        # (e.g., if step is 0.001, we want to snap string display to 3 decimal spots)
         step_str = str(step_val)
-        if '.' in step_str:
-            decimal_places = len(step_str.split('.')[1])
-        else:
-            decimal_places = 4 # default sensible baseline fallback
-
-        return str(round(result_value, decimal_places))
+        decimal_places = len(step_str.split('.')[1]) if '.' in step_str else 4
+        final_double_out = str(round(result_value, decimal_places))
+        
+        print(f"        ⚡ Calculated Random Multiplier Step Index: {random_step_multiplier}/{max_steps}")
+        print(f"        ➔ Computed Continuous Decimal Value Outcome: '{final_double_out}'")
+        return final_double_out
     
 
 class PrimeFactorsEntity(BaseEntity):
     """
     Validation and evaluation engine for the 'primeFactors' token pattern.
-    Expects an input field (e.g., 'number') to break down into its prime components.
+    Expects an input field 'number to factor' to break down into its prime components.
     """
     def is_valid(self):
-        # 1. Execute parent validation to guarantee types match structural blueprints
         if not super().is_valid():
             return False
             
-        # Assuming the input key in your schema is named "number"
-        target_num = self.runtime_values.get("number to factor")
+        target_num = self.resolve_numeric_value("number to factor", default_fallback=12)
 
-        if target_num is not None:
-            if target_num <= 1:
-                self.errors["number"] = "The input number must be a positive integer greater than 1."
+        if target_num <= 1:
+            self.errors["number to factor"] = "The input number must be a positive integer greater than 1."
 
         return len(self.errors) == 0
 
     def evaluate_output(self):
         """
         🎯 COMPUTES PRIME FACTORS MATHEMATICALLY
-        Breaks the number down into its prime factors using trial division.
         """
-        # Ensure a safe fallback default if unvalidated or missing
-        n = self.runtime_values.get("number to factor") if self.runtime_values.get("number to factor") is not None else 12
+        n = self.resolve_numeric_value("number to factor", default_fallback=12)
+        print(f"    🔢 [PrimeFactorsEntity] Initiating factorization calculation workflow:")
+        print(f"        Target input digit to decompose: {n}")
 
-        # Defensive guard rails
         if n <= 1:
+            print(f"        ⚠️ Input number {n} is <= 1. No factorable matrix available.")
             return ""
 
         factors = []
+        original_n = n
         
-        # Pull out the factor of 2 first
+        # Factor out 2s
         while n % 2 == 0:
             factors.append(2)
             n //= 2
             
-        # Check odd factors up to the square root of n
+        # Factor out odd digits up to sqrt(n)
         factor = 3
         while factor * factor <= n:
             while n % factor == 0:
@@ -995,43 +1019,50 @@ class PrimeFactorsEntity(BaseEntity):
                 n //= factor
             factor += 2
             
-        # If n is still greater than 1, then the remaining n must be prime
         if n > 1:
             factors.append(n)
 
-        # Format output cleanly as a comma-separated string (e.g., "2, 2, 3")
-        return ", ".join(str(f) for f in factors)
-    
+        factors_result_str = ", ".join(str(f) for f in factors)
+        print(f"        ⚡ Factorization chain decomposition completed successfully:")
+        print(f"            {original_n} ➔ [{factors_result_str}]")
+        return factors_result_str
 
 class FormulaEntity(BaseEntity):
     """
     Validation and evaluation engine for the 'formula' token pattern.
-    Delegates syntax integrity and mathematical evaluations to SymPyAssessmentEngine.
     """
     def is_valid(self):
         if not super().is_valid():
             return False
 
-        # 🎯 FIX: Read from runtime_values or fall back cleanly to raw/empty data
         formula_expr = self.runtime_values.get("formula", "")
-        solve_method = self.runtime_values.get("solve method", "leave as formula") # result should be one of these: 'simplify', 'expand polynomial', 'factor polynomial', 'variable substitution', 'leave as formula', the 'leave as formula' is default
+        solve_method = self.runtime_values.get("solve method", "leave as formula")
         variables_str = self.runtime_values.get("variables", "")
-        solve_for_target = self.runtime_values.get("variable substitution", "")
+        
+        # Check both variants from the updated serialization layout
+        solve_for_target = self.runtime_values.get("variable to simplify") or self.runtime_values.get("variable to substitute") or self.runtime_values.get("variable to solve for") or ""
+        self.runtime_values["variable substitution"] = solve_for_target
+        self.runtime_values["variable to solve for"] = solve_for_target
 
-        # 🎯 FIX: If it's a variable substitution node, an empty formula field is completely valid!
+        print(f"    [FormulaEntity.is_valid] Runtime Values:")
+        print(f"        formula_expr: {repr(formula_expr)}")
+        print(f"        solve_method: {repr(solve_method)}")
+        print(f"        solve_for_target: {repr(solve_for_target)}")
+
         if not formula_expr:
-            if solve_method == 'variable substitution':
-                # Seed a safe baseline placeholder in runtime values so SymPy engine doesn't crash
+            if solve_method in ['variable substitution', 'simplify']:
                 self.runtime_values["formula"] = "0"
                 formula_expr = "0"
             else:
                 self.errors["formula"] = "A mathematical expression or equation string is required."
                 return False
         
-        # Only check syntax if we have a string to validate
-        if formula_expr:
-            is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(str(formula_expr))
+        if formula_expr and str(formula_expr).strip() != "0":
+            clean_syntax_check = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '1', str(formula_expr))
+            print(f"        Formula string before SymPy validation check: {repr(clean_syntax_check)}")
+            is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(clean_syntax_check)
             if not is_valid_syntax:
+                print(f"        ❌ SymPy Syntax Check Error found: {syntax_error_msg}")
                 self.errors["formula"] = syntax_error_msg
 
         parsed_variables = []
@@ -1046,16 +1077,16 @@ class FormulaEntity(BaseEntity):
         if "variables" not in self.errors:
             self.runtime_values["parsed_variables_array"] = parsed_variables
 
-        if solve_method == "variable substitution":
-            # 🎯 FIX: Safe fallback if target variable selection dropdown is empty
+        if solve_method in ["variable substitution", "simplify"]:
             if not solve_for_target and parsed_variables:
                 solve_for_target = parsed_variables[0]
+                self.runtime_values["variable to solve for"] = solve_for_target
                 self.runtime_values["variable substitution"] = solve_for_target
             
-            if not solve_for_target:
-                self.errors["variable substitution"] = "You must specify a target variable when using the 'variable substitution' method."
-            elif parsed_variables and (solve_for_target not in parsed_variables):
-                self.errors["variable substitution"] = (
+            if not solve_for_target and formula_expr != "0":
+                self.errors["variable to solve for"] = f"You must specify a target variable when using the '{solve_method}' method."
+            elif parsed_variables and solve_for_target and (solve_for_target not in parsed_variables):
+                self.errors["variable to solve for"] = (
                     f"Target variable '{solve_for_target}' must be present inside your "
                     f"declared variables list: {parsed_variables}."
                 )
@@ -1063,26 +1094,90 @@ class FormulaEntity(BaseEntity):
         return len(self.errors) == 0
 
     def evaluate_output(self):
-        """
-        🎯 CORE FORCE INTERFACE INTERACTION METHOD
-        Produces real-time SymPy computed math string evaluations for live engine previews.
-        """
-        # Read parameters from runtime values, utilizing safe fallbacks if empty
-        formula_expr = self.runtime_values.get("formula")
-        solve_method = self.runtime_values.get("solve method", "leave as formula")
-        parsed_vars = self.runtime_values.get("parsed_variables_array", [])
-        solve_for_target = self.runtime_values.get("variable substitution", "")
+        formula_str = str(self.runtime_values.get("formula", "")).strip()
+        solve_method = str(self.runtime_values.get("solve method", "leave as formula")).strip()
+        var_list = self.runtime_values.get("parsed_variables_array", [])
+        solve_for_target = self.runtime_values.get("variable to solve for", "")
 
-        if formula_expr is None:
-            return "3*x + 5"  # Standard placeholder if field is completely blank
+        print(f"    [FormulaEntity.evaluate_output] Executing...")
+        print(f"        Original string: {repr(formula_str)}")
 
-        # Outsource the processing to our centralized assessment engine layer
-        return SymPyAssessmentEngine.evaluate_formula_operations(
-            expression_str=str(formula_expr),
-            method=solve_method,
-            variables=parsed_vars,
-            solve_for=solve_for_target
-        )
+        if not formula_str:
+            return "0"
+
+        subs_map = self.data.get('substitutions', {}) or {}
+        if not isinstance(subs_map, dict):
+            subs_map = {}
+            
+        for k, v in self.data.items():
+            if k.startswith('sub_') and v is not None:
+                var_name = k.replace('sub_', '').strip()
+                subs_map[var_name] = v
+
+        resolved_subs = {}
+        for var_name, var_value in subs_map.items():
+            if isinstance(var_value, str) and var_value.startswith('<') and var_value.endswith('>'):
+                resolved_subs[var_name] = f"({self.resolve_token_dependency(var_value)})"
+            else:
+                resolved_subs[var_name] = var_value
+
+        def bracket_replacer(match):
+            target_token = match.group(1) if match.group(1) else match.group(2)
+            resolved = f"({self.resolve_token_dependency(f'<{target_token.strip()}>')})"
+            print(f"        🔗 Resolved macro reference <{target_token}> to: {resolved}")
+            return resolved
+
+        processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
+        print(f"        String after macro substitution pipeline: {repr(processed_formula)}")
+
+        local_dict = {var: sp.Symbol(var) for var in var_list}
+        if 'pi' not in local_dict:
+            local_dict['pi'] = sp.pi
+
+        if solve_method in ['leave as formula', 'variable substitution', 'simplify']:
+            local_dict['integrate'] = sp.Integral
+            local_dict['diff'] = sp.Derivative
+            local_dict['limit'] = sp.Limit
+
+        if "\\" in processed_formula:
+            from sympy.parsing.latex import parse_latex
+            parsed_expr = parse_latex(processed_formula)
+            if solve_method not in ['leave as formula', 'variable substitution', 'simplify']:
+                parsed_expr = parsed_expr.doit()
+        else:
+            parsed_expr = sp.parse_expr(processed_formula, local_dict=local_dict, evaluate=False)
+
+        result = parsed_expr
+        
+        if solve_method == 'simplify':
+            if solve_for_target:
+                target_symbol = sp.Symbol(solve_for_target)
+                result = sp.simplify(parsed_expr.doit(), ratio=1.7, measure=lambda expr: expr.count(target_symbol))
+            else:
+                result = sp.simplify(parsed_expr.doit())
+        elif solve_method == 'expand polynomial':
+            result = sp.expand(parsed_expr.doit())
+        elif solve_method == 'factor polynomial':
+            result = sp.factor(parsed_expr.doit())
+        elif solve_method == 'variable substitution':
+            sympy_subs_map = {}
+            for v_name, v_val in resolved_subs.items():
+                if isinstance(v_val, str) and v_val.strip():
+                    try:
+                        sympy_subs_map[sp.Symbol(v_name)] = sp.parse_expr(str(v_val), local_dict=local_dict, evaluate=False)
+                    except Exception:
+                        sympy_subs_map[sp.Symbol(v_name)] = v_val
+                else:
+                    if v_val != "":
+                        sympy_subs_map[sp.Symbol(v_name)] = v_val
+            
+            if sympy_subs_map:
+                with sp.evaluate(False):
+                    result = parsed_expr.subs(sympy_subs_map)
+
+        print(f"        SymPy Final Computed Object: {repr(result)}")
+        self.last_computed_sympy_result = result
+        return str(result)
 
 
 class MatrixEntity(BaseEntity):
@@ -1136,8 +1231,6 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "rand": RandomDoubleEntity,
         "primeFactors": PrimeFactorsEntity,
         "formula": FormulaEntity,
-        "matrix": MatrixEntity,
-        "matrixAnswer": MatrixEntity,
     }
     
     # Fallback to base configuration validator if a custom token model isn't written yet

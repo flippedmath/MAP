@@ -9,7 +9,7 @@ from .models import (
     QuestionBlock, EntitySegment,
     EntityType, EntityUserInput
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token
 import json
 from django.http import JsonResponse
 
@@ -2120,7 +2120,8 @@ def problem_workspace_editor(request, problem_id):
         token_info = {
             "token": entity_type.name,
             "name": pattern.get("name", entity_type.name),
-            "note": pattern.get("note", "")
+            "note": pattern.get("note", ""),
+            "inputs": pattern.get("inputs", {})
         }
         
         if "Dynamic Variables" in name_list:
@@ -2219,151 +2220,106 @@ def problem_workspace_editor(request, problem_id):
 @require_POST
 def validate_component_preview(request):
     try:
-        # 1. Parse batch incoming request payload arrays
         payload = json.loads(request.body)
         entities_list = payload.get('entities', [])
-        trigger_token = payload.get('trigger_token', None)
-
+        
+        print("\n" + "="*60)
+        print("📥 [PREVIEW VIEW] INCOMING REQUEST PAYLOAD")
+        print(f"Total Entities Received: {len(entities_list)}")
+        print(json.dumps(payload, indent=2))
+        print("="*60)
+        
         if not entities_list:
             return JsonResponse({'success': True, 'updated_cache': {}})
 
-        # Map entities into a lookup dictionary for fast resolution
-        entity_pool = {item['token'].lower(): item for item in entities_list}
+        # 🎯 FIX: Build a completely bulletproof sibling ledger using uniform lowercase lookups
+        all_entities_payload = []
+        for item in entities_list:
+            token_raw = item.get('token', '')
+            
+            # Fallback chains to make sure we don't grab empty strings
+            sequence_token_raw = item.get('sequence_token') or item.get('indexed_token') or token_raw
+            archetype_name = re.sub(r'\d+$', '', token_raw)
+            
+            all_entities_payload.append({
+                'token': archetype_name,
+                'sequence_token': str(sequence_token_raw).strip(),
+                'inputs': item.get('inputs', {}) or {}
+            })
+
         updated_cache = {}
 
-        # -------------------------------------------------------------
-        # SERVER-SIDE RECURSIVE VALUE SOLVER
-        # -------------------------------------------------------------
-        def resolve_entity_value(token_id, visited=None):
-            token_id = token_id.lower()
-            if visited is None:
-                visited = set()
+        # Compute each component via framework engine mappings
+        for item in entities_list:
+            token_raw = item.get('token', '')
+            token_id = token_raw
+            archetype_name = re.sub(r'\d+$', '', token_raw)
             
-            if token_id in visited:
-                return "0"  # Prevent cyclic graph infinity loops
-            visited.add(token_id)
-
-            # Check if this node was already computed in this pass
-            if token_id in updated_cache:
-                return updated_cache[token_id]['evaluated_output']
-
-            if token_id not in entity_pool:
-                return "0"
-
-            entity_data = entity_pool[token_id]
-            inputs = entity_data.get('inputs', {})
+            print(f"\n⚙️ [PREVIEW VIEW] Processing: {token_raw} (Archetype: {archetype_name})")
+            print(f"    Inputs sent from JS: {item.get('inputs', {})}")
             
-            formula_str = inputs.get('formula', '').strip()
-            solve_method = inputs.get('solve method', 'leave as formula').strip()
-            variables_raw = inputs.get('variables', '')
+            pattern_blueprint = get_blueprint_for_token(archetype_name)
+            
+            validator_engine = get_entity_validator(
+                token_string=archetype_name,
+                data_payload=item.get('inputs', {}) or {},
+                pattern_blueprint=pattern_blueprint,
+                all_entities_payload=all_entities_payload
+            )
+            
+            # This triggers validation and our updated robust evaluate_output() chain method
+            engine_is_valid = validator_engine.is_valid()
+            print(f"    Validation Status for {token_raw}: {engine_is_valid}")
+            if not engine_is_valid:
+                print(f"    ❌ Engine Validation Errors: {getattr(validator_engine, 'errors', {})}")
 
-            # 🎯 FIX 1: Extract individual dynamic 'sub_var' items from root inputs payload dictionary
-            subs_map = inputs.get('substitutions', {}) or {}
-            if not isinstance(subs_map, dict):
-                subs_map = {}
-                
-            # Merge any flat parameters sent as "sub_x": "value" directly into our map
-            for k, v in inputs.items():
-                if k.startswith('sub_') and v is not None:
-                    var_name = k.replace('sub_', '').strip()
-                    subs_map[var_name] = v
-
-            # 1. Recursively resolve pointer references inside the substitution entries mapping
-            resolved_subs = {}
-            for var_name, var_value in subs_map.items():
-                if isinstance(var_value, str) and var_value.startswith('<') and var_value.endswith('>'):
-                    target_token = var_value.replace('<', '').replace('>', '').strip()
-                    # Recursively resolve the linked token entity's evaluation output string
-                    resolved_subs[var_name] = f"({resolve_entity_value(target_token, visited.copy())})"
-                else:
-                    resolved_subs[var_name] = var_value
-
-            # 2. Recursively resolve pointer references written inside the raw formula string text itself
-            def bracket_replacer(match):
-                target_token = match.group(1) if match.group(1) else match.group(2)
-                target_token = target_token.strip()
-                return f"({resolve_entity_value(target_token, visited.copy())})"
-
-            processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
-
-            # 3. Build variables mapping local dictionary context
-            if isinstance(variables_raw, list):
-                var_list = [str(v).strip() for v in variables_raw if str(v).strip()]
+            if engine_is_valid:
+                try:
+                    evaluated_output = validator_engine.evaluate_output()
+                    print(f"    ✅ Evaluation Successful! Result: {evaluated_output}")
+                except Exception as eval_err:
+                    print(f"    💥 Evaluation Crashed post-validation: {str(eval_err)}")
+                    evaluated_output = "0"
             else:
-                var_list = [v.strip() for v in variables_raw.replace(',', ' ').split() if v.strip()]
+                # Try to evaluate output anyway to parse dependencies safely, fallback to "0" if empty
+                try:
+                    print(f"    ⚠️ Attempting fallback string parsing anyway...")
+                    if item.get('inputs', {}).get('formula'):
+                        evaluated_output = validator_engine.evaluate_output()
+                        print(f"    ✨ Fallback evaluation managed to parse output: {evaluated_output}")
+                    else:
+                        evaluated_output = "0"
+                except Exception as fallback_err:
+                    print(f"    💥 Fallback parsing also failed: {str(fallback_err)}")
+                    evaluated_output = item.get('inputs', {}).get('formula', '0')
 
-            local_dict = {var: sp.Symbol(var) for var in var_list}
-            if 'pi' not in local_dict:
-                local_dict['pi'] = sp.pi
-
-            if solve_method == 'leave as formula' or solve_method == 'variable substitution':
-                local_dict['integrate'] = sp.Integral
-                local_dict['diff'] = sp.Derivative
-                local_dict['limit'] = sp.Limit
-
-            # 4. Parse Math Expression Node via SymPy
-            if not processed_formula:
-                evaluated_output = ""
-                latex_output = ""
+            # Extract LaTeX configurations and symbols from the internal formula outcome
+            if archetype_name.lower().startswith('formula') and hasattr(validator_engine, 'last_computed_sympy_result'):
+                try:
+                    result_obj = validator_engine.last_computed_sympy_result
+                    latex_output = sp.latex(result_obj)
+                    extracted_vars = [str(sym) for sym in result_obj.free_symbols if str(sym) != 'pi']
+                    extracted_vars.sort()
+                except Exception as latex_err:
+                    print(f"    ⚠️ Latex extraction warning: {str(latex_err)}")
+                    latex_output = str(evaluated_output)
+                    extracted_vars = []
             else:
-                if "\\" in processed_formula:
-                    from sympy.parsing.latex import parse_latex
-                    parsed_expr = parse_latex(processed_formula)
-                    if solve_method != 'leave as formula' and solve_method != 'variable substitution':
-                        parsed_expr = parsed_expr.doit()
-                else:
-                    # Parse expression with evaluate=False to keep standard layout presentation intact
-                    parsed_expr = sp.parse_expr(processed_formula, local_dict=local_dict, evaluate=False)
+                latex_output = str(evaluated_output)
+                extracted_vars = []
 
-                result = parsed_expr
-                
-                if solve_method == 'simplify':
-                    # 🚀 FIX: Force evaluation via .doit() to resolve locked numbers/symbols tree branches, 
-                    # then run simplify() to collect terms and reduce cleanly.
-                    result = sp.simplify(parsed_expr.doit())
-                elif solve_method == 'expand polynomial':
-                    result = sp.expand(parsed_expr.doit())
-                elif solve_method == 'factor polynomial':
-                    result = sp.factor(parsed_expr.doit())
-                elif solve_method == 'variable substitution':
-                    sympy_subs_map = {}
-                    for v_name, v_val in resolved_subs.items():
-                        if isinstance(v_val, str) and v_val.strip():
-                            try:
-                                # 🎯 FIX 2: Parse replacement expressions safely with evaluate=False to prevent structural collapse
-                                sympy_subs_map[sp.Symbol(v_name)] = sp.parse_expr(str(v_val), local_dict=local_dict, evaluate=False)
-                            except Exception:
-                                sympy_subs_map[sp.Symbol(v_name)] = v_val
-                        else:
-                            if v_val != "":
-                                sympy_subs_map[sp.Symbol(v_name)] = v_val
-                    
-                    if sympy_subs_map:
-                        # Perform substitution within an unevaluated SymPy block context
-                        with sp.evaluate(False):
-                            result = parsed_expr.subs(sympy_subs_map)
+            # 🎯 FIX: Use the complete sequence token name as the dictionary key
+            sequence_token_id = item.get('sequence_token', token_raw).strip()
 
-                evaluated_output = str(result)
-                latex_output = sp.latex(result)
-
-            # 🚀 FIX: Automatically extract remaining variables/free symbols from the evaluated result
-            # We exclude 'pi' so it isn't listed as an adjustable variable choice
-            extracted_vars = []
-            if processed_formula and hasattr(result, 'free_symbols'):
-                extracted_vars = [str(sym) for sym in result.free_symbols if str(sym) != 'pi']
-                extracted_vars.sort()
-
-            # 5. Populate local caching maps
-            updated_cache[token_id] = {
-                'evaluated_output': evaluated_output,
+            updated_cache[sequence_token_id] = {
+                'evaluated_output': str(evaluated_output),
                 'latex_output': latex_output,
                 'extracted_variables': ", ".join(extracted_vars)
             }
-            return evaluated_output
 
-        # Execute top-down evaluation loop over all requested entities
-        for token_key in list(entity_pool.keys()):
-            resolve_entity_value(token_key)
+        print("\n📤 [PREVIEW VIEW] FINAL UPDATED CACHE RESPONSE OUT")
+        print(json.dumps(updated_cache, indent=2))
+        print("="*60 + "\n")
 
         return JsonResponse({
             'success': True,
@@ -2372,8 +2328,8 @@ def validate_component_preview(request):
         })
 
     except Exception as e:
-        print(f"❌ COMPILER BATCH CONTEXT CRASHED: {str(e)}")
         import traceback
+        print("\n💥 [CRITICAL VIEW EXCEPTION] 💥")
         traceback.print_exc()
         return JsonResponse({
             'success': False,
