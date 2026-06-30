@@ -1206,19 +1206,28 @@ class FormulaEntity(BaseEntity):
         if "variables" not in self.errors:
             self.runtime_values["parsed_variables_array"] = parsed_variables
 
-        if solve_method in ["variable substitution", "simplify"]:
+        # 🎯 DECUPLED METHOD VALIDATION BLOCK
+        if solve_method == "simplify":
+            # 'simplify' strictly requires a target variable to know what to isolate/reduce
             if not solve_for_target and parsed_variables:
                 solve_for_target = parsed_variables[0]
                 self.runtime_values["variable to solve for"] = solve_for_target
                 self.runtime_values["variable substitution"] = solve_for_target
             
             if not solve_for_target and formula_expr != "0":
-                self.errors["variable to solve for"] = f"You must specify a target variable when using the '{solve_method}' method."
+                self.errors["variable to solve for"] = f"You must specify a target variable when using the 'simplify' method."
             elif parsed_variables and solve_for_target and (solve_for_target not in parsed_variables):
                 self.errors["variable to solve for"] = (
                     f"Target variable '{solve_for_target}' must be present inside your "
                     f"declared variables list: {parsed_variables}."
                 )
+
+        elif solve_method == "variable substitution":
+            # Substitution replaces values across the entire expression, meaning a single 
+            # 'Target Variable to Simplify' dropdown is completely unnecessary and unused.
+            # We clear out target variables here so old values don't pollute your backend state payload.
+            self.runtime_values["variable to solve for"] = ""
+            self.runtime_values["variable substitution"] = ""
 
         return len(self.errors) == 0
 

@@ -877,12 +877,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 populateVariablesDropdown(simplifySelect);
             } 
             else if (selectedMethod === 'variable substitution') {
-                if (substitutionWrapper) substitutionWrapper.style.display = 'flex';
+                // 🛑 FIXED: We keep 'substitutionWrapper' hidden so the "target variable" dropdown doesn't show up.
+                // We ONLY display the rows container where actual variable substitutions happen.
                 if (substitutionsWrapper) substitutionsWrapper.style.display = 'flex';
+                
+                // Clear out values on the unneeded selects
                 if (simplifySelect) simplifySelect.value = ""; 
-                populateVariablesDropdown(substitutionSelect);
+                if (substitutionSelect) substitutionSelect.value = "";
+                
                 refreshUnusedVariablesPicker();
-            } 
+            }
             else {
                 if (simplifySelect) simplifySelect.value = "";
                 if (substitutionSelect) substitutionSelect.value = "";
@@ -1009,19 +1013,40 @@ document.addEventListener('DOMContentLoaded', function() {
         card.addEventListener('input', (e) => {
             const target = e.target;
 
-            // 🎯 FIXED: Replaced legacy '.val-input-simplify-target' references with your split input selectors
             if (!target.matches('.val-input-formula, .val-input-solve-method, .val-input-simplify-target, .val-input-substitution-target, .val-substitution-input')) {
                 return;
             }
 
-            // 💾 STATE PERSISTENCE: If the user changed the dropdown, cache their choice on the card immediately
+            // 💾 Just cache the state; do NOT run structural rebuilds for this target here
             if (target.matches('.val-input-simplify-target')) {
                 card.setAttribute('data-selected-variable', target.value);
                 console.log(`%c💾 [STATE PERSIST] Saved user selection state to card attribute: "${target.value}"`, "color: #10b981;");
+                
+                // Skip syncSolveForDropdown() for changes to the dropdown itself to prevent flickering
+                refreshUnusedVariablesPicker();
+                card.dispatchEvent(new Event('change', { bubbles: true }));
+                return;
             }
 
             if (target.matches('.val-substitution-input')) {
                 target.setAttribute('value', target.value);
+            }
+
+            // 👁️ VISIBILITY TOGGLE: If the solve method changed, adjust dropdown display instantly
+            if (target.matches('.val-input-solve-method')) {
+                const solveMethod = target.value;
+                // Find the closest wrapper layout container for the dropdown row
+                const simplifyDropdownContainer = card.querySelector('.val-input-simplify-target')?.closest('.form-group, .input-row, div');
+                
+                if (simplifyDropdownContainer) {
+                    if (solveMethod === 'variable substitution') {
+                        simplifyDropdownContainer.style.display = 'none';
+                        // Clean out client-side cached selection state so it doesn't leak
+                        card.removeAttribute('data-selected-variable'); 
+                    } else {
+                        simplifyDropdownContainer.style.display = ''; // Restore default layout display (block/flex/etc)
+                    }
+                }
             }
 
             if (target.matches('.val-input-formula')) {
@@ -1036,6 +1061,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
+            // Only update dropdown layout structure if things like the formula text change
             syncSolveForDropdown();
             refreshUnusedVariablesPicker();
 
@@ -1624,38 +1650,29 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
 
-                // 🎯 INTERRUPT LOGGING: Tracking dropdown changes
                 const solveForSelect = card.querySelector('.val-input-simplify-target');
                 if (solveForSelect) {
-                    // 📑 READ FROM PERSISTENT STATE ATTRIBUTE INSTEAD OF THE FRESH DOM ELEMENT
                     const currentSelection = card.getAttribute('data-selected-variable') || solveForSelect.value || "";
-                    console.log(`%c👉 [DROPDOWN TRACK] Resolved initial value from state attribute BEFORE processing logic: "${currentSelection}"`, "color: #d97706; font-weight: bold;");
 
                     const existingDropdownOptions = Array.from(solveForSelect.options)
                         .map(opt => opt.value.trim())
                         .filter(val => val.length > 0)
                         .sort();
-                    console.log(`%c👉 [DROPDOWN TRACK] Existing DOM options found: [${existingDropdownOptions.join(', ')}] vs Incoming variables: [${varArray.join(', ')}]`, "color: #7c3aed;");
 
                     const dropdownOptionsStructurallyChanged = 
                         varArray.length !== existingDropdownOptions.length || 
                         !varArray.every((v, i) => v === existingDropdownOptions[i]);
 
-                    console.log(`Checking internal structure metrics for dropdown targets on [${token}]: Options Changed=${dropdownOptionsStructurallyChanged}, Active Value Selection='${currentSelection}'`);
-
                     if (dropdownOptionsStructurallyChanged) {
-                        console.log(`🔄 Variable list updates match structural changes for select dropdown option trees. Rebuilding inner HTML nodes options content lists...`);
+                        console.log(`🔄 Variable list updates match structural changes. Rebuilding options list...`);
                         
-                        // Clear the dropdown safely
                         solveForSelect.options.length = 0;
                         
-                        // Add default option
                         const defaultOpt = document.createElement('option');
                         defaultOpt.value = "";
                         defaultOpt.textContent = "-- select variable --";
                         solveForSelect.appendChild(defaultOpt);
                         
-                        // Append new options structurally
                         varArray.forEach(v => {
                             const opt = document.createElement('option');
                             opt.value = v;
@@ -1666,28 +1683,18 @@ document.addEventListener('DOMContentLoaded', function() {
                         if (typeof syncSubstitutionRows === 'function') {
                             syncSubstitutionRows(card);
                         }
-                    } else {
-                        console.log(`%c⚡ [DROPDOWN TRACK] Structure is identical. Proceeding to evaluation checking paths...`, "color: #059669; font-weight: bold;");
                     }
                     
                     // 🎯 --- SELECTION RESOLUTION PIPELINE ---
-                    console.group("%c🎯 Resolution Evaluation Path", "color: #38bdf8; font-weight: bold;");
                     if (currentSelection && varArray.includes(currentSelection)) {
-                        console.log(`%c✅ PATH 1: Preserving persistent user selection -> "${currentSelection}"`, "color: #4ade80;");
                         solveForSelect.value = currentSelection;
                     } else if ((currentSelection === "" || currentSelection === null) && varArray.length === 1) {
-                        console.log(`%c🔥 PATH 2: Dropdown was unassigned, but exactly ONE variable was found. Auto-selecting: "${varArray[0]}"`, "color: #f472b6; font-weight: bold;");
                         solveForSelect.value = varArray[0];
-                        // Cache it on the card so it sticks
                         card.setAttribute('data-selected-variable', varArray[0]);
                     } else {
-                        console.log(`%c❌ PATH 3: Current selection "${currentSelection}" is invalid or unresolvable against array. Forcing back to index 0 (empty string).`, "color: #f87171;");
                         solveForSelect.value = '';
                         card.removeAttribute('data-selected-variable');
                     }
-                    console.groupEnd();
-
-                    console.log(`%c👉 [DROPDOWN TRACK] Final value of '.val-input-simplify-target' AFTER processing logic completed: "${solveForSelect.value}"`, "color: #0284c7; font-weight: bold;");
                 } else {
                     console.warn("%c❌ [DROPDOWN TRACK] Looked for selector '.val-input-simplify-target' on card but found nothing!", "color: #ef4444; font-weight: bold;");
                 }
