@@ -135,6 +135,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (inputsContainer) inputsContainer.innerHTML = '';
         if (tokensLedger) tokensLedger.innerHTML = '';
 
+        // Silence canvas updates during generation, run it once at the end
+        window.isHydratingWorkspace = true;
         segments.forEach((segment, idx) => {
             console.group(`Segment Iterator Node [Index: ${idx}] ➔ Processing: <${segment.token}>`);
             const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
@@ -168,6 +170,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             console.groupEnd();
         });
+
+        window.isHydratingWorkspace = false;
 
         // console.log("Finalizing generation tasks: Re-indexing container alignment layers...");
         checkEmptyColumns();
@@ -1089,6 +1093,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // LIVE PREVIEW SIMULATION RENDERING ENGINE (DYNAMIC RE-CALCULATION)
     // -------------------------------------------------------------
     function updateWorkspaceSimulationPreview() {
+        if (window.isHydratingWorkspace) return; // 🛑 Halt execution during hydration loop
         console.group("%c🖥️ [Canvas Preview] Triggering Markdown Render Pass", "color: #a855f7; font-weight: bold;");
         const renderTarget = document.getElementById('simulation-render-target');
         if (!renderTarget) {
@@ -1650,55 +1655,71 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
 
+                // 🎯 FIXED DROPDOWN TRACK OVERRIDE
                 const solveForSelect = card.querySelector('.val-input-simplify-target');
                 if (solveForSelect) {
-                    const currentSelection = card.getAttribute('data-selected-variable') || solveForSelect.value || "";
+                    const methodSelect = card.querySelector('.val-input-solve-method');
+                    const activeMethod = methodSelect ? methodSelect.value : "";
+                    const simplifyDropdownContainer = solveForSelect.closest('.form-group, .input-row, div');
 
-                    const existingDropdownOptions = Array.from(solveForSelect.options)
-                        .map(opt => opt.value.trim())
-                        .filter(val => val.length > 0)
-                        .sort();
+                    // If the card is configured for variable substitution, hide this element wrapper row out of view
+                    if (activeMethod === 'variable substitution') {
+                        if (simplifyDropdownContainer) {
+                            simplifyDropdownContainer.style.display = 'none';
+                        }
+                    } else {
+                        if (simplifyDropdownContainer) {
+                            simplifyDropdownContainer.style.display = '';
+                        }
 
-                    const dropdownOptionsStructurallyChanged = 
-                        varArray.length !== existingDropdownOptions.length || 
-                        !varArray.every((v, i) => v === existingDropdownOptions[i]);
+                        const currentSelection = card.getAttribute('data-selected-variable') || solveForSelect.value || "";
+                        const existingDropdownOptions = Array.from(solveForSelect.options)
+                            .map(opt => opt.value.trim())
+                            .filter(val => val.length > 0)
+                            .sort();
 
-                    if (dropdownOptionsStructurallyChanged) {
-                        console.log(`🔄 Variable list updates match structural changes. Rebuilding options list...`);
+                        const dropdownOptionsStructurallyChanged = 
+                            varArray.length !== existingDropdownOptions.length || 
+                            !varArray.every((v, i) => v === existingDropdownOptions[i]);
+
+                        if (dropdownOptionsStructurallyChanged) {
+                            console.log(`🔄 Variable list updates match structural changes. Rebuilding options list...`);
+                            
+                            solveForSelect.options.length = 0;
+                            
+                            const defaultOpt = document.createElement('option');
+                            defaultOpt.value = "";
+                            defaultOpt.textContent = "-- select variable --";
+                            solveForSelect.appendChild(defaultOpt);
+                            
+                            varArray.forEach(v => {
+                                const opt = document.createElement('option');
+                                opt.value = v;
+                                opt.textContent = v;
+                                solveForSelect.appendChild(opt);
+                            });
+
+                            if (typeof syncSubstitutionRows === 'function') {
+                                syncSubstitutionRows(card);
+                            }
+                        }
                         
-                        solveForSelect.options.length = 0;
-                        
-                        const defaultOpt = document.createElement('option');
-                        defaultOpt.value = "";
-                        defaultOpt.textContent = "-- select variable --";
-                        solveForSelect.appendChild(defaultOpt);
-                        
-                        varArray.forEach(v => {
-                            const opt = document.createElement('option');
-                            opt.value = v;
-                            opt.textContent = v;
-                            solveForSelect.appendChild(opt);
-                        });
-
-                        if (typeof syncSubstitutionRows === 'function') {
-                            syncSubstitutionRows(card);
+                        // 🎯 --- SELECTION RESOLUTION PIPELINE ---
+                        if (currentSelection && varArray.includes(currentSelection)) {
+                            solveForSelect.value = currentSelection;
+                        } else if ((currentSelection === "" || currentSelection === null) && varArray.length === 1) {
+                            solveForSelect.value = varArray[0];
+                            card.setAttribute('data-selected-variable', varArray[0]);
+                        } else {
+                            solveForSelect.value = '';
+                            card.removeAttribute('data-selected-variable');
                         }
                     }
-                    
-                    // 🎯 --- SELECTION RESOLUTION PIPELINE ---
-                    if (currentSelection && varArray.includes(currentSelection)) {
-                        solveForSelect.value = currentSelection;
-                    } else if ((currentSelection === "" || currentSelection === null) && varArray.length === 1) {
-                        solveForSelect.value = varArray[0];
-                        card.setAttribute('data-selected-variable', varArray[0]);
-                    } else {
-                        solveForSelect.value = '';
-                        card.removeAttribute('data-selected-variable');
-                    }
-                } else {
-                    console.warn("%c❌ [DROPDOWN TRACK] Looked for selector '.val-input-simplify-target' on card but found nothing!", "color: #ef4444; font-weight: bold;");
                 }
+                
+                console.groupEnd();
             });
+            
             console.groupEnd(); // End variable parsing loop
 
             console.log("⚡ View components re-indexed. Re-triggering canvas preview compilation pipeline update passes.");
