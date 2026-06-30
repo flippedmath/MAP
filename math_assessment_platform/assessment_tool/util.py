@@ -853,17 +853,80 @@ class RandomIntegerEntity(BaseEntity):
         if not super().is_valid():
             return False
             
+        # 🎯 FIX 1: Read explicitly from raw dict data fields (self.data) 
+        # to capture the unmutated structural macro markup strings (<randInt1>)
+        raw_min = str(self.data.get("min", ""))
+        raw_max = str(self.data.get("max", ""))
+
+        # These methods automatically trace and resolve dynamic dependencies like '<randInt1>'
         min_val = self.resolve_numeric_value("min", default_fallback=-9)
         max_val = self.resolve_numeric_value("max", default_fallback=9)
         step_val = self.resolve_numeric_value("step", default_fallback=1)
         exclude_raw = self.runtime_values.get("exclude", "")
 
+        # ---------------------------------------------------------------------
+        # 🛡️ STATIC STRUCTURAL BLUEPRINT GUARDS (Before Evaluation)
+        # ---------------------------------------------------------------------
+        all_entities = getattr(self, 'all_entities_payload', [])
+
+        # CASE A: Upstream macro is linked to the MIN input field
+        if re.match(r"^<([^>]+)>$", raw_min.strip()):
+            clean_target_token = raw_min.replace("<", "").replace(">", "").strip()
+            target_payload = next(
+                (item for item in all_entities if (item.get("sequence_token") or item.get("indexed_token") or "") == clean_target_token),
+                None
+            )
+            if target_payload:
+                upstream_inputs = target_payload.get("inputs", {})
+                try:
+                    # 🎯 FIX 2: Double-cast float to int to prevent crashing on decimal strings
+                    upstream_max_bound = int(float(upstream_inputs.get("max", 9)))
+                    
+                    # If upstream max outpaces our absolute local max ceiling, block the transaction
+                    if upstream_max_bound > max_val:
+                        self.errors["min"] = (
+                            f"Structural Error: Linked component '<{clean_target_token}>' can reach a maximum boundary "
+                            f"of {upstream_max_bound}, which exceeds this component's maximum bound ({max_val})."
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        # CASE B: Upstream macro is linked to the MAX input field
+        if re.match(r"^<([^>]+)>$", raw_max.strip()):
+            clean_target_token = raw_max.replace("<", "").replace(">", "").strip()
+            target_payload = next(
+                (item for item in all_entities if (item.get("sequence_token") or item.get("indexed_token") or "") == clean_target_token),
+                None
+            )
+            if target_payload:
+                upstream_inputs = target_payload.get("inputs", {})
+                try:
+                    # 🎯 FIX 2: Double-cast float to int to prevent crashing on decimal strings
+                    upstream_min_bound = int(float(upstream_inputs.get("min", -9)))
+                    
+                    # If upstream min plunges lower than our absolute local min floor, block the transaction
+                    if upstream_min_bound < min_val:
+                        self.errors["max"] = (
+                            f"Structural Error: Linked component '<{clean_target_token}>' has a minimum boundary "
+                            f"of {upstream_min_bound}, which falls below this component's minimum bound ({min_val})."
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        # ---------------------------------------------------------------------
+        # 🎯 RUNTIME / DYNAMIC CROSS-INPUT BOUNDS GUARD
+        # ---------------------------------------------------------------------
         if min_val > max_val:
+            # We flag BOTH rows so the UI can highlight whichever fields are invalid
             self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
+            self.errors["max"] = f"Maximum bound ({max_val}) cannot be lower than minimum bound ({min_val})."
 
         if step_val <= 0:
             self.errors["step"] = "Step value interval must be a positive integer greater than 0."
 
+        # ---------------------------------------------------------------------
+        # EXCLUSION LEDGER PARSING LOGIC
+        # ---------------------------------------------------------------------
         if exclude_raw:
             elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
             parsed_integers = []
@@ -921,15 +984,81 @@ class RandomDoubleEntity(BaseEntity):
     Validation engine for the 'rand' token pattern (Random Double/Decimal).
     """
     def is_valid(self):
+        # 1. RUN SUPER FIRST: This populates runtime_values, errors, and uncovers dependencies
         if not super().is_valid():
             return False
             
+        # 2. Extract RAW configurations straight from self.data to catch unparsed string tokens
+        raw_min = str(self.data.get("min", ""))
+        raw_max = str(self.data.get("max", ""))
+
+        # 3. Pull resolved values for structural fallback comparisons
         min_val = self.resolve_numeric_value("min", default_fallback=0.0)
         max_val = self.resolve_numeric_value("max", default_fallback=1.0)
         step_val = self.resolve_numeric_value("step", default_fallback=0.01)
 
+        # ---------------------------------------------------------------------
+        # 🛡️ STATIC STRUCTURAL BLUEPRINT GUARDS (Before dynamic bounds checks)
+        # ---------------------------------------------------------------------
+        all_entities = getattr(self, 'all_entities_payload', []) or []
+
+        # CASE A: An upstream entity macro token is linked to our MIN input field
+        if re.match(r"^<([^>]+)>$", raw_min.strip()):
+            clean_target_token = raw_min.replace("<", "").replace(">", "").strip()
+            
+            # Find the unmutated tracking profile directly from the workspace payload map
+            target_payload = next(
+                (item for item in all_entities 
+                 if (item.get("sequence_token") or item.get("indexed_token") or "") == clean_target_token),
+                None
+            )
+            
+            if target_payload:
+                upstream_inputs = target_payload.get("inputs", {})
+                try:
+                    # Get the structural upper ceiling boundary configured on the linked parent
+                    upstream_max_bound = float(upstream_inputs.get("max", 9))
+                    
+                    # 💥 CRITICAL REJECTION: Linked max cannot exceed local max
+                    if upstream_max_bound > max_val:
+                        self.errors["min"] = (
+                            f"Structural Error: Linked component '<{clean_target_token}>' has a maximum upper bound ({upstream_max_bound}) "
+                            f"that exceeds this component's maximum boundary ceiling ({max_val})."
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        # CASE B: An upstream entity macro token is linked to our MAX input field
+        if re.match(r"^<([^>]+)>$", raw_max.strip()):
+            clean_target_token = raw_max.replace("<", "").replace(">", "").strip()
+            
+            target_payload = next(
+                (item for item in all_entities 
+                 if (item.get("sequence_token") or item.get("indexed_token") or "") == clean_target_token),
+                None
+            )
+            
+            if target_payload:
+                upstream_inputs = target_payload.get("inputs", {})
+                try:
+                    # Get the structural lower floor boundary configured on the linked parent
+                    upstream_min_bound = float(upstream_inputs.get("min", -9))
+                    
+                    # 💥 CRITICAL REJECTION: Linked min cannot fall below local min
+                    if upstream_min_bound < min_val:
+                        self.errors["max"] = (
+                            f"Structural Error: Linked component '<{clean_target_token}>' has a minimum lower bound ({upstream_min_bound}) "
+                            f"that falls below this component's minimum boundary floor ({min_val})."
+                        )
+                except (ValueError, TypeError):
+                    pass
+
+        # ---------------------------------------------------------------------
+        # Standard Runtime Verification Fallbacks
+        # ---------------------------------------------------------------------
         if min_val > max_val:
             self.errors["min"] = f"Minimum bound ({min_val}) cannot be greater than maximum bound ({max_val})."
+            self.errors["max"] = f"Maximum bound ({max_val}) cannot be lower than minimum bound ({min_val})."
 
         if step_val <= 0:
             self.errors["step"] = "Step decimal interval must be a positive number greater than 0."

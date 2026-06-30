@@ -1341,20 +1341,22 @@ document.addEventListener('DOMContentLoaded', function() {
     function getDownstreamDependencies(allEntities, editedToken) {
         if (!editedToken || editedToken === 'initial_load') return allEntities; // Fetch all elements on load
 
-        // 1. Build a map of immediate dependencies (who relies on whom)
+        // 1. Build a map of immediate dependencies (who relies on whom) using UNIQUE IDs
         const parentToChildrenMap = {};
         const childToParentsMap = {};
         
         allEntities.forEach(e => { 
-            const token = e.token;
-            parentToChildrenMap[token] = []; 
-            childToParentsMap[token] = [];
+            // 🎯 FIX: Map keys must use the unique instance ID (e.g., 'randInt1') instead of archetype ('randInt')
+            const uniqueKey = e.indexed_token || e.sequence_token || e.token;
+            parentToChildrenMap[uniqueKey] = []; 
+            childToParentsMap[uniqueKey] = [];
         });
 
         allEntities.forEach(e => {
-            const currentToken = e.token;
+            // 🎯 FIX: Track current component by its unique instance ID
+            const currentToken = e.indexed_token || e.sequence_token || e.token;
             
-            // 🛠️ FIX 1: Scan ALL values inside the inputs dictionary (handles fields like min, max, value, formula)
+            // Scan ALL values inside the inputs dictionary (handles fields like min, max, value, formula)
             const inputStrings = [];
             Object.values(e.inputs || {}).forEach(val => {
                 if (typeof val === 'string') {
@@ -1367,18 +1369,15 @@ document.addEventListener('DOMContentLoaded', function() {
             
             const combinedInputText = inputStrings.join(' ');
 
-            // 🛠️ FIX 2: Universal regex matching any token tags (e.g., <randInt1>, formula2, primeFactors3)
-            // Matches text inside angle brackets OR word text blocks immediately followed by digits
+            // Universal regex matching any token tags (e.g., <randInt1>, formula2, primeFactors3)
             const regex = /(?:<([a-zA-Z0-9_]+)>)|([a-zA-Z]+)(\d+)/gi;
             let match;
             const combinedMatches = [];
 
             while ((match = regex.exec(combinedInputText)) !== null) {
-                // If it matched a bracket group like <randInt1>, extract index group 1
                 if (match[1]) {
                     combinedMatches.push(match[1]);
                 } else {
-                    // Otherwise it matched token text + digit (e.g. formula2), assemble it
                     combinedMatches.push((match[2] + match[3]));
                 }
             }
@@ -1387,7 +1386,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const uniqueDeps = [...new Set(combinedMatches)];
 
             uniqueDeps.forEach(parentDep => {
-                // If the dependency exists as a valid workspace entity in our current ledger tracking map
+                // Now this lookup succeeds perfectly because keys like 'randInt1' are registered!
                 if (parentToChildrenMap[parentDep]) {
                     if (!parentToChildrenMap[parentDep].includes(currentToken)) {
                         parentToChildrenMap[parentDep].push(currentToken);
@@ -1427,7 +1426,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // 5. Filter all entities down to our completed dependency group map
-        return allEntities.filter(e => affected.has(e.token));
+        return allEntities.filter(e => {
+            const uniqueKey = e.indexed_token || e.sequence_token || e.token;
+            return affected.has(uniqueKey);
+        });
     }
 
 
@@ -1448,6 +1450,7 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log(`Step 2: Tracking dependencies affected by event driver [${triggeringToken || 'initial_load'}]:`, affectedEntities);
 
         if (affectedEntities.length === 0 && !options.forceRefresh) {
+            console.log(`triggeringToken: ${triggeringToken}`);
             console.warn("⚠️ No relevant components matched tree criteria. Network communication suppressed.");
             console.groupEnd();
             return;
@@ -1476,6 +1479,36 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(data => {
             console.group(`%c📥 [Network Sync Response Received]`, "background: #059669; color: white; padding: 2px 6px; border-radius: 4px;");
             console.log("Server payload returned object data:", data);
+
+            const errorBanner = document.getElementById('workspace-validation-error-banner');
+            const errorsList = document.getElementById('workspace-validation-errors-list');
+            
+            // Clear out any old lingering feedback items
+            errorsList.innerHTML = '';
+            
+            // Check if errors exist in the payload object
+            if (data.errors && Object.keys(data.errors).length > 0) {
+                errorBanner.style.display = 'flex'; // Unhide banner block
+                
+                // Loop through each component variable signature (e.g., 'rand1')
+                Object.entries(data.errors).forEach(([tokenKey, fieldErrors]) => {
+                    // Loop through individual field failures on that component card
+                    Object.entries(fieldErrors).forEach(([fieldKey, errorMessage]) => {
+                        const errorItem = document.createElement('div');
+                        errorItem.style.display = 'flex';
+                        errorItem.style.gap = '6px';
+                        errorItem.style.marginBottom = '2px';
+                        errorItem.innerHTML = `
+                            <span style="color: #ef4444; font-weight: 700;">[${tokenKey} ➔ ${fieldKey.toUpperCase()}]:</span>
+                            <span style="color: #b91c1c;">${errorMessage}</span>
+                        `;
+                        errorsList.appendChild(errorItem);
+                    });
+                });
+            } else {
+                // Safe transaction state reached: keep banner cleanly hidden away
+                errorBanner.style.display = 'none';
+            }
 
             // 🎯 RACE CONDITION GUARD
             if (currentTimestamp !== activeBatchSyncTimestamp) {

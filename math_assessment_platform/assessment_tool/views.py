@@ -2230,7 +2230,7 @@ def validate_component_preview(request):
         print("="*60)
         
         if not entities_list:
-            return JsonResponse({'success': True, 'updated_cache': {}})
+            return JsonResponse({'success': True, 'updated_cache': {}, 'errors': {}})
 
         # 🎯 FIX: Build a completely bulletproof sibling ledger using uniform lowercase lookups
         all_entities_payload = []
@@ -2248,12 +2248,15 @@ def validate_component_preview(request):
             })
 
         updated_cache = {}
+        # 🚨 NEW: Create a dynamic map container to catch any failed blueprint conditions
+        global_errors_ledger = {}
 
         # Compute each component via framework engine mappings
         for item in entities_list:
             token_raw = item.get('token', '')
             token_id = token_raw
             archetype_name = re.sub(r'\d+$', '', token_raw)
+            sequence_token_id = item.get('sequence_token', token_raw).strip()
             
             print(f"\n⚙️ [PREVIEW VIEW] Processing: {token_raw} (Archetype: {archetype_name})")
             print(f"    Inputs sent from JS: {item.get('inputs', {})}")
@@ -2270,8 +2273,13 @@ def validate_component_preview(request):
             # This triggers validation and our updated robust evaluate_output() chain method
             engine_is_valid = validator_engine.is_valid()
             print(f"    Validation Status for {token_raw}: {engine_is_valid}")
+            
             if not engine_is_valid:
-                print(f"    ❌ Engine Validation Errors: {getattr(validator_engine, 'errors', {})}")
+                engine_errors = getattr(validator_engine, 'errors', {})
+                print(f"    ❌ Engine Validation Errors: {engine_errors}")
+                # 🚨 NEW: Record the component failure messages associated with its distinct token id
+                if engine_errors:
+                    global_errors_ledger[sequence_token_id] = engine_errors
 
             if engine_is_valid:
                 try:
@@ -2308,9 +2316,6 @@ def validate_component_preview(request):
                 latex_output = str(evaluated_output)
                 extracted_vars = []
 
-            # 🎯 FIX: Use the complete sequence token name as the dictionary key
-            sequence_token_id = item.get('sequence_token', token_raw).strip()
-
             updated_cache[sequence_token_id] = {
                 'evaluated_output': str(evaluated_output),
                 'latex_output': latex_output,
@@ -2319,11 +2324,15 @@ def validate_component_preview(request):
 
         print("\n📤 [PREVIEW VIEW] FINAL UPDATED CACHE RESPONSE OUT")
         print(json.dumps(updated_cache, indent=2))
+        if global_errors_ledger:
+            print(f"🚨 ACTIVE STRUCTURAL ERRORS PASSING DOWNSTREAM: {global_errors_ledger}")
         print("="*60 + "\n")
 
+        # 🎯 FIX: Return 'errors' inside the JSON payload dictionary to clear or show the banner
         return JsonResponse({
-            'success': True,
+            'success': len(global_errors_ledger) == 0,
             'updated_cache': updated_cache,
+            'errors': global_errors_ledger,
             'error': None
         })
 
@@ -2334,6 +2343,7 @@ def validate_component_preview(request):
         return JsonResponse({
             'success': False,
             'updated_cache': {},
+            'errors': {},
             'error': f"Math Evaluation Warning: {str(e)}"
         }, status=400)
 
