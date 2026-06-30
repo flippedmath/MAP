@@ -1009,9 +1009,15 @@ document.addEventListener('DOMContentLoaded', function() {
         card.addEventListener('input', (e) => {
             const target = e.target;
 
-            // 🎯 FIXED: Replaced legacy '.val-input-solve-for' references with your split input selectors
+            // 🎯 FIXED: Replaced legacy '.val-input-simplify-target' references with your split input selectors
             if (!target.matches('.val-input-formula, .val-input-solve-method, .val-input-simplify-target, .val-input-substitution-target, .val-substitution-input')) {
                 return;
+            }
+
+            // 💾 STATE PERSISTENCE: If the user changed the dropdown, cache their choice on the card immediately
+            if (target.matches('.val-input-simplify-target')) {
+                card.setAttribute('data-selected-variable', target.value);
+                console.log(`%c💾 [STATE PERSIST] Saved user selection state to card attribute: "${target.value}"`, "color: #10b981;");
             }
 
             if (target.matches('.val-substitution-input')) {
@@ -1301,9 +1307,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 const solveMethod = card.querySelector('.val-input-solve-method')?.value || "leave as formula";
                 inputsCollected["solve method"] = solveMethod;
                 
-                // Extract values dynamically based on what was actively displayed
-                const simplifyVal = card.querySelector('.val-input-simplify-target')?.value || "";
-                const substitutionVal = card.querySelector('.val-input-substitution-target')?.value || "";
+                // 🎯 FORCE LIVE VALUE EVALUATION VIA COMBINED SELECTORS
+                const simplifySelect = card.querySelector('.val-input-simplify-target');
+                const substitutionSelect = card.querySelector('.val-input-substitution-target');
+
+                // Read values directly using indexed selections to bypass timing delays
+                const simplifyVal = simplifySelect && simplifySelect.selectedIndex >= 0 ? 
+                                    simplifySelect.options[simplifySelect.selectedIndex].value : "";
+                                    
+                const substitutionVal = substitutionSelect && substitutionSelect.selectedIndex >= 0 ? 
+                                        substitutionSelect.options[substitutionSelect.selectedIndex].value : "";
+
+                // 🎯 Explicitly save these back to the payload keys
+                inputsCollected["variable to simplify"] = simplifyVal;
+                inputsCollected["variable to substitute"] = substitutionVal;
 
                 // 🎯 Unify the active value under a single backend variable namespace for Python processing
                 const chosenTarget = (solveMethod === 'simplify') ? simplifyVal : ((solveMethod === 'variable substitution') ? substitutionVal : "");
@@ -1553,7 +1570,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 if (baseArchetype === 'formula') {
                     if (!targetDisplay) {
-                        // console.log("Display pane layer for math equations is missing. Rebuilding output widget elements dynamically...");
                         const fieldsWrapper = card.querySelector('.component-fields-wrapper');
                         if (fieldsWrapper) {
                             targetDisplay = document.createElement('div');
@@ -1564,17 +1580,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
 
                     if (targetDisplay && typeof katex !== 'undefined') {
-                        // console.log(`Rendering Katex macro matrix for formula matching output string.`);
                         katex.render(result.latex_output, targetDisplay, { throwOnError: false });
                     } else if (typeof katex === 'undefined') {
                         console.error("❌ KaTeX script dependencies are not present on page framework view layout.");
                     }
                 } else {
                     if (targetDisplay) {
-                        // console.log(`Injecting primitive value plain string output into display container target row content.`);
                         targetDisplay.textContent = result.evaluated_output;
                     }
                 }
+
+                // 🔍 DEBUG LOG: Look for select elements inside the card to verify their class names
+                const allSelectsOnCard = Array.from(card.querySelectorAll('select')).map(s => ({ className: s.className, name: s.name, value: s.value }));
+                console.log("🔍 [DEBUG] Dropdowns currently existing on this component card:", allSelectsOnCard);
 
                 const varsInput = card.querySelector('.val-input-variables');
                 if (varsInput && result.extracted_variables !== undefined) {
@@ -1591,7 +1609,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         .map(row => row.getAttribute('data-var-name'));
 
                     const unusedVars = varArray.filter(v => !currentlyAssignedVars.includes(v));
-                    // console.log(`Evaluated system variables allocation layer profile: Total Algebraic List=[${varArray}], Extracted Available options=[${unusedVars}]`);
 
                     if (unusedVars.length === 0) {
                         unusedVariablesPicker.parentElement.style.display = 'none';
@@ -1607,47 +1624,73 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
 
-                const solveForSelect = card.querySelector('.val-input-solve-for');
-                if (solveForSelect && solveForSelect.offsetWidth > 0 && solveForSelect.offsetHeight > 0) {
+                // 🎯 INTERRUPT LOGGING: Tracking dropdown changes
+                const solveForSelect = card.querySelector('.val-input-simplify-target');
+                if (solveForSelect) {
+                    // 📑 READ FROM PERSISTENT STATE ATTRIBUTE INSTEAD OF THE FRESH DOM ELEMENT
+                    const currentSelection = card.getAttribute('data-selected-variable') || solveForSelect.value || "";
+                    console.log(`%c👉 [DROPDOWN TRACK] Resolved initial value from state attribute BEFORE processing logic: "${currentSelection}"`, "color: #d97706; font-weight: bold;");
+
                     const existingDropdownOptions = Array.from(solveForSelect.options)
                         .map(opt => opt.value.trim())
                         .filter(val => val.length > 0)
                         .sort();
+                    console.log(`%c👉 [DROPDOWN TRACK] Existing DOM options found: [${existingDropdownOptions.join(', ')}] vs Incoming variables: [${varArray.join(', ')}]`, "color: #7c3aed;");
 
                     const dropdownOptionsStructurallyChanged = 
                         varArray.length !== existingDropdownOptions.length || 
                         !varArray.every((v, i) => v === existingDropdownOptions[i]);
 
-                    const currentSelection = solveForSelect.value;
                     console.log(`Checking internal structure metrics for dropdown targets on [${token}]: Options Changed=${dropdownOptionsStructurallyChanged}, Active Value Selection='${currentSelection}'`);
 
                     if (dropdownOptionsStructurallyChanged) {
                         console.log(`🔄 Variable list updates match structural changes for select dropdown option trees. Rebuilding inner HTML nodes options content lists...`);
                         
-                        let selectHtml = '<option value="">-- select variable --</option>';
+                        // Clear the dropdown safely
+                        solveForSelect.options.length = 0;
+                        
+                        // Add default option
+                        const defaultOpt = document.createElement('option');
+                        defaultOpt.value = "";
+                        defaultOpt.textContent = "-- select variable --";
+                        solveForSelect.appendChild(defaultOpt);
+                        
+                        // Append new options structurally
                         varArray.forEach(v => {
-                            const selectedAttr = (v === currentSelection) ? 'selected="selected"' : '';
-                            selectHtml += `<option value="${v}" ${selectedAttr}>${v}</option>`;
+                            const opt = document.createElement('option');
+                            opt.value = v;
+                            opt.textContent = v;
+                            solveForSelect.appendChild(opt);
                         });
-                        
-                        solveForSelect.innerHTML = selectHtml;
-                        
-                        if (currentSelection && varArray.includes(currentSelection)) {
-                            solveForSelect.value = currentSelection;
-                        } else {
-                            solveForSelect.value = '';
-                        }
 
-                        if (varsInput) {
-                            varsInput.dispatchEvent(new Event('input', { bubbles: true }));
-                            varsInput.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
                         if (typeof syncSubstitutionRows === 'function') {
                             syncSubstitutionRows(card);
                         }
+                    } else {
+                        console.log(`%c⚡ [DROPDOWN TRACK] Structure is identical. Proceeding to evaluation checking paths...`, "color: #059669; font-weight: bold;");
                     }
+                    
+                    // 🎯 --- SELECTION RESOLUTION PIPELINE ---
+                    console.group("%c🎯 Resolution Evaluation Path", "color: #38bdf8; font-weight: bold;");
+                    if (currentSelection && varArray.includes(currentSelection)) {
+                        console.log(`%c✅ PATH 1: Preserving persistent user selection -> "${currentSelection}"`, "color: #4ade80;");
+                        solveForSelect.value = currentSelection;
+                    } else if ((currentSelection === "" || currentSelection === null) && varArray.length === 1) {
+                        console.log(`%c🔥 PATH 2: Dropdown was unassigned, but exactly ONE variable was found. Auto-selecting: "${varArray[0]}"`, "color: #f472b6; font-weight: bold;");
+                        solveForSelect.value = varArray[0];
+                        // Cache it on the card so it sticks
+                        card.setAttribute('data-selected-variable', varArray[0]);
+                    } else {
+                        console.log(`%c❌ PATH 3: Current selection "${currentSelection}" is invalid or unresolvable against array. Forcing back to index 0 (empty string).`, "color: #f87171;");
+                        solveForSelect.value = '';
+                        card.removeAttribute('data-selected-variable');
+                    }
+                    console.groupEnd();
+
+                    console.log(`%c👉 [DROPDOWN TRACK] Final value of '.val-input-simplify-target' AFTER processing logic completed: "${solveForSelect.value}"`, "color: #0284c7; font-weight: bold;");
+                } else {
+                    console.warn("%c❌ [DROPDOWN TRACK] Looked for selector '.val-input-simplify-target' on card but found nothing!", "color: #ef4444; font-weight: bold;");
                 }
-                console.groupEnd();
             });
             console.groupEnd(); // End variable parsing loop
 
@@ -1964,9 +2007,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 if (baseToken === 'formula') {
-                    const solveForSelect = card.querySelector('.val-input-solve-for');
+                    const solveForSelect = card.querySelector('.val-input-simplify-target');
                     // Ensure the key exists even if empty to maintain database schema consistency
-                    inputValues['variable to solve for'] = solveForSelect ? solveForSelect.value.trim() : '';
+                    inputValues['variable to simplify'] = solveForSelect ? solveForSelect.value.trim() : '';
                 }
 
                 // 2. EXTRACTION: Standard Wrapper-based inputs
@@ -1980,7 +2023,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else {
                         const interactiveField = wrapper.querySelector('input, select');
                         // Exclude inputs that are part of the 'solve-for' dropdown already captured above
-                        if (interactiveField && !interactiveField.classList.contains('val-input-solve-for')) {
+                        if (interactiveField && !interactiveField.classList.contains('val-input-simplify-target')) {
                             inputValues[inputKey] = interactiveField.value.trim();
                         }
                     }
@@ -2333,7 +2376,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 delete debouncedNetworkDispatches[cardId];
 
                 console.group(`%c🚀 Debounce Interval Trigger Window Closed ➔ Dispatching [${cardId}]`, "background: #10b981; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;");
-                // console.log("Current targeting element select dropdown value node tracking before network handshake:", card.querySelector('.val-input-solve-for')?.value);
+                // console.log("Current targeting element select dropdown value node tracking before network handshake:", card.querySelector('.val-input-simplify-target')?.value);
                 console.groupEnd();
 
                 if (typeof dispatchWorkspaceBatchSync === 'function') {
