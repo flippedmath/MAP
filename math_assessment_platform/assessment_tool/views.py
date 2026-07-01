@@ -2131,11 +2131,12 @@ def problem_workspace_editor(request, problem_id):
 
     # 2. Load existing segments for *this* specific problem
     saved_segments_records = EntitySegment.objects.filter(problem=problem).order_by('id')
-    loaded_segments = []
+    
+    # 🎯 FIRST: Build the full workspace environment registry for cross-component lookups
+    all_entities_payload = []
+    prepped_segments = []
     
     for segment in saved_segments_records:
-        # 🎯 FIX: Defensively verify if content is already a dictionary (Django JSONField auto-decode) 
-        # or if it needs a string fallback conversion pass.
         if isinstance(segment.content, dict):
             content_data = segment.content
         elif isinstance(segment.content, str) and segment.content.strip():
@@ -2146,17 +2147,25 @@ def problem_workspace_editor(request, problem_id):
         else:
             content_data = {}
 
-        # Strip internal schema parameters out of user input values before sending to the card form layouts
+        token_name = segment.problem_type_id_originator.name
+        sequence_token = content_data.get("sequence_token") or token_name
+        archetype_name = re.sub(r'\d+$', '', token_name)
+
+        all_entities_payload.append({
+            'token': archetype_name,
+            'sequence_token': str(sequence_token).strip(),
+            'inputs': content_data,
+            'simulated_value': "" # Fresh pass calculation target
+        })
+        prepped_segments.append((segment, content_data, token_name, sequence_token, archetype_name))
+
+    loaded_segments = []
+    # 🎯 SECOND: Process each asset using the shared environmental ledger context
+    for segment, content_data, token_name, sequence_token, archetype_name in prepped_segments:
         clean_inputs = dict(content_data)
         clean_inputs.pop("answer_field", None)
-        
-        # Pull down the sequence tracking token string if it exists (e.g. "randInt2")
-        sequence_token = clean_inputs.pop("sequence_token", None) 
+        clean_inputs.pop("sequence_token", None)
 
-        # 🚀 NEW: Rehydrate the validator class to calculate simulated preview values dynamically
-        token_name = segment.problem_type_id_originator.name
-        
-        # Parse the archetype blueprint rules cleanly
         blueprint_pattern = segment.problem_type_id_originator.format_pattern
         if isinstance(blueprint_pattern, str):
             try:
@@ -2164,24 +2173,32 @@ def problem_workspace_editor(request, problem_id):
             except json.JSONDecodeError:
                 blueprint_pattern = {}
 
-        # Rebuild payload container object matching validator structure interface rules
-        rebuilt_payload = {"token": token_name, "inputs": content_data}
-        validator = get_entity_validator(token_name, rebuilt_payload, blueprint_pattern)
+        # 🎯 FIX: Pass content_data directly, and supply the global entities environment map
+        validator = get_entity_validator(
+            token_string=archetype_name, 
+            data_payload=content_data, 
+            pattern_blueprint=blueprint_pattern,
+            all_entities_payload=all_entities_payload
+        )
         
         simulated_value = "???"
         if validator.is_valid():
             try:
-                simulated_value = validator.evaluate_output()
+                simulated_value = str(validator.evaluate_output())
+                # Update our environment tracker so subsequent blocks down-the-line read this value
+                target_entry = next((x for x in all_entities_payload if x['sequence_token'] == sequence_token), None)
+                if target_entry:
+                    target_entry['simulated_value'] = simulated_value
             except Exception:
                 simulated_value = "⚠️ Error"
 
         loaded_segments.append({
             "id": segment.id,
-            "token": token_name, # Keeps database archetype clear ("randInt")
-            "sequence_token": sequence_token or token_name, # Falls back gracefully if old row
+            "token": archetype_name,
+            "sequence_token": sequence_token,
             "points": segment.points,
             "inputs": clean_inputs,
-            "simulated_value": simulated_value # 🚀 Transmit calculated variable value to frontend
+            "simulated_value": simulated_value
         })
 
     # 3. Safely pull Quill rich text from QuestionBlock
@@ -2238,46 +2255,99 @@ def validate_component_preview(request):
             token_raw = item.get('token', '')
             
             # Fallback chains to make sure we don't grab empty strings
-            sequence_token_raw = item.get('sequence_token') or item.get('indexed_token') or token_raw
+            sequence_token_raw = item.get('sequence_token') or token_raw
             archetype_name = re.sub(r'\d+$', '', token_raw)
-            
+            raw_sim_value = item.get('simulated_value')
+            # 🎯 Safe extraction: ensure null, "None", and empty strings all normalize to a clean ""
+            if raw_sim_value is None or str(raw_sim_value).strip() in ["", "None", "null"]:
+                clean_sim_value = ""
+            else:
+                clean_sim_value = str(raw_sim_value).strip()
+
             all_entities_payload.append({
                 'token': archetype_name,
                 'sequence_token': str(sequence_token_raw).strip(),
-                'inputs': item.get('inputs', {}) or {}
+                'inputs': item.get('inputs', {}) or {},
+                'simulated_value': clean_sim_value
             })
 
+        trigger_token = payload.get('trigger_token', '')
+        mutation_targets = payload.get('mutation_targets', [trigger_token]) # Fallback to just trigger if missing
+        
         updated_cache = {}
-        # 🚨 NEW: Create a dynamic map container to catch any failed blueprint conditions
         global_errors_ledger = {}
 
-        # Compute each component via framework engine mappings
+        # 1. Map entities by sequence_token for O(1) out-of-order topological tree navigation
+        entities_map = {}
         for item in entities_list:
             token_raw = item.get('token', '')
-            token_id = token_raw
-            archetype_name = re.sub(r'\d+$', '', token_raw)
-            sequence_token_id = item.get('sequence_token', token_raw).strip()
+            seq_id = item.get('sequence_token', token_raw).strip()
+            entities_map[seq_id] = item
+
+        # 2. 🔀 TOPOLOGICAL SORT: Arrange targets so dependencies compute before consumers
+        ordered_targets = []
+        visited = set()
+
+        def dfs_topological_sort(node_id):
+            if node_id in visited:
+                return
+            if node_id not in entities_map:
+                return
             
-            print(f"\n⚙️ [PREVIEW VIEW] Processing: {token_raw} (Archetype: {archetype_name})")
+            # Extract inputs to scan for raw macro injections like <randInt1>
+            current_item = entities_map[node_id]
+            input_text_blob = json.dumps(current_item.get('inputs', {}))
+            parent_tokens = re.findall(r'(?:<([a-zA-Z0-9_]+)>)', input_text_blob)
+            
+            for parent_id in parent_tokens:
+                # If a structural dependency exists inside our execution track, solve it first
+                if parent_id in mutation_targets:
+                    dfs_topological_sort(parent_id)
+            
+            visited.add(node_id)
+            ordered_targets.append(node_id)
+
+        for target in mutation_targets:
+            dfs_topological_sort(target)
+
+        print(f"🔀 [DAG SORT] Original Execution Order: {mutation_targets}")
+        print(f"🎯 [DAG SORT] Resolved Topological Order: {ordered_targets}")
+
+        # 3. Iterate sequentially through our safely ordered DAG pipeline
+        for sequence_token_id in ordered_targets:
+            item = entities_map[sequence_token_id]
+            token_raw = item.get('token', '')
+            archetype_name = re.sub(r'\d+$', '', token_raw)
+            
+            print(f"\n⚙️ [PREVIEW VIEW] Processing: {sequence_token_id} (Archetype: {archetype_name})")
             print(f"    Inputs sent from JS: {item.get('inputs', {})}")
             
             pattern_blueprint = get_blueprint_for_token(archetype_name)
+
+            entity_inputs = item.get('inputs', {}) or {}
+            entity_inputs['sequence_token'] = sequence_token_id
             
+            # 🎯 RESHRESH LOCK-BREAKER: If this target is a downstream descendant (not the driver card itself), 
+            # wipe out its stale simulated_value so it's forced to re-roll matching its new boundary changes.
+            if sequence_token_id != trigger_token and archetype_name.lower() in ['rand', 'randint']:
+                target_payload = next((x for x in all_entities_payload if x.get("sequence_token") == sequence_token_id), None)
+                if target_payload:
+                    print(f"        🗑️ [CACHE RESET] Wiping stale state for linked descendant random card: {sequence_token_id}")
+                    target_payload['simulated_value'] = ""
+
             validator_engine = get_entity_validator(
                 token_string=archetype_name,
-                data_payload=item.get('inputs', {}) or {},
+                data_payload=entity_inputs,
                 pattern_blueprint=pattern_blueprint,
                 all_entities_payload=all_entities_payload
             )
             
-            # This triggers validation and our updated robust evaluate_output() chain method
             engine_is_valid = validator_engine.is_valid()
-            print(f"    Validation Status for {token_raw}: {engine_is_valid}")
+            print(f"    Validation Status for {sequence_token_id}: {engine_is_valid}")
             
             if not engine_is_valid:
                 engine_errors = getattr(validator_engine, 'errors', {})
                 print(f"    ❌ Engine Validation Errors: {engine_errors}")
-                # 🚨 NEW: Record the component failure messages associated with its distinct token id
                 if engine_errors:
                     global_errors_ledger[sequence_token_id] = engine_errors
 
@@ -2285,11 +2355,17 @@ def validate_component_preview(request):
                 try:
                     evaluated_output = validator_engine.evaluate_output()
                     print(f"    ✅ Evaluation Successful! Result: {evaluated_output}")
+                    
+                    # 🎯 DYNAMIC BROADCAST: Mutate our live matching tracking context element!
+                    # This lets subsequent loop steps read this absolute value if they evaluate boundaries.
+                    live_payload = next((x for x in all_entities_payload if x.get("sequence_token") == sequence_token_id), None)
+                    if live_payload:
+                        live_payload['simulated_value'] = str(evaluated_output)
+
                 except Exception as eval_err:
                     print(f"    💥 Evaluation Crashed post-validation: {str(eval_err)}")
                     evaluated_output = "0"
             else:
-                # Try to evaluate output anyway to parse dependencies safely, fallback to "0" if empty
                 try:
                     print(f"    ⚠️ Attempting fallback string parsing anyway...")
                     if item.get('inputs', {}).get('formula'):
@@ -2328,7 +2404,6 @@ def validate_component_preview(request):
             print(f"🚨 ACTIVE STRUCTURAL ERRORS PASSING DOWNSTREAM: {global_errors_ledger}")
         print("="*60 + "\n")
 
-        # 🎯 FIX: Return 'errors' inside the JSON payload dictionary to clear or show the banner
         return JsonResponse({
             'success': len(global_errors_ledger) == 0,
             'updated_cache': updated_cache,

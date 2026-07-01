@@ -797,8 +797,17 @@ class BaseEntity:
         token_blueprint = get_blueprint_for_token(token_archetype)
         
         print(f"        📍 Located Parent Entity: Archetype='{token_archetype}', Inputs={token_inputs}")
-        print(f"        🔄 Instantiating temporary sub-engine validator to evaluate upstream value...")
+        
+        # 🎯 SHORT-CIRCUIT FOR RANDOM ARCHETYPES
+        # If the target is an upstream random entity, reuse its client-side generated value
+        # 🎯 CACHE HIT: Check if we already have a locked-in client string or a freshly computed value
+        cached_val = target_payload.get('simulated_value', '')
+        if token_archetype in ['rand', 'randInt'] and cached_val != "":
+            print(f"        🎲 [CACHE HIT] Reusing active simulation value for '{clean_sequence_token}' ➔ '{cached_val}'")
+            return cached_val
 
+        # 🎯 CACHE MISS: If cached_val is "", evaluate via sub-engine sub-pipeline
+        print(f"        🔄 [CACHE MISS / EVALUATION] Instantiating sub-engine validator for: {clean_sequence_token}")
         dependency_validator = get_entity_validator(
             token_archetype, 
             token_inputs, 
@@ -807,10 +816,15 @@ class BaseEntity:
         )
         
         if not dependency_validator.is_valid():
-            print(f"        ❌ [DEPENDENCY CRASH] Upstream asset <{clean_sequence_token}> failed inner integrity checks: {getattr(dependency_validator, 'errors', {})}")
             raise ValidationError(f"Dependency error: Linked component <{clean_sequence_token}> has outstanding validation errors.")
             
-        resolved_value = dependency_validator.evaluate_output()
+        resolved_value = str(dependency_validator.evaluate_output())
+        
+        # 🎯 WRITE-BACK LOCK: Save the freshly rolled number directly back into the payload entry list
+        if token_archetype in ['rand', 'randInt']:
+            print(f"        💾 [CACHE WRITE-BACK] Saving rolled value '{resolved_value}' to state payload for token record: {clean_sequence_token}")
+            target_payload['simulated_value'] = resolved_value  # This updates it in all_entities_payload by reference!
+
         print(f"        💎 [DEPENDENCY SUCCESS] Inter-component pipeline resolved {token_string} ➔ '{resolved_value}'")
         return resolved_value
 
@@ -953,6 +967,22 @@ class RandomIntegerEntity(BaseEntity):
         """
         🎯 CALCULATES REAL DYNAMIC INTEGERS ACCORDING TO USER PROPERTIES
         """
+        # 🎯 FIX: Look into the global ledger context to see if this card already has a locked-in value
+        if hasattr(self, 'all_entities_payload') and self.all_entities_payload:
+            # We look up our own active sequence token name (e.g., 'randInt1')
+            my_sequence_token = self.data.get('sequence_token') or self.runtime_values.get('sequence_token')
+            
+            target_payload = next(
+                (item for item in self.all_entities_payload if item.get("sequence_token") == my_sequence_token),
+                None
+            )
+            
+            if target_payload:
+                cached_val = target_payload.get('simulated_value', '')
+                if cached_val not in ["", "None", "null"]:
+                    print(f"        🎲 [RAND ENGINE LOCK] Found existing cached state '{cached_val}' for self. Keeping it.")
+                    return cached_val
+                
         min_val = self.resolve_numeric_value("min", default_fallback=-9)
         max_val = self.resolve_numeric_value("max", default_fallback=9)
         step_val = self.resolve_numeric_value("step", default_fallback=1)
@@ -1069,6 +1099,22 @@ class RandomDoubleEntity(BaseEntity):
         """
         🎯 MEMORY SAFE CALCULATION: Computes random decimal steps mathematically
         """
+        # 🎯 FIX: Look into the global ledger context to see if this card already has a locked-in value
+        if hasattr(self, 'all_entities_payload') and self.all_entities_payload:
+            # We look up our own active sequence token name (e.g., 'randInt1')
+            my_sequence_token = self.data.get('sequence_token') or self.runtime_values.get('sequence_token')
+            
+            target_payload = next(
+                (item for item in self.all_entities_payload if item.get("sequence_token") == my_sequence_token),
+                None
+            )
+            
+            if target_payload:
+                cached_val = target_payload.get('simulated_value', '')
+                if cached_val not in ["", "None", "null"]:
+                    print(f"        🎲 [RAND ENGINE LOCK] Found existing cached state '{cached_val}' for self. Keeping it.")
+                    return cached_val
+                
         min_val = self.resolve_numeric_value("min", default_fallback=0.0)
         max_val = self.resolve_numeric_value("max", default_fallback=1.0)
         step_val = self.resolve_numeric_value("step", default_fallback=0.01)

@@ -629,92 +629,56 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         console.group(`%c⚙️ Local Math Calc: <${tokenIdentifier}> [Archetype: ${baseArchetype}]`, "background: #1e1e2e; color: #cdd6f4; padding: 3px 6px; border-radius: 4px; font-weight: bold;");
-        // console.log("Associated DOM Node:", card);
-        // console.log("Attributes present on load:", {
-        //     simulatedValue: card.getAttribute('data-simulated-value'),
-        //     shuffleSeed: card.getAttribute('data-shuffle-seed'),
-        //     visitedTokens: [...visitedTokens]
-        // });
 
+        // 🎯 PRIORITY A: Check if the server has stored a verified calculated value directly on the card markup
+        const calculatedValueFallback = card.getAttribute('data-simulated-value');
+        if (calculatedValueFallback !== null && calculatedValueFallback !== undefined && calculatedValueFallback !== '' && calculatedValueFallback !== 'None' && calculatedValueFallback !== 'null') {
+            console.log(`%c✓ ${baseArchetype} reading directly from synchronized server state: "${calculatedValueFallback}"`, "color: #89b4fa; font-weight: bold;");
+            console.groupEnd();
+            return calculatedValueFallback;
+        }
+
+        // 🎯 PRIORITY B: Local Calculation engines serve purely as a cold bootstrap backup if server state isn't injected yet
         if (baseArchetype === 'randInt') {
-            // 🎯 FIXED: Pulling live evaluated calculation variables safely using getLiveComponentValue
             const minStr = getLiveComponentValue(card, 'min', '-9', visitedTokens);
             const maxStr = getLiveComponentValue(card, 'max', '9', visitedTokens);
             const stepStr = getLiveComponentValue(card, 'step', '1', visitedTokens);
-
-            // console.log("randInt Found Elements:", {
-            //     minEl: card.querySelector('.val-input-min') || card.querySelector('[data-input-key="min"]'),
-            //     maxEl: card.querySelector('.val-input-max') || card.querySelector('[data-input-key="max"]'),
-            //     stepEl: card.querySelector('.val-input-step') || card.querySelector('[data-input-key="step"]')
-            // });
-            console.group("⚙️ Live Evaluated String Strings Log Trace");
-            // console.log("randInt Unified String Results:", { minStr, maxStr, stepStr });
-            console.groupEnd();
 
             const minVal = parseInt(minStr, 10);
             const maxVal = parseInt(maxStr, 10);
             const stepVal = parseInt(stepStr, 10);
             
-            // console.log("randInt Parsed Integers:", { minVal, maxVal, stepVal });
-
             if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
                 const pool = [];
                 let current = minVal;
                 while (current <= maxVal) { pool.push(current); current += stepVal; }
                 
-                // console.log(`randInt Sequence array pool built (${pool.length} items):`, pool);
-
                 if (pool.length > 0) {
                     const seedAttr = card.getAttribute('data-shuffle-seed');
                     let targetIndex = 0;
                     if (seedAttr) {
                         targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
-                        // console.log(`🎲 randInt calculating index via random shuffle seed [${seedAttr}]: index ${targetIndex}`);
                     } else {
                         const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
                         targetIndex = baseTextSeed % pool.length;
-                        // console.log(`✍️ randInt falling back to algorithmic string seed conversion [${baseTextSeed}]: index ${targetIndex}`);
                     }
                     if (targetIndex >= pool.length) targetIndex = pool.length - 1;
                     val = pool[targetIndex].toString();
-                    
-                    // console.log(`%c✓ randInt Math Passed -> Selected index ${targetIndex} -> Value: "${val}"`, "color: #a6e3a1; font-weight: bold;");
                 }
-            } else {
-                console.error("❌ randInt Guard Rules Failed! Check mathematical inputs:", {
-                    minIsNaN: isNaN(minVal),
-                    maxIsNaN: isNaN(maxVal),
-                    stepIsPositive: stepVal > 0,
-                    minLessThanOrEqualToMax: minVal <= maxVal
-                });
             }
         } 
         else if (baseArchetype === 'rand') {
-            // 🎯 FIXED: Evaluating raw double ranges with absolute floating value precision checks
             const minStr = getLiveComponentValue(card, 'min', '0.0', visitedTokens);
             const maxStr = getLiveComponentValue(card, 'max', '1.0', visitedTokens);
             const stepStr = getLiveComponentValue(card, 'step', '0.01', visitedTokens);
-
-            // console.log("rand Found Elements:", {
-            //     minEl: card.querySelector('.val-input-min') || card.querySelector('[data-input-key="min"]'),
-            //     maxEl: card.querySelector('.val-input-max') || card.querySelector('[data-input-key="max"]'),
-            //     stepEl: card.querySelector('.val-input-step') || card.querySelector('[data-input-key="step"]')
-            // });
-            console.group("⚙️ Live Evaluated Float Strings Log Trace");
-            // console.log("rand Unified String Results:", { minStr, maxStr, stepStr });
-            console.groupEnd();
 
             const minVal = parseFloat(minStr);
             const maxVal = parseFloat(maxStr);
             const stepVal = parseFloat(stepStr);
 
-            // console.log("rand Parsed Floats:", { minVal, maxVal, stepVal });
-
             if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
                 const totalRange = maxVal - minVal;
                 const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
-
-                // console.log(`rand Math Configuration: Total Range=${totalRange}, Calculated Max Permissible Steps=${maxSteps}`);
 
                 if (maxSteps >= 0) {
                     const seedAttr = card.getAttribute('data-shuffle-seed');
@@ -722,12 +686,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     if (seedAttr) {
                         targetStepMultiplier = Math.floor(parseFloat(seedAttr) * (maxSteps + 1));
-                        // console.log(`🎲 rand calculating multiplier step via shuffle seed [${seedAttr}]: step multiplier ${targetStepMultiplier}`);
                     } else {
                         const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
                         targetStepMultiplier = baseTextSeed % (maxSteps + 1);
                         if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
-                        // console.log(`✍️ rand falling back to algorithmic string seed conversion [${baseTextSeed}]: step multiplier ${targetStepMultiplier}`);
                     }
 
                     if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
@@ -742,31 +704,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         decimalPlaces = precisionStr.split('.')[1].length;
                     }
                     val = finalValue.toFixed(decimalPlaces);
-                    
-                    // console.log(`%c✓ rand Math Passed -> Target Multiplier Step ${targetStepMultiplier} -> Value: "${val}"`, "color: #a6e3a1; font-weight: bold;");
                 }
-            } else {
-                console.error("❌ rand Guard Rules Failed! Check decimal inputs:", {
-                    minIsNaN: isNaN(minVal),
-                    maxIsNaN: isNaN(maxVal),
-                    stepIsPositive: stepVal > 0,
-                    minLessThanOrEqualToMax: minVal <= maxVal
-                });
             }
         } 
         else if (baseArchetype === 'primeFactors') {
-            // 🎯 FIXED: Dynamic component lookup intercepting macro variables (e.g. factoring <randInt1>)
             const numStr = getLiveComponentValue(card, 'number to factor', '12', visitedTokens);
-            
-            // console.log("primeFactors Found Element:", card.querySelector('.val-input-number') || card.querySelector('[data-input-key="number to factor"]'));
-            // console.log(`primeFactors Unified String Value Payload: "${numStr}"`);
-
             let targetNum = parseInt(numStr, 10);
-            // console.log(`primeFactors Parsed Integer Target: ${targetNum}`);
             
             if (!isNaN(targetNum) && targetNum > 1) {
                 const factors = [];
-                const originalNum = targetNum;
                 while (targetNum % 2 === 0) {
                     factors.push(2);
                     targetNum = Math.floor(targetNum / 2);
@@ -783,45 +729,24 @@ document.addEventListener('DOMContentLoaded', function() {
                     factors.push(targetNum);
                 }
                 val = factors.join(', ');
-                // console.log(`%c✓ primeFactors Math Passed -> Factored "${originalNum}" into: "${val}"`, "color: #a6e3a1; font-weight: bold;");
             } else {
-                console.warn(`⚠️ primeFactors Guard Check Failed! Value (${targetNum}) must be a valid integer greater than 1.`);
                 val = "";
             }
         }
         else if (baseArchetype === 'formula') {
-            // console.log("formula Archetype triggered. Processing formula fallback ladder.");
+            if (window.formulaLiveLatexCache && window.formulaLiveLatexCache[tokenIdentifier]) {
+                console.groupEnd();
+                return window.formulaLiveLatexCache[tokenIdentifier];
+            }
             
-            if (formulaLiveLatexCache && formulaLiveLatexCache[tokenIdentifier]) {
-                // console.log(`%c✓ formula Target found in formulaLiveLatexCache: "${formulaLiveLatexCache[tokenIdentifier]}"`, "color: #89b4fa;");
-                console.groupEnd();
-                return formulaLiveLatexCache[tokenIdentifier];
-            }
-
-            const calculatedValueFallback = card.getAttribute('data-simulated-value');
-            if (calculatedValueFallback) {
-                // console.log(`%c✓ formula Target falling back to data-simulated-value attribute: "${calculatedValueFallback}"`, "color: #89b4fa;");
-                console.groupEnd();
-                return calculatedValueFallback;
-            }
-
             // Formulas accept dynamic variable evaluations safely via input keys
             const formulaStr = getLiveComponentValue(card, 'formula', tokenIdentifier, visitedTokens);
-            // console.log(`%c✓ formula Target falling back to field value string lookup: "${formulaStr}"`, "color: #89b4fa;");
             console.groupEnd();
             return formulaStr;
         }
 
-        // Processing Fallback Attribute check if math engine logic fails
-        if (val === null || val === '') {
-            const fallbackAttr = card.getAttribute('data-simulated-value');
-            // console.log(`Engine calculation resulted in empty or null state. Pulling fallback attribute 'data-simulated-value': "${fallbackAttr}"`);
-            val = fallbackAttr;
-        }
-        
-        // Final Output Summary Resolution
+        // Final Output Summary Resolution (Fallback check if local engine rules fell through)
         const finalReturnedValue = (val !== null && val !== undefined && val !== '') ? val : tokenIdentifier;
-        // console.log(`%c🏁 Final Output String Resolved and Returned: "${finalReturnedValue}"`, "color: #f9e2af; font-weight: bold; font-size: 0.95rem;");
         console.groupEnd();
 
         return finalReturnedValue;
@@ -1284,6 +1209,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const token = delBtn ? delBtn.getAttribute('data-indexed-token') : null;
             if (!token) return;
 
+            console.log(`Payload Pack -> Token: ${token}, Value: ${card.getAttribute('data-simulated-value')}`);
+
             // 🎯 Determine base archetype and correct case-matching for database key lookups
             let baseArchetypeToken = token.replace(/[0-9]/g, '');
 
@@ -1365,20 +1292,46 @@ document.addEventListener('DOMContentLoaded', function() {
                     subsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
                         const vName = row.getAttribute('data-var-name');
                         if (!vName) return;
-                        const inputEl = row.querySelector('input, select');
-                        if (inputEl) substitutions[vName] = inputEl.value.trim();
+
+                        // Locate the wrapper element holding the states
+                        const inputWrapper = row.querySelector('.linked-input-wrapper');
+                        const tokenPill = inputWrapper ? inputWrapper.querySelector('.linked-token-pill') : null;
+                        const nativeInput = inputWrapper ? inputWrapper.querySelector('input') : null;
+
+                        let rawTokenValue = "";
+
+                        if (inputWrapper && inputWrapper.hasAttribute('data-bound-token')) {
+                            // Priority A: Read the explicit attribute from the wrapper (Version 2)
+                            rawTokenValue = inputWrapper.getAttribute('data-bound-token');
+                        } else if (tokenPill) {
+                            // Priority B: Fallback to data attribute or raw text content of the pill if present
+                            rawTokenValue = tokenPill.getAttribute('data-indexed-token') || tokenPill.textContent;
+                        } else if (nativeInput) {
+                            // Priority C: Plaintext state fallback (Version 1) - Pull right from the input value
+                            rawTokenValue = nativeInput.value;
+                        }
+
+                        // Clean up formatting: Strip out any accidental HTML entities and wrap cleanly in matching brackets
+                        if (rawTokenValue && rawTokenValue.trim() !== "") {
+                            let cleanString = rawTokenValue.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                            cleanString = cleanString.replace(/[<>]/g, ''); // Strip wrappers to avoid nested evaluation tags e.g. <<token>>
+                            substitutions[vName] = `<${cleanString}>`;
+                        } else {
+                            substitutions[vName] = "";
+                        }
                     });
                 }
                 inputsCollected["substitutions"] = substitutions;
+
+                console.log("Cleaned substitutions mapping payload: ", inputsCollected["substitutions"]);
             }
 
             // 🎯 FIX 2: Restructure output model parameters to mirror Python context lookup keys
             entities.push({
                 token: baseArchetypeToken,      // Tracks the token type/archetype profile name (e.g. "primeFactors")
                 sequence_token: token,          // 🚀 CRITICAL: Matches item.get("sequence_token") for parent lookups (e.g. "primeFactors1")
-                indexed_token: token,           // Safety redundant duplicate key
                 inputs: inputsCollected,
-                simulated_value: card.getAttribute('data-simulated-value') || "0"
+                simulated_value: card.getAttribute('data-simulated-value')
             });
         });
         
@@ -1387,7 +1340,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Client-Side DAG: Filters list down to an entity, its descendants, AND its required ancestors
     function getDownstreamDependencies(allEntities, editedToken) {
-        if (!editedToken || editedToken === 'initial_load') return allEntities; // Fetch all elements on load
+        // Formulate the structured fallback object on initial cold-boots!
+        if (!editedToken || editedToken === 'initial_load') {
+            return {
+                familyGroup: allEntities, // Everything is context on load
+                mutationTargets: allEntities.map(e => e.indexed_token || e.sequence_token || e.token) // Everything evaluates on load
+            };
+        }
 
         // 1. Build a map of immediate dependencies (who relies on whom) using UNIQUE IDs
         const parentToChildrenMap = {};
@@ -1461,6 +1420,19 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
+        // 🎯 NEW: Create a separate set to track ONLY the token itself and its descendants
+        const downstreamOnly = new Set([editedToken]);
+        const downQueue = [editedToken];
+        while (downQueue.length > 0) {
+            const current = downQueue.shift();
+            (parentToChildrenMap[current] || []).forEach(child => {
+                if (!downstreamOnly.has(child)) {
+                    downstreamOnly.add(child);
+                    downQueue.push(child);
+                }
+            });
+        }
+
         // 4. Trace UPSTREAM (Ancestors needed by the backend to resolve math strings)
         const upstreamQueue = Array.from(affected);
         while (upstreamQueue.length > 0) {
@@ -1473,11 +1445,20 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
-        // 5. Filter all entities down to our completed dependency group map
-        return allEntities.filter(e => {
+        // 5. Build and return the updated structured object payload instead of a plain array
+        const familyGroup = allEntities.filter(e => {
             const uniqueKey = e.indexed_token || e.sequence_token || e.token;
             return affected.has(uniqueKey);
         });
+
+        const mutationTargets = allEntities
+            .map(e => e.indexed_token || e.sequence_token || e.token)
+            .filter(key => downstreamOnly.has(key));
+
+        return {
+            familyGroup: familyGroup,
+            mutationTargets: mutationTargets
+        };
     }
 
 
@@ -1494,9 +1475,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const allEntities = serializeAllWorkspaceEntities();
         console.log("Total active workspace elements found:", allEntities);
 
-        const affectedEntities = getDownstreamDependencies(allEntities, triggeringToken);
+        // 🎯 FIX: Destructure the new object format returned by the updated DAG engine
+        const dependencyData = getDownstreamDependencies(allEntities, triggeringToken);
+        const affectedEntities = dependencyData.familyGroup; // Contains full tree context (Ancestors + Descendants)
+        const mutationTargets = dependencyData.mutationTargets; // Contains ONLY trigger + Descendants
+        
+        console.log(`Post refresh token name: ${triggeringToken}`);
         console.log(`Step 2: Tracking dependencies affected by event driver [${triggeringToken || 'initial_load'}]:`, affectedEntities);
+        console.log(`Execution path (Mutation Targets):`, mutationTargets);
 
+        // Check against the familyGroup array length to see if anything was matched
         if (affectedEntities.length === 0 && !options.forceRefresh) {
             console.log(`triggeringToken: ${triggeringToken}`);
             console.warn("⚠️ No relevant components matched tree criteria. Network communication suppressed.");
@@ -1517,7 +1505,8 @@ document.addEventListener('DOMContentLoaded', function() {
             },
             body: JSON.stringify({
                 trigger_token: triggeringToken,
-                entities: affectedEntities
+                entities: affectedEntities,    // Context validation ledger (unchanged variable name)
+                mutation_targets: mutationTargets // Explicitly tell the backend what to calculate
             })
         })
         .then(res => {
@@ -1596,10 +1585,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log(`Updated wrapper tracking parameter attribute 'data-simulated-value' ➔ '${result.evaluated_output}'`);
 
                 const baseArchetype = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-token');
-                let targetDisplay = card.querySelector('.latex-render-box, .simulation-preview-render-pane');
+                let targetDisplay = card.querySelector('.latex-render-box');
                 console.log(`Determined operational asset token archetype model: '${baseArchetype}'`);
 
-                if (baseArchetype === 'formula') {
+                if (baseArchetype === 'primeFactors' || baseArchetype === 'formula') {
                     if (!targetDisplay) {
                         const fieldsWrapper = card.querySelector('.component-fields-wrapper');
                         if (fieldsWrapper) {
@@ -1609,7 +1598,8 @@ document.addEventListener('DOMContentLoaded', function() {
                             fieldsWrapper.appendChild(targetDisplay);
                         }
                     }
-
+                }
+                if (baseArchetype === 'formula') {
                     if (targetDisplay && typeof katex !== 'undefined') {
                         katex.render(result.latex_output, targetDisplay, { throwOnError: false });
                     } else if (typeof katex === 'undefined') {
@@ -1663,7 +1653,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const simplifyDropdownContainer = solveForSelect.closest('.form-group, .input-row, div');
 
                     // If the card is configured for variable substitution, hide this element wrapper row out of view
-                    if (activeMethod === 'variable substitution') {
+                    if (activeMethod != 'simplify') {
                         if (simplifyDropdownContainer) {
                             simplifyDropdownContainer.style.display = 'none';
                         }
@@ -1698,10 +1688,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                 opt.textContent = v;
                                 solveForSelect.appendChild(opt);
                             });
-
-                            if (typeof syncSubstitutionRows === 'function') {
-                                syncSubstitutionRows(card);
-                            }
                         }
                         
                         // 🎯 --- SELECTION RESOLUTION PIPELINE ---
@@ -1719,7 +1705,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 console.groupEnd();
             });
-            
+
             console.groupEnd(); // End variable parsing loop
 
             console.log("⚡ View components re-indexed. Re-triggering canvas preview compilation pipeline update passes.");
