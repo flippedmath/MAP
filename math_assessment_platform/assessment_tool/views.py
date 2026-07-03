@@ -2325,6 +2325,7 @@ def validate_component_preview(request):
             pattern_blueprint = get_blueprint_for_token(archetype_name)
 
             entity_inputs = item.get('inputs', {}) or {}
+            print(f"entity_inputs: {entity_inputs}")
             entity_inputs['sequence_token'] = sequence_token_id
             
             # 🎯 RESHRESH LOCK-BREAKER: If this target is a downstream descendant (not the driver card itself), 
@@ -2364,7 +2365,7 @@ def validate_component_preview(request):
 
                 except Exception as eval_err:
                     print(f"    💥 Evaluation Crashed post-validation: {str(eval_err)}")
-                    evaluated_output = "0"
+                    evaluated_output = "N/A"
             else:
                 try:
                     print(f"    ⚠️ Attempting fallback string parsing anyway...")
@@ -2377,20 +2378,90 @@ def validate_component_preview(request):
                     print(f"    💥 Fallback parsing also failed: {str(fallback_err)}")
                     evaluated_output = item.get('inputs', {}).get('formula', '0')
 
-            # Extract LaTeX configurations and symbols from the internal formula outcome
-            if archetype_name.lower().startswith('formula') and hasattr(validator_engine, 'last_computed_sympy_result'):
-                try:
-                    result_obj = validator_engine.last_computed_sympy_result
-                    latex_output = sp.latex(result_obj)
-                    extracted_vars = [str(sym) for sym in result_obj.free_symbols if str(sym) != 'pi']
-                    extracted_vars.sort()
-                except Exception as latex_err:
-                    print(f"    ⚠️ Latex extraction warning: {str(latex_err)}")
-                    latex_output = str(evaluated_output)
-                    extracted_vars = []
+            # =========================================================================
+            # 🎯 FIX: Regex Pattern Updated for Single-Character Base Variables
+            # =========================================================================
+            if archetype_name.lower().startswith('formula'):
+                latex_output = str(evaluated_output)
+                extracted_vars = []
+
+                # Path A: SymPy ran successfully and left a clean result object
+                if hasattr(validator_engine, 'last_computed_sympy_result'):
+                    try:
+                        result_obj = validator_engine.last_computed_sympy_result
+                        # Handle custom tuple response structure from equation simplify routes
+                        if isinstance(result_obj, tuple):
+                            latex_output = f"{sp.latex(result_obj[0])} = {sp.latex(result_obj[1])}"
+                            sym_set = result_obj[0].free_symbols.union(result_obj[1].free_symbols)
+                        else:
+                            # 🎯 FIX: Intercept single target symbols and format their solutions as comma-separated LaTeX lists
+                            if isinstance(result_obj, sp.Symbol):
+                                target_var_str = str(result_obj)
+                                eval_str = str(evaluated_output)
+                                
+                                # Extract everything between the first '[' and last ']'
+                                if '[' in eval_str and ']' in eval_str:
+                                    inner_content = eval_str.split('[', 1)[1].rsplit(']', 1)[0]
+                                    
+                                    # Split individual answers cleanly by commas
+                                    raw_solutions = [s.strip() for s in inner_content.split(',') if s.strip()]
+                                    latex_solutions = []
+                                    
+                                    # 🎯 FIX: Build a safe environment context including SymPy globals (like I, sqrt, pi)
+                                    # and include the target variable symbol itself.
+                                    parsing_env = {}
+                                    parsing_env[str(result_obj)] = result_obj
+                                    if hasattr(result_obj, 'free_symbols'):
+                                        for sym in result_obj.free_symbols:
+                                            parsing_env[str(sym)] = sym
+
+                                    for sol in raw_solutions:
+                                        print(f"sol: {sol}")
+                                        try:
+                                            # 🎯 FIX: Evaluate string expressions using standard transformations 
+                                            # alongside your target environment tokens.
+                                            parsed_sol = sp.parse_expr(sol, local_dict=parsing_env, global_dict=sp.__dict__)
+                                            print(f"parsed_sol: {parsed_sol}")
+                                            latex_solutions.append(sp.latex(parsed_sol))
+                                        except Exception as parse_err:
+                                            print(f"fallback due to: {parse_err}")
+                                            # Fallback to pure text if string math parsing fails
+                                            latex_solutions.append(sol)
+                                            
+                                    latex_output = f"{target_var_str} = [{', '.join(latex_solutions)}]"
+                                else:
+                                    latex_output = eval_str
+                            else:
+                                latex_output = sp.latex(result_obj)
+                                
+                            sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
+                        
+                        # Apply structural variable naming constraint
+                        extracted_vars = [
+                            str(sym) for sym in sym_set 
+                            if re.match(r'^[a-zA-Z]\d*$', str(sym))
+                        ]
+                    except Exception as latex_err:
+                        print(f"    ⚠️ SymPy Latex extraction fallback: {str(latex_err)}")
+
+                # Path B: Fallback regex analysis if SymPy execution was bypassed or crashed
+                if not extracted_vars:
+                    try:
+                        raw_formula_text = str(item.get('inputs', {}).get('formula', ''))
+                        # Clear out macro bracket wrappers like <rand1>
+                        clean_text = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '', raw_formula_text)
+                        
+                        # 🎯 Match only a single letter followed by 0 or more numbers
+                        matches = re.findall(r'\b[a-zA-Z]\d*\b', clean_text)
+                        extracted_vars = list(set(matches))
+                    except Exception as fallback_parse_err:
+                        print(f"    ⚠️ Regex string extraction failed: {str(fallback_parse_err)}")
+
+                extracted_vars.sort()
             else:
                 latex_output = str(evaluated_output)
                 extracted_vars = []
+            # =========================================================================
 
             updated_cache[sequence_token_id] = {
                 'evaluated_output': str(evaluated_output),

@@ -119,73 +119,69 @@ document.addEventListener('DOMContentLoaded', function() {
      */
     function rehydrateWorkspaceSegments(segments) {
         console.group(`%c🔄 [Workspace Rehydration] Initializing Layout Hydration Loop`, "background: #7c3aed; color: white; padding: 3px 6px; border-radius: 4px; font-weight: bold;");
-        // console.log("Total persistent segment components retrieved from database payload:", segments);
 
         isWorkspaceInitializing = true; 
-        // console.log("🔒 Lock state active: Blocked row-by-row individual network requests during generation iteration.");
+        window.isHydratingWorkspace = true; // Set both flags at the top
 
-        if (!segments || segments.length === 0) {
-            console.warn("⚠️ Database segment array payload is unpopulated or missing. Resetting sidebar panels to initial default states.");
-            clearAndShowPlaceholders();
-            console.groupEnd();
-            return;
-        }
-
-        if (variablesContainer) variablesContainer.innerHTML = '';
-        if (inputsContainer) inputsContainer.innerHTML = '';
-        if (tokensLedger) tokensLedger.innerHTML = '';
-
-        // Silence canvas updates during generation, run it once at the end
-        window.isHydratingWorkspace = true;
-        segments.forEach((segment, idx) => {
-            console.group(`Segment Iterator Node [Index: ${idx}] ➔ Processing: <${segment.token}>`);
-            const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
-            const targetContainer = isVariable ? variablesContainer : inputsContainer;
-
-            if (!targetContainer) {
-                console.error("❌ Panel target DOM node reference lookup returned undefined. Skipping rehydration pass.");
-                console.groupEnd();
-                return;
+        try {
+            if (!segments || segments.length === 0) {
+                console.warn("⚠️ Database segment array payload is unpopulated or missing. Resetting sidebar panels to initial default states.");
+                clearAndShowPlaceholders();
+                return; // 🌟 Safe early exit! The 'finally' block will still unlock the state.
             }
 
-            removePlaceholders(targetContainer);
+            if (variablesContainer) variablesContainer.innerHTML = '';
+            if (inputsContainer) inputsContainer.innerHTML = '';
+            if (tokensLedger) tokensLedger.innerHTML = '';
+
+            segments.forEach((segment, idx) => {
+                console.group(`Segment Iterator Node [Index: ${idx}] ➔ Processing: <${segment.token}>`);
+                const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
+                const targetContainer = isVariable ? variablesContainer : inputsContainer;
+
+                if (!targetContainer) {
+                    console.error("❌ Panel target DOM node reference lookup returned undefined. Skipping rehydration pass.");
+                    console.groupEnd();
+                    return;
+                }
+
+                removePlaceholders(targetContainer);
+                
+                const savedSequenceToken = segment.sequence_token; 
+                createTokenBadge(segment.token, savedSequenceToken);
+                createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
             
-            const savedSequenceToken = segment.sequence_token; 
-            // console.log(`Database metadata: Sequence ID Token Signature="${savedSequenceToken || '(Not Specified)'}", Targets Variable Column=${isVariable}`);
+                const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
+                const latestCard = builtCards[builtCards.length - 1];
+                if (latestCard) {
+                    if (segment.simulated_value !== undefined) {
+                        latestCard.setAttribute('data-simulated-value', segment.simulated_value);
+                    }
+                    if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
+                        latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
+                    }
+                }
+                console.groupEnd();
+            });
 
-            createTokenBadge(segment.token, savedSequenceToken);
-            createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
-        
-            const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
-            const latestCard = builtCards[builtCards.length - 1];
-            if (latestCard) {
-                if (segment.simulated_value !== undefined) {
-                    // console.log(`Cache seed configuration: Mapping evaluated output fallback data state value attribute -> '${segment.simulated_value}'`);
-                    latestCard.setAttribute('data-simulated-value', segment.simulated_value);
-                }
-                if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
-                    // console.log(`Seed restored: Mapping randomized execution parameter seed configuration -> '${segment.shuffle_seed}'`);
-                    latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
-                }
+            // Run structural cleanups
+            checkEmptyColumns();
+
+            // Run calculation triggers
+            if (typeof dispatchWorkspaceBatchSync === 'function') {
+                dispatchWorkspaceBatchSync(null);
+            } else {
+                updateWorkspaceSimulationPreview();
             }
+
+        } catch (error) {
+            console.error("💥 Critical error during workspace rehydration:", error);
+        } finally {
+            // 🔓 This block ALWAYS executes, saving the application state from lockouts
+            isWorkspaceInitializing = false; 
+            window.isHydratingWorkspace = false;
             console.groupEnd();
-        });
-
-        window.isHydratingWorkspace = false;
-
-        // console.log("Finalizing generation tasks: Re-indexing container alignment layers...");
-        checkEmptyColumns();
-        
-        isWorkspaceInitializing = false; 
-        // console.log("🔓 Lock state disabled: UI generation complete. Restoring global network dispatches.");
-
-        if (typeof dispatchWorkspaceBatchSync === 'function') {
-            // console.log("🚀 Launching batch recalculation handshake to evaluate workspace dependencies.");
-            dispatchWorkspaceBatchSync(null);
-        } else {
-            updateWorkspaceSimulationPreview();
         }
-        console.groupEnd();
     }
 
 
@@ -832,7 +828,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const savedTarget = savedValues['variable to simplify'] || savedValues['variable to substitute'] || savedValues['variable to solve for'] || "";
             
-            targetSelectElement.innerHTML = '<option value="">-- choose variable --</option>';
+            targetSelectElement.innerHTML = '<option value="">-- N/A --</option>';
             currentVars.forEach(v => {
                 const opt = document.createElement('option');
                 opt.value = v;
@@ -860,7 +856,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 unusedVariablesPicker.parentElement.style.display = 'none'; 
             } else {
                 unusedVariablesPicker.parentElement.style.display = 'flex';
-                unusedVariablesPicker.innerHTML = '<option value="">-- choose variable --</option>';
+                unusedVariablesPicker.innerHTML = '<option value="">-- N/A --</option>';
                 unusedVars.forEach(v => {
                     const opt = document.createElement('option');
                     opt.value = v;
@@ -1299,23 +1295,32 @@ document.addEventListener('DOMContentLoaded', function() {
                         const nativeInput = inputWrapper ? inputWrapper.querySelector('input') : null;
 
                         let rawTokenValue = "";
+                        let isLinkedToken = false; // 🎯 TRACK ORIGIN
 
                         if (inputWrapper && inputWrapper.hasAttribute('data-bound-token')) {
-                            // Priority A: Read the explicit attribute from the wrapper (Version 2)
                             rawTokenValue = inputWrapper.getAttribute('data-bound-token');
+                            isLinkedToken = true;
                         } else if (tokenPill) {
-                            // Priority B: Fallback to data attribute or raw text content of the pill if present
                             rawTokenValue = tokenPill.getAttribute('data-indexed-token') || tokenPill.textContent;
+                            isLinkedToken = true;
                         } else if (nativeInput) {
-                            // Priority C: Plaintext state fallback (Version 1) - Pull right from the input value
                             rawTokenValue = nativeInput.value;
+                            isLinkedToken = false; // Value came from manual user typing
                         }
 
-                        // Clean up formatting: Strip out any accidental HTML entities and wrap cleanly in matching brackets
+                        // Clean up formatting
                         if (rawTokenValue && rawTokenValue.trim() !== "") {
                             let cleanString = rawTokenValue.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                            cleanString = cleanString.replace(/[<>]/g, ''); // Strip wrappers to avoid nested evaluation tags e.g. <<token>>
-                            substitutions[vName] = `<${cleanString}>`;
+                            cleanString = cleanString.replace(/[<>]/g, ''); 
+                            
+                            // 🎯 FIX: Only wrap if it's a known structural link, OR if the raw text matches a token format (e.g. formula1, rand3)
+                            const looksLikeToken = /^[a-zA-Z]+\d+$/.test(cleanString);
+                            
+                            if (isLinkedToken || looksLikeToken) {
+                                substitutions[vName] = `<${cleanString}>`;
+                            } else {
+                                substitutions[vName] = cleanString; // ✅ Keeps raw inputs like "6" or "5*y" clean!
+                            }
                         } else {
                             substitutions[vName] = "";
                         }
@@ -1635,7 +1640,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         unusedVariablesPicker.parentElement.style.display = 'none';
                     } else {
                         unusedVariablesPicker.parentElement.style.display = 'flex';
-                        unusedVariablesPicker.innerHTML = '<option value="">-- choose variable --</option>';
+                        unusedVariablesPicker.innerHTML = '<option value="">-- N/A --</option>';
                         unusedVars.forEach(v => {
                             const opt = document.createElement('option');
                             opt.value = v;
@@ -1693,9 +1698,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         // 🎯 --- SELECTION RESOLUTION PIPELINE ---
                         if (currentSelection && varArray.includes(currentSelection)) {
                             solveForSelect.value = currentSelection;
-                        } else if ((currentSelection === "" || currentSelection === null) && varArray.length === 1) {
-                            solveForSelect.value = varArray[0];
-                            card.setAttribute('data-selected-variable', varArray[0]);
                         } else {
                             solveForSelect.value = '';
                             card.removeAttribute('data-selected-variable');

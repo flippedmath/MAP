@@ -965,11 +965,10 @@ class RandomIntegerEntity(BaseEntity):
 
     def evaluate_output(self):
         """
-        🎯 CALCULATES REAL DYNAMIC INTEGERS ACCORDING TO USER PROPERTIES
+        🎯 MEMORY SAFE O(1) CALCULATION: Computes random integers mathematically
         """
-        # 🎯 FIX: Look into the global ledger context to see if this card already has a locked-in value
+        # 🎯 Look into the global ledger context to see if this card already has a locked-in value
         if hasattr(self, 'all_entities_payload') and self.all_entities_payload:
-            # We look up our own active sequence token name (e.g., 'randInt1')
             my_sequence_token = self.data.get('sequence_token') or self.runtime_values.get('sequence_token')
             
             target_payload = next(
@@ -983,30 +982,55 @@ class RandomIntegerEntity(BaseEntity):
                     print(f"        🎲 [RAND ENGINE LOCK] Found existing cached state '{cached_val}' for self. Keeping it.")
                     return cached_val
                 
-        min_val = self.resolve_numeric_value("min", default_fallback=-9)
-        max_val = self.resolve_numeric_value("max", default_fallback=9)
-        step_val = self.resolve_numeric_value("step", default_fallback=1)
+        min_val = int(self.resolve_numeric_value("min", default_fallback=-9))
+        max_val = int(self.resolve_numeric_value("max", default_fallback=9))
+        step_val = int(self.resolve_numeric_value("step", default_fallback=1))
         exclude_set = set(self.runtime_values.get("exclude_array", []))
 
-        print(f"    🎲 [RandomIntegerEntity] Processing pool calculations:")
-        print(f"        Bounds Range: {min_val} to {max_val} (Using Step Step Intervals: {step_val})")
+        print(f"    🎲 [RandomIntegerEntity] Processing pool calculations (O(1) Optimized):")
+        print(f"        Bounds Range: {min_val} to {max_val} (Using Step Intervals: {step_val})")
         if exclude_set:
             print(f"        Exclusion Filter active elements: {exclude_set}")
 
-        possible_values = []
+        if min_val > max_val:
+            print(f"        ⚠️ Boundary guard triggered (min > max) ➔ Output fallback: '{min_val}'")
+            return str(min_val)
+
+        # Calculate the absolute max step indices possible within this integer span
+        total_range = max_val - min_val
+        max_steps = total_range // step_val
+
+        # If range or steps result in no legal spaces, fallback cleanly
+        if max_steps < 0:
+            print(f"        ⚠️ Legal step size context evaluated to empty ➔ Output fallback: '{min_val}'")
+            return str(min_val)
+
+        # 🎯 EXCLUSION LOOP GUARD: Direct sampling to guarantee O(1) space integrity
+        attempts = 0
+        max_attempts = 200 # Prevent infinite locks if a user accidentally excludes every number in range
+        
+        while attempts < max_attempts:
+            random_step_multiplier = random.randint(0, max_steps)
+            candidate_value = min_val + (random_step_multiplier * step_val)
+            
+            if candidate_value not in exclude_set:
+                selected_choice = str(candidate_value)
+                print(f"        ⚡ Calculated Random Step Index: {random_step_multiplier}/{max_steps}")
+                print(f"        ➔ Computed Safe Integer Value Outcome: '{selected_choice}'")
+                return selected_choice
+            
+            attempts += 1
+
+        # Fallback Strategy: If random sampling kept hitting exclusions, loop once to find the absolute first unexcluded slot
+        print(f"        ⚠️ High density exclusion collision detected. Reverting to linear first-match fallback.")
         current = min_val
         while current <= max_val:
             if current not in exclude_set:
-                possible_values.append(current)
+                return str(current)
             current += step_val
 
-        if not possible_values:
-            print(f"        ⚠️ No legal entries matched requirements! Falling back to min_val boundary default.")
-            return str(min_val)
-
-        selected_choice = str(random.choice(possible_values))
-        print(f"        ⚡ Choices pool matrix generated: {possible_values} ➔ Selected choice: '{selected_choice}'")
-        return selected_choice
+        print(f"        ⚠️ No legal entries matched requirements! Falling back to min_val boundary default.")
+        return str(min_val)
 
 
 class RandomDoubleEntity(BaseEntity):
@@ -1216,6 +1240,11 @@ class FormulaEntity(BaseEntity):
         
         # Check both variants from the updated serialization layout
         solve_for_target = self.runtime_values.get("variable to simplify") or self.runtime_values.get("variable to substitute") or self.runtime_values.get("variable to solve for") or ""
+        
+        # 🎯 FIX: Normalize "-- N/A --" to an empty string for uniform logic processing
+        if solve_for_target.strip() in ["-- N/A --", "-- choose variable --"]:
+            solve_for_target = ""
+
         self.runtime_values["variable substitution"] = solve_for_target
         self.runtime_values["variable to solve for"] = solve_for_target
 
@@ -1233,6 +1262,7 @@ class FormulaEntity(BaseEntity):
                 return False
         
         if formula_expr and str(formula_expr).strip() != "0":
+            # Temporarily substitute macro tokens with an arbitrary integer for raw syntax evaluation
             clean_syntax_check = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '1', str(formula_expr))
             print(f"        Formula string before SymPy validation check: {repr(clean_syntax_check)}")
             is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(clean_syntax_check)
@@ -1252,26 +1282,16 @@ class FormulaEntity(BaseEntity):
         if "variables" not in self.errors:
             self.runtime_values["parsed_variables_array"] = parsed_variables
 
-        # 🎯 DECUPLED METHOD VALIDATION BLOCK
+        # 🎯 UPDATED BLOCK: ENFORCING N/A RECONCILIATION FOR SIMPLIFY METHOD
         if solve_method == "simplify":
-            # 'simplify' strictly requires a target variable to know what to isolate/reduce
-            if not solve_for_target and parsed_variables:
-                solve_for_target = parsed_variables[0]
-                self.runtime_values["variable to solve for"] = solve_for_target
-                self.runtime_values["variable substitution"] = solve_for_target
-            
-            if not solve_for_target and formula_expr != "0":
-                self.errors["variable to solve for"] = f"You must specify a target variable when using the 'simplify' method."
-            elif parsed_variables and solve_for_target and (solve_for_target not in parsed_variables):
+            # If a target variable is selected, make sure it is defined in the variables index
+            if parsed_variables and solve_for_target and (solve_for_target not in parsed_variables):
                 self.errors["variable to solve for"] = (
                     f"Target variable '{solve_for_target}' must be present inside your "
                     f"declared variables list: {parsed_variables}."
                 )
 
         elif solve_method == "variable substitution":
-            # Substitution replaces values across the entire expression, meaning a single 
-            # 'Target Variable to Simplify' dropdown is completely unnecessary and unused.
-            # We clear out target variables here so old values don't pollute your backend state payload.
             self.runtime_values["variable to solve for"] = ""
             self.runtime_values["variable substitution"] = ""
 
@@ -1281,14 +1301,21 @@ class FormulaEntity(BaseEntity):
         formula_str = str(self.runtime_values.get("formula", "")).strip()
         solve_method = str(self.runtime_values.get("solve method", "leave as formula")).strip()
         var_list = self.runtime_values.get("parsed_variables_array", [])
-        solve_for_target = self.runtime_values.get("variable to solve for", "")
+        solve_for_target = self.runtime_values.get("variable to solve for", "").strip()
+
+        print("What is the dropdown value?: {}, {}, {}".format(self.runtime_values.get("variable to simplify"), self.runtime_values.get("variable to substitute"), self.runtime_values.get("variable to solve for")))
+
+        if solve_for_target in ["-- N/A --", "-- choose variable --"]:
+            solve_for_target = ""
 
         print(f"    [FormulaEntity.evaluate_output] Executing...")
         print(f"        Original string: {repr(formula_str)}")
+        print(f"        Target variable: {repr(solve_for_target)}")
 
         if not formula_str:
             return "0"
 
+        # Build local substitutions structures
         subs_map = self.data.get('substitutions', {}) or {}
         if not isinstance(subs_map, dict):
             subs_map = {}
@@ -1308,7 +1335,6 @@ class FormulaEntity(BaseEntity):
         def bracket_replacer(match):
             target_token = match.group(1) if match.group(1) else match.group(2)
             resolved = f"({self.resolve_token_dependency(f'<{target_token.strip()}>')})"
-            print(f"        🔗 Resolved macro reference <{target_token}> to: {resolved}")
             return resolved
 
         processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
@@ -1323,41 +1349,121 @@ class FormulaEntity(BaseEntity):
             local_dict['diff'] = sp.Derivative
             local_dict['limit'] = sp.Limit
 
-        if "\\" in processed_formula:
-            from sympy.parsing.latex import parse_latex
-            parsed_expr = parse_latex(processed_formula)
-            if solve_method not in ['leave as formula', 'variable substitution', 'simplify']:
-                parsed_expr = parsed_expr.doit()
-        else:
-            parsed_expr = sp.parse_expr(processed_formula, local_dict=local_dict, evaluate=False)
+        # Helper method to parse single standalone chunk strings via SymPy safely
+        def parse_segment(expr_str):
+            if "\\" in expr_str:
+                return parse_latex(expr_str)
+            return sp.parse_expr(expr_str, local_dict=local_dict, evaluate=False)
 
-        result = parsed_expr
-        
+        has_equals = '=' in processed_formula
+        print(f"~~~~~~~solve method: {solve_method}, has equals: {has_equals}, solve_for_target: {solve_for_target}")
+
+        # 🎯 PROCESS SIMPLIFY STRATEGIES
         if solve_method == 'simplify':
-            if solve_for_target:
-                target_symbol = sp.Symbol(solve_for_target)
-                result = sp.simplify(parsed_expr.doit(), ratio=1.7, measure=lambda expr: expr.count(target_symbol))
-            else:
-                result = sp.simplify(parsed_expr.doit())
-        elif solve_method == 'expand polynomial':
-            result = sp.expand(parsed_expr.doit())
-        elif solve_method == 'factor polynomial':
-            result = sp.factor(parsed_expr.doit())
-        elif solve_method == 'variable substitution':
-            sympy_subs_map = {}
-            for v_name, v_val in resolved_subs.items():
-                if isinstance(v_val, str) and v_val.strip():
-                    try:
-                        sympy_subs_map[sp.Symbol(v_name)] = sp.parse_expr(str(v_val), local_dict=local_dict, evaluate=False)
-                    except Exception:
-                        sympy_subs_map[sp.Symbol(v_name)] = v_val
-                else:
-                    if v_val != "":
-                        sympy_subs_map[sp.Symbol(v_name)] = v_val
             
-            if sympy_subs_map:
-                with sp.evaluate(False):
-                    result = parsed_expr.subs(sympy_subs_map)
+
+            # SCENARIO A: Target is "-- N/A --"
+            if not solve_for_target:
+                if not has_equals:
+                    parsed_expr = parse_segment(processed_formula)
+                    result = sp.simplify(parsed_expr.doit())
+                else:
+                    left_raw, right_raw = processed_formula.split('=', 1)
+                    left_parsed = parse_segment(left_raw)
+                    right_parsed = parse_segment(right_raw)
+                    
+                    left_simplified = sp.simplify(left_parsed.doit())
+                    right_simplified = sp.simplify(right_parsed.doit())
+                    
+                    # Store a compound tuple layout for the latex engine extraction pass
+                    self.last_computed_sympy_result = (left_simplified, right_simplified)
+                    return f"{left_simplified} = {right_simplified}"
+
+            # SCENARIO B: Target Variable is explicitly chosen
+            else:
+                target_symbol = sp.Symbol(solve_for_target)
+                
+                if not has_equals:
+                    # Treat implied expression as set equal to 0
+                    parsed_expr = parse_segment(processed_formula)
+                    equation = sp.Eq(parsed_expr.doit(), 0)
+                else:
+                    left_raw, right_raw = processed_formula.split('=', 1)
+                    left_parsed = parse_segment(left_raw)
+                    right_parsed = parse_segment(right_raw)
+                    equation = sp.Eq(left_parsed.doit(), right_parsed.doit())
+                    print(f"~~~~~~~~~~~~~~equation: {equation}")
+
+                # Solve equation for the target symbol
+                solutions = sp.solve(equation, target_symbol)
+                
+                if isinstance(solutions, list):
+                    if len(solutions) == 1:
+                        resolved_right_side = solutions[0]
+                    elif len(solutions) > 1:
+                        resolved_right_side = f"[{', '.join(str(s) for s in solutions)}]"
+                    else:
+                        resolved_right_side = "0"
+                else:
+                    resolved_right_side = solutions
+
+                # Set structural context tracking object
+                if not isinstance(resolved_right_side, str):
+                    self.last_computed_sympy_result = sp.Eq(target_symbol, resolved_right_side)
+                else:
+                    self.last_computed_sympy_result = target_symbol
+
+                return f"{solve_for_target} = {resolved_right_side}"
+
+        # 🎯 RETAIN OTHER NATIVE SOLVE METHODS AS IS
+        else:
+            if "=" in processed_formula and solve_method == 'variable substitution':
+                # Split and substitute across algebraic equations
+                left_raw, right_raw = processed_formula.split('=', 1)
+                parsed_expr = (parse_segment(left_raw), parse_segment(right_raw))
+            
+            # 🎯 FIX: Add dedicated structural handler for '=' inside 'leave as formula'
+            elif "=" in processed_formula and solve_method == 'leave as formula':
+                # Split by '=' into an arbitrary number of equation segments
+                equation_segments = processed_formula.split('=')
+                parsed_segments = [parse_segment(seg.strip()) for seg in equation_segments]
+                
+                # Keep a tuple layout of the elements for the LaTeX engine reference extraction pass
+                self.last_computed_sympy_result = tuple(parsed_segments)
+                
+                # Reconstruct and return the exact clean string mapping sequence
+                return " = ".join(str(seg) for seg in parsed_segments)
+            
+            else:
+                parsed_expr = parse_segment(processed_formula)
+
+            if solve_method == 'expand polynomial':
+                result = sp.expand(parsed_expr.doit())
+            elif solve_method == 'factor polynomial':
+                result = sp.factor(parsed_expr.doit())
+            elif solve_method == 'variable substitution':
+                sympy_subs_map = {}
+                for v_name, v_val in resolved_subs.items():
+                    if isinstance(v_val, str) and v_val.strip():
+                        try:
+                            sympy_subs_map[sp.Symbol(v_name)] = sp.parse_expr(str(v_val), local_dict=local_dict, evaluate=False)
+                        except Exception:
+                            sympy_subs_map[sp.Symbol(v_name)] = v_val
+                    else:
+                        if v_val != "":
+                            sympy_subs_map[sp.Symbol(v_name)] = v_val
+                
+                if sympy_subs_map:
+                    with sp.evaluate(False):
+                        if isinstance(parsed_expr, tuple):
+                            result_left = parsed_expr[0].subs(sympy_subs_map)
+                            result_right = parsed_expr[1].subs(sympy_subs_map)
+                            self.last_computed_sympy_result = (result_left, result_right)
+                            return f"{result_left} = {result_right}"
+                        else:
+                            result = parsed_expr.subs(sympy_subs_map)
+            else:
+                result = parsed_expr
 
         print(f"        SymPy Final Computed Object: {repr(result)}")
         self.last_computed_sympy_result = result
