@@ -1355,47 +1355,64 @@ class FormulaEntity(BaseEntity):
                 return parse_latex(expr_str)
             return sp.parse_expr(expr_str, local_dict=local_dict, evaluate=False)
 
-        has_equals = '=' in processed_formula
-        print(f"~~~~~~~solve method: {solve_method}, has equals: {has_equals}, solve_for_target: {solve_for_target}")
+        # 🎯 CHOOSE CORRECT RELATION MATCH (Order sorted by length to prevent partial matches)
+        rel_match = re.search(r'(<=|>=|==|<|>|=)', processed_formula)
+        has_relation = rel_match is not None
+        
+        rel_op = rel_match.group(1) if has_relation else ""
+        display_op = "=" if rel_op == "==" else rel_op
+
+        print(f"~~~~~~~solve method: {solve_method}, relation operator: {repr(rel_op)}, solve_for_target: {solve_for_target}")
 
         # 🎯 PROCESS SIMPLIFY STRATEGIES
         if solve_method == 'simplify':
-            
 
             # SCENARIO A: Target is "-- N/A --"
             if not solve_for_target:
-                if not has_equals:
+                if not has_relation:
                     parsed_expr = parse_segment(processed_formula)
                     result = sp.simplify(parsed_expr.doit())
                 else:
-                    left_raw, right_raw = processed_formula.split('=', 1)
+                    left_raw, right_raw = processed_formula.split(rel_op, 1)
                     left_parsed = parse_segment(left_raw)
                     right_parsed = parse_segment(right_raw)
                     
                     left_simplified = sp.simplify(left_parsed.doit())
                     right_simplified = sp.simplify(right_parsed.doit())
                     
-                    # Store a compound tuple layout for the latex engine extraction pass
                     self.last_computed_sympy_result = (left_simplified, right_simplified)
-                    return f"{left_simplified} = {right_simplified}"
+                    return f"{left_simplified} {display_op} {right_simplified}"
 
             # SCENARIO B: Target Variable is explicitly chosen
             else:
                 target_symbol = sp.Symbol(solve_for_target)
                 
-                if not has_equals:
-                    # Treat implied expression as set equal to 0
+                if not has_relation:
                     parsed_expr = parse_segment(processed_formula)
                     equation = sp.Eq(parsed_expr.doit(), 0)
+                    rel_op = "="
                 else:
-                    left_raw, right_raw = processed_formula.split('=', 1)
-                    left_parsed = parse_segment(left_raw)
-                    right_parsed = parse_segment(right_raw)
-                    equation = sp.Eq(left_parsed.doit(), right_parsed.doit())
-                    print(f"~~~~~~~~~~~~~~equation: {equation}")
+                    left_raw, right_raw = processed_formula.split(rel_op, 1)
+                    left_parsed = parse_segment(left_raw).doit()
+                    right_parsed = parse_segment(right_raw).doit()
+                    
+                    if rel_op in ["=", "=="]: equation = sp.Eq(left_parsed, right_parsed)
+                    elif rel_op == "<":   equation = sp.Lt(left_parsed, right_parsed)
+                    elif rel_op == "<=":  equation = sp.Le(left_parsed, right_parsed)
+                    elif rel_op == ">":   equation = sp.Gt(left_parsed, right_parsed)
+                    elif rel_op == ">=":  equation = sp.Ge(left_parsed, right_parsed)
 
-                # Solve equation for the target symbol
-                solutions = sp.solve(equation, target_symbol)
+                # 🎯 AUTOMATIC SIGN FLIPPING HANDLER FOR INEQUALITIES
+                if rel_op in ["<", "<=", ">", ">="]:
+                    try:
+                        solved_rel = sp.reduce_inequalities(equation, target_symbol)
+                        self.last_computed_sympy_result = solved_rel
+                        return str(solved_rel)
+                    except Exception as e:
+                        print(f"        ⚠️ Inequality solver fallback triggered: {e}")
+                        solutions = sp.solve(equation, target_symbol)
+                else:
+                    solutions = sp.solve(equation, target_symbol)
                 
                 if isinstance(solutions, list):
                     if len(solutions) == 1:
@@ -1407,32 +1424,27 @@ class FormulaEntity(BaseEntity):
                 else:
                     resolved_right_side = solutions
 
-                # Set structural context tracking object
                 if not isinstance(resolved_right_side, str):
                     self.last_computed_sympy_result = sp.Eq(target_symbol, resolved_right_side)
                 else:
                     self.last_computed_sympy_result = target_symbol
 
+                # For inequalities, reduce_inequalities handles output layout. For standard equations, maintain dynamic target = solution layout
                 return f"{solve_for_target} = {resolved_right_side}"
 
         # 🎯 RETAIN OTHER NATIVE SOLVE METHODS AS IS
         else:
-            if "=" in processed_formula and solve_method == 'variable substitution':
-                # Split and substitute across algebraic equations
-                left_raw, right_raw = processed_formula.split('=', 1)
+            if has_relation and solve_method == 'variable substitution':
+                left_raw, right_raw = processed_formula.split(rel_op, 1)
                 parsed_expr = (parse_segment(left_raw), parse_segment(right_raw))
             
-            # 🎯 FIX: Add dedicated structural handler for '=' inside 'leave as formula'
-            elif "=" in processed_formula and solve_method == 'leave as formula':
-                # Split by '=' into an arbitrary number of equation segments
-                equation_segments = processed_formula.split('=')
-                parsed_segments = [parse_segment(seg.strip()) for seg in equation_segments]
+            elif has_relation and solve_method == 'leave as formula':
+                left_raw, right_raw = processed_formula.split(rel_op, 1)
+                left_parsed = parse_segment(left_raw)
+                right_parsed = parse_segment(right_raw)
                 
-                # Keep a tuple layout of the elements for the LaTeX engine reference extraction pass
-                self.last_computed_sympy_result = tuple(parsed_segments)
-                
-                # Reconstruct and return the exact clean string mapping sequence
-                return " = ".join(str(seg) for seg in parsed_segments)
+                self.last_computed_sympy_result = (left_parsed, right_parsed)
+                return f"{left_parsed} {display_op} {right_parsed}"
             
             else:
                 parsed_expr = parse_segment(processed_formula)
@@ -1459,7 +1471,8 @@ class FormulaEntity(BaseEntity):
                             result_left = parsed_expr[0].subs(sympy_subs_map)
                             result_right = parsed_expr[1].subs(sympy_subs_map)
                             self.last_computed_sympy_result = (result_left, result_right)
-                            return f"{result_left} = {result_right}"
+                            # 🎯 FIX: Honor the actual operational sign during variable substitutions
+                            return f"{result_left} {display_op} {result_right}"
                         else:
                             result = parsed_expr.subs(sympy_subs_map)
             else:
