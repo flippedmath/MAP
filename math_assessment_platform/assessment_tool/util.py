@@ -1554,3 +1554,110 @@ def get_blueprint_for_token(token_string):
         return json.loads(pattern) if isinstance(pattern, str) else pattern
     except Exception:
         return {}
+
+
+def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pattern_blueprint, all_entities_payload):
+    """
+    Unified evaluation runner that runs an entity validator, tracks simulated results,
+    and returns a standardized dictionary matching the frontend cache schema.
+    """
+    validator = get_entity_validator(
+        token_string=archetype_name,
+        data_payload=clean_inputs,
+        pattern_blueprint=pattern_blueprint,
+        all_entities_payload=all_entities_payload
+    )
+    
+    is_valid = validator.is_valid()
+    errors = getattr(validator, 'errors', {}) if not is_valid else {}
+    
+    evaluated_output = "???"
+    latex_output = "???"
+    extracted_vars = []
+
+    if is_valid:
+        try:
+            evaluated_res = validator.evaluate_output()
+            evaluated_output = str(evaluated_res)
+            latex_output = evaluated_output
+            
+            # Dynamically update the shared context ledger for downstream dependency cascading
+            target_entry = next((x for x in all_entities_payload if x.get('sequence_token') == sequence_token), None)
+            if target_entry:
+                target_entry['simulated_value'] = evaluated_output
+
+            # --- SymPy LaTeX Rendering Factory ---
+            if archetype_name.lower().startswith('formula'):
+                if hasattr(validator, 'last_computed_sympy_result'):
+                    try:
+                        result_obj = validator.last_computed_sympy_result
+                        if isinstance(result_obj, tuple):
+                            latex_output = f"{sp.latex(result_obj[0])} = {sp.latex(result_obj[1])}"
+                            sym_set = result_obj[0].free_symbols.union(result_obj[1].free_symbols)
+                        else:
+                            if isinstance(result_obj, sp.Symbol):
+                                eval_str = str(evaluated_output)
+                                if '[' in eval_str and ']' in eval_str:
+                                    inner = eval_str.split('[', 1)[1].rsplit(']', 1)[0]
+                                    raw_solutions = [s.strip() for s in inner.split(',') if s.strip()]
+                                    latex_solutions = []
+                                    
+                                    parsing_env = {str(result_obj): result_obj}
+                                    if hasattr(result_obj, 'free_symbols'):
+                                        for sym in result_obj.free_symbols:
+                                            parsing_env[str(sym)] = sym
+
+                                    for sol in raw_solutions:
+                                        try:
+                                            parsed_sol = sp.parse_expr(sol, local_dict=parsing_env, global_dict=sp.__dict__)
+                                            latex_solutions.append(sp.latex(parsed_sol))
+                                        except Exception:
+                                            latex_solutions.append(sol)
+                                            
+                                    latex_output = f"{str(result_obj)} = [{', '.join(latex_solutions)}]"
+                                else:
+                                    latex_output = eval_str
+                            else:
+                                latex_output = sp.latex(result_obj)
+                                
+                            sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
+                        
+                        extracted_vars = [str(sym) for sym in sym_set if re.match(r'^[a-zA-Z]\d*$', str(sym))]
+                    except Exception as e:
+                        print(f"⚠️ Shared helper SymPy LaTeX conversion error: {str(e)}")
+
+        except Exception as eval_err:
+            print(f"❌ Evaluation crash on <{sequence_token}>: {str(eval_err)}")
+            evaluated_output = "⚠️ Error"
+            latex_output = "⚠️ Error"
+    else:
+        # Fallback string parsing for invalid states (matches preview function legacy fallback)
+        try:
+            if clean_inputs.get('formula'):
+                evaluated_output = str(validator.evaluate_output())
+                latex_output = evaluated_output
+            else:
+                evaluated_output = "0"
+                latex_output = "0"
+        except Exception:
+            evaluated_output = clean_inputs.get('formula', '0')
+            latex_output = str(evaluated_output)
+
+    # Secondary Regex Parse if SymPy dropped variables
+    if archetype_name.lower().startswith('formula') and not extracted_vars:
+        try:
+            raw_formula_text = str(clean_inputs.get('formula', ''))
+            clean_text = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '', raw_formula_text)
+            matches = re.findall(r'\b[a-zA-Z]\d*\b', clean_text)
+            extracted_vars = list(set(matches))
+        except Exception:
+            pass
+    extracted_vars.sort()
+
+    return {
+        'is_valid': is_valid,
+        'errors': errors,
+        'evaluated_output': evaluated_output,
+        'latex_output': latex_output,
+        'extracted_variables': ", ".join(extracted_vars)
+    }

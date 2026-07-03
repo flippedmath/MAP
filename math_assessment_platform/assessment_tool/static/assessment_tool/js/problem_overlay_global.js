@@ -169,7 +169,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Run calculation triggers
             if (typeof dispatchWorkspaceBatchSync === 'function') {
-                dispatchWorkspaceBatchSync(null);
+                // Pass 'initial_load' instead of null to bypass the initialization block
+                dispatchWorkspaceBatchSync('initial_load');
             } else {
                 updateWorkspaceSimulationPreview();
             }
@@ -1331,12 +1332,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log("Cleaned substitutions mapping payload: ", inputsCollected["substitutions"]);
             }
 
-            // 🎯 FIX 2: Restructure output model parameters to mirror Python context lookup keys
+            // 🎯 NEW CACHE LOCK BREAKER: Check if the user is actively editing this card
+            let finalSimulatedValue = card.getAttribute('data-simulated-value');
+            const activeElement = document.activeElement;
+            const isCardBeingEdited = activeElement && card.contains(activeElement);
+
+            if (isCardBeingEdited) {
+                console.log(`🧼 [Serializer] Active input edit caught on [${token}]. Clearing simulated_value payload to force backend re-roll.`);
+                finalSimulatedValue = null;
+            }
+
+            // 🎯 FIXED: Restructure output model parameters to mirror Python context lookup keys
             entities.push({
-                token: baseArchetypeToken,      // Tracks the token type/archetype profile name (e.g. "primeFactors")
-                sequence_token: token,          // 🚀 CRITICAL: Matches item.get("sequence_token") for parent lookups (e.g. "primeFactors1")
+                token: baseArchetypeToken,      // e.g. "randInt"
+                sequence_token: token,          // e.g. "randInt2"
                 inputs: inputsCollected,
-                simulated_value: card.getAttribute('data-simulated-value')
+                simulated_value: finalSimulatedValue // ✅ Sends null when actively typed in
             });
         });
         
@@ -2025,7 +2036,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (baseToken === 'formula') {
                     const solveForSelect = card.querySelector('.val-input-simplify-target');
                     // Ensure the key exists even if empty to maintain database schema consistency
-                    inputValues['variable to simplify'] = solveForSelect ? solveForSelect.value.trim() : '';
+                    inputValues['variable to solve for'] = solveForSelect ? solveForSelect.value.trim() : '';
                 }
 
                 // 2. EXTRACTION: Standard Wrapper-based inputs

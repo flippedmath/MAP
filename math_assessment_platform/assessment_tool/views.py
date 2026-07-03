@@ -9,7 +9,7 @@ from .models import (
     QuestionBlock, EntitySegment,
     EntityType, EntityUserInput
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity
 import json
 from django.http import JsonResponse
 
@@ -1927,9 +1927,8 @@ def save_problem_workspace(request, problem_id):
             else:
                 cleaned_provided_fields[key] = value
 
-        # 🎯 STEP A: VALIDATION LOOP
+        # 🎯 STEP A: VALIDATION LOOP (Inside your existing for loop)
         if token_id == 'formula':
-            # Safe fallbacks if fields are missing or empty strings
             if not cleaned_provided_fields.get('formula'):
                 print(f"⚠️  [{sequence_token}] Formula field is empty. Injecting fallback '0'.")
                 cleaned_provided_fields['formula'] = "0"
@@ -1937,9 +1936,7 @@ def save_problem_workspace(request, problem_id):
             if solve_method == 'variable substitution':
                 has_substitutions = len(substitutions_map) > 0 or "substitutions" in provided_fields
                 
-                # If there are no explicit sub_ rows, check if it's linking to an upstream variable/formula card
                 if not has_substitutions:
-                    # 🎯 FIX: Changed JS '.contains()' to Python 'in' operator to prevent an AttributeError
                     is_linked_dependency = any(
                         f"<{sequence_token}>" in str(entity.get("inputs", {})) or 
                         sequence_token in str(entity.get("inputs", {}))
@@ -1954,18 +1951,20 @@ def save_problem_workspace(request, problem_id):
                             "error": f"Validation failed for '{sequence_token}': Please add at least one variable substitution row or link to evaluate."
                         }, status=422)
                 
+                # Look for the new key name when validating variables
                 vars_list = [v.strip() for v in cleaned_provided_fields.get('variables', '').split(',') if v.strip()]
-                if vars_list and not cleaned_provided_fields.get('variable substitution'):
-                    cleaned_provided_fields['variable substitution'] = vars_list[0]
-                elif not cleaned_provided_fields.get('variable substitution'):
-                    cleaned_provided_fields['variable substitution'] = "x"
+                if vars_list and not cleaned_provided_fields.get('variable to solve for'):
+                    cleaned_provided_fields['variable to solve for'] = vars_list[0]
+                elif not cleaned_provided_fields.get('variable to solve for'):
+                    cleaned_provided_fields['variable to solve for'] = "x"
                 
             elif solve_method == 'simplify':
-                target_var = cleaned_provided_fields.get('variable substitution', '').strip()
+                # FIX: Changed lookups from 'variable substitution' to 'variable to solve for'
+                target_var = cleaned_provided_fields.get('variable to solve for', '').strip()
                 if not target_var:
-                    cleaned_provided_fields['variable substitution'] = "x" # Safe default fallback override
+                    cleaned_provided_fields['variable to solve for'] = "x" 
             else:
-                cleaned_provided_fields['variable substitution'] = ""
+                cleaned_provided_fields['variable to solve for'] = ""
 
         # 🧪 DIAGNOSTIC PRINT: Inspect fields sent to validator constructor
         print(f"⚙️  Sending fields to get_entity_validator for <{sequence_token}>:")
@@ -2151,21 +2150,24 @@ def problem_workspace_editor(request, problem_id):
         sequence_token = content_data.get("sequence_token") or token_name
         archetype_name = re.sub(r'\d+$', '', token_name)
 
-        all_entities_payload.append({
-            'token': archetype_name,
-            'sequence_token': str(sequence_token).strip(),
-            'inputs': content_data,
-            'simulated_value': "" # Fresh pass calculation target
-        })
-        prepped_segments.append((segment, content_data, token_name, sequence_token, archetype_name))
-
-    loaded_segments = []
-    # 🎯 SECOND: Process each asset using the shared environmental ledger context
-    for segment, content_data, token_name, sequence_token, archetype_name in prepped_segments:
+        # Create a thoroughly sanitized input payload copy for evaluation engines
         clean_inputs = dict(content_data)
         clean_inputs.pop("answer_field", None)
         clean_inputs.pop("sequence_token", None)
+        clean_inputs.pop("shuffle_seed", None)
 
+        all_entities_payload.append({
+            'token': archetype_name,
+            'sequence_token': str(sequence_token).strip(),
+            'inputs': clean_inputs, # 🎯 Clean inputs matching preview structures
+            'simulated_value': "" 
+        })
+        # Keep clean_inputs coupled with the segment block state 
+        prepped_segments.append((segment, content_data, clean_inputs, token_name, sequence_token, archetype_name))
+
+    loaded_segments = []
+    # 🎯 SECOND: Process each asset using the shared environmental ledger context
+    for segment, content_data, clean_inputs, token_name, sequence_token, archetype_name in prepped_segments:
         blueprint_pattern = segment.problem_type_id_originator.format_pattern
         if isinstance(blueprint_pattern, str):
             try:
@@ -2173,24 +2175,14 @@ def problem_workspace_editor(request, problem_id):
             except json.JSONDecodeError:
                 blueprint_pattern = {}
 
-        # 🎯 FIX: Pass content_data directly, and supply the global entities environment map
-        validator = get_entity_validator(
-            token_string=archetype_name, 
-            data_payload=content_data, 
+        # 🚀 CALL ENCAPSULATED UTILITY
+        render_results = evaluate_and_format_entity(
+            archetype_name=archetype_name,
+            sequence_token=sequence_token,
+            clean_inputs=clean_inputs,
             pattern_blueprint=blueprint_pattern,
             all_entities_payload=all_entities_payload
         )
-        
-        simulated_value = "???"
-        if validator.is_valid():
-            try:
-                simulated_value = str(validator.evaluate_output())
-                # Update our environment tracker so subsequent blocks down-the-line read this value
-                target_entry = next((x for x in all_entities_payload if x['sequence_token'] == sequence_token), None)
-                if target_entry:
-                    target_entry['simulated_value'] = simulated_value
-            except Exception:
-                simulated_value = "⚠️ Error"
 
         loaded_segments.append({
             "id": segment.id,
@@ -2198,7 +2190,9 @@ def problem_workspace_editor(request, problem_id):
             "sequence_token": sequence_token,
             "points": segment.points,
             "inputs": clean_inputs,
-            "simulated_value": simulated_value
+            "simulated_value": render_results['evaluated_output'], # Keep for internal map symmetry
+            "evaluated_output": render_results['evaluated_output'],
+            "latex_output": render_results['latex_output']
         })
 
     # 3. Safely pull Quill rich text from QuestionBlock
@@ -2249,31 +2243,35 @@ def validate_component_preview(request):
         if not entities_list:
             return JsonResponse({'success': True, 'updated_cache': {}, 'errors': {}})
 
+        trigger_token = payload.get('trigger_token', '')
+        mutation_targets = payload.get('mutation_targets', [trigger_token]) # Fallback to just trigger if missing
+
         # 🎯 FIX: Build a completely bulletproof sibling ledger using uniform lowercase lookups
         all_entities_payload = []
         for item in entities_list:
             token_raw = item.get('token', '')
-            
-            # Fallback chains to make sure we don't grab empty strings
-            sequence_token_raw = item.get('sequence_token') or token_raw
+            sequence_token_raw = str(item.get('sequence_token') or token_raw).strip()
             archetype_name = re.sub(r'\d+$', '', token_raw)
-            raw_sim_value = item.get('simulated_value')
-            # 🎯 Safe extraction: ensure null, "None", and empty strings all normalize to a clean ""
-            if raw_sim_value is None or str(raw_sim_value).strip() in ["", "None", "null"]:
+            
+            # 🎯 ENFORCED BACKEND LOCK-BREAKER:
+            # If this component is targeted for mutation/re-calculation, wipe out its 
+            # incoming simulated value so the math engine is forced to evaluate the new inputs.
+            if sequence_token_raw in mutation_targets:
                 clean_sim_value = ""
             else:
-                clean_sim_value = str(raw_sim_value).strip()
+                raw_sim_value = item.get('simulated_value')
+                if raw_sim_value is None or str(raw_sim_value).strip() in ["", "None", "null"]:
+                    clean_sim_value = ""
+                else:
+                    clean_sim_value = str(raw_sim_value).strip()
 
             all_entities_payload.append({
                 'token': archetype_name,
-                'sequence_token': str(sequence_token_raw).strip(),
+                'sequence_token': sequence_token_raw,
                 'inputs': item.get('inputs', {}) or {},
                 'simulated_value': clean_sim_value
             })
 
-        trigger_token = payload.get('trigger_token', '')
-        mutation_targets = payload.get('mutation_targets', [trigger_token]) # Fallback to just trigger if missing
-        
         updated_cache = {}
         global_errors_ledger = {}
 
@@ -2319,154 +2317,32 @@ def validate_component_preview(request):
             token_raw = item.get('token', '')
             archetype_name = re.sub(r'\d+$', '', token_raw)
             
-            print(f"\n⚙️ [PREVIEW VIEW] Processing: {sequence_token_id} (Archetype: {archetype_name})")
-            print(f"    Inputs sent from JS: {item.get('inputs', {})}")
-            
             pattern_blueprint = get_blueprint_for_token(archetype_name)
-
             entity_inputs = item.get('inputs', {}) or {}
-            print(f"entity_inputs: {entity_inputs}")
             entity_inputs['sequence_token'] = sequence_token_id
             
-            # 🎯 RESHRESH LOCK-BREAKER: If this target is a downstream descendant (not the driver card itself), 
-            # wipe out its stale simulated_value so it's forced to re-roll matching its new boundary changes.
+            # REFRESH LOCK-BREAKER
             if sequence_token_id != trigger_token and archetype_name.lower() in ['rand', 'randint']:
                 target_payload = next((x for x in all_entities_payload if x.get("sequence_token") == sequence_token_id), None)
                 if target_payload:
-                    print(f"        🗑️ [CACHE RESET] Wiping stale state for linked descendant random card: {sequence_token_id}")
                     target_payload['simulated_value'] = ""
 
-            validator_engine = get_entity_validator(
-                token_string=archetype_name,
-                data_payload=entity_inputs,
+            # 🚀 CALL ENCAPSULATED UTILITY
+            render_results = evaluate_and_format_entity(
+                archetype_name=archetype_name,
+                sequence_token=sequence_token_id,
+                clean_inputs=entity_inputs,
                 pattern_blueprint=pattern_blueprint,
                 all_entities_payload=all_entities_payload
             )
             
-            engine_is_valid = validator_engine.is_valid()
-            print(f"    Validation Status for {sequence_token_id}: {engine_is_valid}")
-            
-            if not engine_is_valid:
-                engine_errors = getattr(validator_engine, 'errors', {})
-                print(f"    ❌ Engine Validation Errors: {engine_errors}")
-                if engine_errors:
-                    global_errors_ledger[sequence_token_id] = engine_errors
-
-            if engine_is_valid:
-                try:
-                    evaluated_output = validator_engine.evaluate_output()
-                    print(f"    ✅ Evaluation Successful! Result: {evaluated_output}")
-                    
-                    # 🎯 DYNAMIC BROADCAST: Mutate our live matching tracking context element!
-                    # This lets subsequent loop steps read this absolute value if they evaluate boundaries.
-                    live_payload = next((x for x in all_entities_payload if x.get("sequence_token") == sequence_token_id), None)
-                    if live_payload:
-                        live_payload['simulated_value'] = str(evaluated_output)
-
-                except Exception as eval_err:
-                    print(f"    💥 Evaluation Crashed post-validation: {str(eval_err)}")
-                    evaluated_output = "N/A"
-            else:
-                try:
-                    print(f"    ⚠️ Attempting fallback string parsing anyway...")
-                    if item.get('inputs', {}).get('formula'):
-                        evaluated_output = validator_engine.evaluate_output()
-                        print(f"    ✨ Fallback evaluation managed to parse output: {evaluated_output}")
-                    else:
-                        evaluated_output = "0"
-                except Exception as fallback_err:
-                    print(f"    💥 Fallback parsing also failed: {str(fallback_err)}")
-                    evaluated_output = item.get('inputs', {}).get('formula', '0')
-
-            # =========================================================================
-            # 🎯 FIX: Regex Pattern Updated for Single-Character Base Variables
-            # =========================================================================
-            if archetype_name.lower().startswith('formula'):
-                latex_output = str(evaluated_output)
-                extracted_vars = []
-
-                # Path A: SymPy ran successfully and left a clean result object
-                if hasattr(validator_engine, 'last_computed_sympy_result'):
-                    try:
-                        result_obj = validator_engine.last_computed_sympy_result
-                        # Handle custom tuple response structure from equation simplify routes
-                        if isinstance(result_obj, tuple):
-                            latex_output = f"{sp.latex(result_obj[0])} = {sp.latex(result_obj[1])}"
-                            sym_set = result_obj[0].free_symbols.union(result_obj[1].free_symbols)
-                        else:
-                            # 🎯 FIX: Intercept single target symbols and format their solutions as comma-separated LaTeX lists
-                            if isinstance(result_obj, sp.Symbol):
-                                target_var_str = str(result_obj)
-                                eval_str = str(evaluated_output)
-                                
-                                # Extract everything between the first '[' and last ']'
-                                if '[' in eval_str and ']' in eval_str:
-                                    inner_content = eval_str.split('[', 1)[1].rsplit(']', 1)[0]
-                                    
-                                    # Split individual answers cleanly by commas
-                                    raw_solutions = [s.strip() for s in inner_content.split(',') if s.strip()]
-                                    latex_solutions = []
-                                    
-                                    # 🎯 FIX: Build a safe environment context including SymPy globals (like I, sqrt, pi)
-                                    # and include the target variable symbol itself.
-                                    parsing_env = {}
-                                    parsing_env[str(result_obj)] = result_obj
-                                    if hasattr(result_obj, 'free_symbols'):
-                                        for sym in result_obj.free_symbols:
-                                            parsing_env[str(sym)] = sym
-
-                                    for sol in raw_solutions:
-                                        print(f"sol: {sol}")
-                                        try:
-                                            # 🎯 FIX: Evaluate string expressions using standard transformations 
-                                            # alongside your target environment tokens.
-                                            parsed_sol = sp.parse_expr(sol, local_dict=parsing_env, global_dict=sp.__dict__)
-                                            print(f"parsed_sol: {parsed_sol}")
-                                            latex_solutions.append(sp.latex(parsed_sol))
-                                        except Exception as parse_err:
-                                            print(f"fallback due to: {parse_err}")
-                                            # Fallback to pure text if string math parsing fails
-                                            latex_solutions.append(sol)
-                                            
-                                    latex_output = f"{target_var_str} = [{', '.join(latex_solutions)}]"
-                                else:
-                                    latex_output = eval_str
-                            else:
-                                latex_output = sp.latex(result_obj)
-                                
-                            sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
-                        
-                        # Apply structural variable naming constraint
-                        extracted_vars = [
-                            str(sym) for sym in sym_set 
-                            if re.match(r'^[a-zA-Z]\d*$', str(sym))
-                        ]
-                    except Exception as latex_err:
-                        print(f"    ⚠️ SymPy Latex extraction fallback: {str(latex_err)}")
-
-                # Path B: Fallback regex analysis if SymPy execution was bypassed or crashed
-                if not extracted_vars:
-                    try:
-                        raw_formula_text = str(item.get('inputs', {}).get('formula', ''))
-                        # Clear out macro bracket wrappers like <rand1>
-                        clean_text = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '', raw_formula_text)
-                        
-                        # 🎯 Match only a single letter followed by 0 or more numbers
-                        matches = re.findall(r'\b[a-zA-Z]\d*\b', clean_text)
-                        extracted_vars = list(set(matches))
-                    except Exception as fallback_parse_err:
-                        print(f"    ⚠️ Regex string extraction failed: {str(fallback_parse_err)}")
-
-                extracted_vars.sort()
-            else:
-                latex_output = str(evaluated_output)
-                extracted_vars = []
-            # =========================================================================
+            if not render_results['is_valid'] and render_results['errors']:
+                global_errors_ledger[sequence_token_id] = render_results['errors']
 
             updated_cache[sequence_token_id] = {
-                'evaluated_output': str(evaluated_output),
-                'latex_output': latex_output,
-                'extracted_variables': ", ".join(extracted_vars)
+                'evaluated_output': render_results['evaluated_output'],
+                'latex_output': render_results['latex_output'],
+                'extracted_variables': render_results['extracted_variables']
             }
 
         print("\n📤 [PREVIEW VIEW] FINAL UPDATED CACHE RESPONSE OUT")
