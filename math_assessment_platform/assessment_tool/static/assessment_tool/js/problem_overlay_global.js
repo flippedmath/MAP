@@ -1044,7 +1044,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .map(v => v.trim())
                 .filter(v => v.length > 0);
 
-            const savedTarget = savedValues['variable to simplify'] || savedValues['variable to substitute'] || savedValues['variable to solve for'] || "";
+            const savedTarget = savedValues['variable to solve for'] || "";
             
             targetSelectElement.innerHTML = '<option value="">-- N/A --</option>';
             currentVars.forEach(v => {
@@ -1139,7 +1139,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 variablesField.value = savedValues['variables'];
             }
 
-            const incomingVal = savedValues['variable to simplify'] || savedValues['variable to substitute'] || savedValues['variable to solve for'] || "";
+            const incomingVal = savedValues['variable to solve for'] || "";
             if (incomingVal) {
                 if (simplifySelect) simplifySelect.setAttribute('data-saved-value', incomingVal);
                 if (substitutionSelect) substitutionSelect.setAttribute('data-saved-value', incomingVal);
