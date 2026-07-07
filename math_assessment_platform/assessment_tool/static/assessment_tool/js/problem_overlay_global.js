@@ -946,6 +946,52 @@ document.addEventListener('DOMContentLoaded', function() {
             variablesField.style.cursor = 'not-allowed';
         }
 
+        // 🎯 NEW HELPER: Extract variables recursively if pointing to a linked token
+        function extractVariablesFromFormulaString(formulaStr) {
+            if (!formulaStr) return [];
+            
+            const cleanStr = formulaStr.trim();
+            // Check if this input is a linked token macro (e.g., <formula4>)
+            const tokenMatch = cleanStr.match(/^<([^>]+)>$/);
+            
+            if (tokenMatch) {
+                const targetTokenIndexName = tokenMatch[1].strip ? tokenMatch[1].strip() : tokenMatch[1];
+                
+                // Crawl the DOM to look for the sidebar card matching that token definition name
+                // Note: Adjust the attribute selector name below ('data-indexed-token' or 'data-token') to match your app's exact DOM setup
+                const sourceCard = document.querySelector(`[data-indexed-token="${targetTokenIndexName}"], [data-token="${targetTokenIndexName}"]`);
+                if (sourceCard) {
+                    const sourceVarsInput = sourceCard.querySelector('.val-input-variables');
+                    if (sourceVarsInput && sourceVarsInput.value) {
+                        return sourceVarsInput.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
+                    }
+                }
+                return [];
+            }
+
+            // Fallback to standard local regex extraction if it's a regular math string
+            // 🎯 FIXED: Explicitly matches a single letter followed exclusively by zero or more numbers
+            const variableMatches = formulaStr.match(/\b[a-zA-Z][0-9]*\b/g) || [];
+            
+            // Clean up duplicates and return directly—no blacklist array array scanning required!
+            return [...new Set(variableMatches)];
+        }
+
+        // 🎯 NEW HELPER: Core calculation sequence to sync and update dropdown structures
+        function updateVariablesIndexAndSyncUI(preserveExistingVars = false) {
+            const formulaInput = card.querySelector('.val-input-formula');
+            if (!formulaInput || !variablesField) return;
+
+            // Only run the dynamic DOM extractor if we aren't loading from the database
+            if (!preserveExistingVars) {
+                const extractedVars = extractVariablesFromFormulaString(formulaInput.value);
+                variablesField.value = extractedVars.join(', ');
+            }
+
+            syncSolveForDropdown();
+            refreshUnusedVariablesPicker();
+        }
+
         // Alternates visibility matching your active layout contexts
         function syncSolveForDropdown() {
             const selectedMethod = solveMethodSelect?.value || "leave as formula";
@@ -970,8 +1016,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 populateVariablesDropdown(simplifySelect);
             } 
             else if (selectedMethod === 'variable substitution') {
-                // 🛑 FIXED: We keep 'substitutionWrapper' hidden so the "target variable" dropdown doesn't show up.
-                // We ONLY display the rows container where actual variable substitutions happen.
                 if (substitutionsWrapper) substitutionsWrapper.style.display = 'flex';
                 
                 // Clear out values on the unneeded selects
@@ -1077,30 +1121,36 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
-        if (savedValues) {
+        // Load sequence
+        if (savedValues && Object.keys(savedValues).length > 0) {
             if (solveMethodSelect && savedValues['solve method']) {
                 solveMethodSelect.value = savedValues['solve method'];
                 card.setAttribute('data-last-method', savedValues['solve method']);
             }
 
-            // 🎯 FIXED: Assign incoming saved values to the matching contextual element
+            // 🎯 FIX: Hydrate the variables field directly from the database payload BEFORE syncing
+            if (variablesField && savedValues['variables']) {
+                variablesField.value = savedValues['variables'];
+            }
+
             const incomingVal = savedValues['variable to simplify'] || savedValues['variable to substitute'] || savedValues['variable to solve for'] || "";
             if (incomingVal) {
                 if (simplifySelect) simplifySelect.setAttribute('data-saved-value', incomingVal);
                 if (substitutionSelect) substitutionSelect.setAttribute('data-saved-value', incomingVal);
             }
 
-            syncSolveForDropdown();
+            // 🎯 FIX: Force-refresh UI, but TELL it to keep the loaded variables we just injected
+            updateVariablesIndexAndSyncUI(true);
 
             Object.entries(savedValues).forEach(([key, vVal]) => {
                 if (key.startsWith('sub_')) {
                     createSubstitutionRow(key.replace('sub_', ''), vVal);
                 }
             });
+        } else {
+            // Only do a raw dynamic DOM extraction if there are no saved values (brand new card)
+            updateVariablesIndexAndSyncUI();
         }
-
-        syncSolveForDropdown();
-        refreshUnusedVariablesPicker();
 
         // CAPTURE CARD INPUT MUTATIONS AND BUBBLE FRESH EVENTS UPSTREAM
         card.addEventListener('input', (e) => {
@@ -1110,12 +1160,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
-            // 💾 Just cache the state; do NOT run structural rebuilds for this target here
             if (target.matches('.val-input-simplify-target')) {
                 card.setAttribute('data-selected-variable', target.value);
-                console.log(`%c💾 [STATE PERSIST] Saved user selection state to card attribute: "${target.value}"`, "color: #10b981;");
-                
-                // Skip syncSolveForDropdown() for changes to the dropdown itself to prevent flickering
                 refreshUnusedVariablesPicker();
                 card.dispatchEvent(new Event('change', { bubbles: true }));
                 return;
@@ -1125,38 +1171,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 target.setAttribute('value', target.value);
             }
 
-            // 👁️ VISIBILITY TOGGLE: If the solve method changed, adjust dropdown display instantly
             if (target.matches('.val-input-solve-method')) {
                 const solveMethod = target.value;
-                // Find the closest wrapper layout container for the dropdown row
                 const simplifyDropdownContainer = card.querySelector('.val-input-simplify-target')?.closest('.form-group, .input-row, div');
                 
                 if (simplifyDropdownContainer) {
                     if (solveMethod === 'variable substitution') {
                         simplifyDropdownContainer.style.display = 'none';
-                        // Clean out client-side cached selection state so it doesn't leak
                         card.removeAttribute('data-selected-variable'); 
                     } else {
-                        simplifyDropdownContainer.style.display = ''; // Restore default layout display (block/flex/etc)
+                        simplifyDropdownContainer.style.display = ''; 
                     }
                 }
             }
 
+            // 🎯 FIX: Route changes to formula inputs through our look-up resolver 
             if (target.matches('.val-input-formula')) {
-                const rawFormula = target.value;
-                const variableMatches = rawFormula.match(/\b[a-zA-Z][0-9]*\b/g) || [];
-                
-                const coreTokensBlacklist = ['randInt', 'rand', 'primeFactor', 'sin', 'cos', 'tan', 'sqrt', 'log', 'pi'];
-                const uniqueVars = [...new Set(variableMatches)].filter(v => !coreTokensBlacklist.includes(v));
-
-                if (variablesField) {
-                    variablesField.value = uniqueVars.join(', ');
-                }
+                updateVariablesIndexAndSyncUI();
+            } else {
+                syncSolveForDropdown();
+                refreshUnusedVariablesPicker();
             }
-
-            // Only update dropdown layout structure if things like the formula text change
-            syncSolveForDropdown();
-            refreshUnusedVariablesPicker();
 
             card.dispatchEvent(new Event('change', { bubbles: true }));
         });
@@ -1168,7 +1203,6 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
-        // 🎯 FIXED: Bound generic state-change triggers to both active variable drop downs
         [simplifySelect, substitutionSelect].forEach(selectEl => {
             if (selectEl) {
                 selectEl.addEventListener('change', () => {
@@ -2458,6 +2492,27 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                     });
+
+                    // 🎯 FIX: Automatically reconcile missing variables from substitution allocations
+                    let variablesArray = inputValues['variables'] 
+                        ? inputValues['variables'].split(',').map(v => v.trim()).filter(Boolean)
+                        : [];
+
+                    // Scan the built inputs object for any active sub_ variables
+                    Object.keys(inputValues).forEach(key => {
+                        if (key.startsWith('sub_')) {
+                            const impliedVar = key.replace('sub_', '').trim();
+                            // If it's being substituted but isn't in the input variables text field, add it
+                            if (impliedVar && !variablesArray.includes(impliedVar)) {
+                                variablesArray.push(impliedVar);
+                            }
+                        }
+                    });
+
+                    // Update the clean comma-separated string that the python validation schema expects
+                    if (variablesArray.length > 0) {
+                        inputValues['variables'] = variablesArray.join(', ');
+                    }
                 }
 
                 // Debug log to confirm what is actually getting pushed to the server
@@ -2558,6 +2613,11 @@ document.addEventListener('DOMContentLoaded', function() {
             linkBtn.className = 'btn-input-link-trigger';
             linkBtn.style.color = '#94a3b8';
             linkBtn.style.borderColor = '#cbd5e1';
+
+            // 🎯 FIX: Notify the layout index compiler that the formula is empty or unlinked 
+            if (rawInput) {
+                rawInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
 
             // 🚀 FIX: Pull the parent workspace component block token ID
             const activeCard = linkBtn.closest('.workspace-block-card');
@@ -2713,6 +2773,12 @@ document.addEventListener('DOMContentLoaded', function() {
         const wrapper = optionBtn.closest('.linked-input-wrapper');
         const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
         
+        // 🎯 FIX: Find the targeted raw input tag control inside this layout wrapper frame
+        const actualInputNode = wrapper.querySelector('input, select');
+        if (actualInputNode) {
+            actualInputNode.value = chosenTokenString; // Sync value to "<formula3>"
+        }
+
         const labelEl = wrapper.querySelector('label');
         if (labelEl) {
             labelEl.style.display = 'none';
@@ -2743,6 +2809,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Close options dropdown picker instance frame
         wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+
+        // 🎯 FIX: Bubble a simulated keystroke notice so live variables parser extracts immediately
+        if (actualInputNode) {
+            actualInputNode.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         
         // 🚀 FIX: Find the enclosing formula card element container
         const activeCard = wrapper.closest('.workspace-component-card');

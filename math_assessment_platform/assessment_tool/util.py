@@ -1270,7 +1270,7 @@ class FormulaEntity(BaseEntity):
         if variables_str:
             raw_elements = [v.strip() for v in str(variables_str).split(",") if v.strip()]
             for item in raw_elements:
-                if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', item):
+                if not re.match(r'^[a-zA-Z][0-9]*$', item):
                     self.errors["variables"] = f"'{item}' is not a valid algebraic variable identifier."
                     break
                 parsed_variables.append(item)
@@ -1280,8 +1280,18 @@ class FormulaEntity(BaseEntity):
 
         # 🎯 UPDATED BLOCK: ENFORCING N/A RECONCILIATION FOR SIMPLIFY METHOD
         if solve_method == "simplify":
-            # If a target variable is selected, make sure it is defined in the variables index
-            if parsed_variables and solve_for_target and (solve_for_target not in parsed_variables):
+            # 1. Catch missing target variable when simplifying an inherited token link
+            is_macro_token = bool(re.search(r'&lt;([^&>]+)&gt;|<([^>]+)>', str(formula_expr)))
+            
+            if is_macro_token and not solve_for_target:
+                self.errors["variable to solve for"] = (
+                    f"Ambiguous Simplify Target: This card references an external step '{formula_expr}', "
+                    f"but no 'Target Variable to Simplify' has been selected. Please choose which variable "
+                    f"you want to isolate on the left side of the equation."
+                )
+            
+            # 2. If a target variable is selected, make sure it is defined in the variables index
+            elif parsed_variables and solve_for_target and (solve_for_target not in parsed_variables):
                 self.errors["variable to solve for"] = (
                     f"Target variable '{solve_for_target}' must be present inside your "
                     f"declared variables list: {parsed_variables}."
@@ -1299,16 +1309,17 @@ class FormulaEntity(BaseEntity):
         var_list = self.runtime_values.get("parsed_variables_array", [])
         solve_for_target = self.runtime_values.get("variable to solve for", "").strip()
 
-        print("What is the dropdown value?: {}, {}, {}".format(self.runtime_values.get("variable to simplify"), self.runtime_values.get("variable to substitute"), self.runtime_values.get("variable to solve for")))
-
         if solve_for_target in ["-- N/A --", "-- choose variable --"]:
             solve_for_target = ""
 
-        print(f"    [FormulaEntity.evaluate_output] Executing...")
-        print(f"        Original string: {repr(formula_str)}")
-        print(f"        Target variable: {repr(solve_for_target)}")
+        print(f"\n🚀 [FormulaEntity.evaluate_output] START ENGINE")
+        print(f"   ↳ Raw Formula input:   {repr(formula_str)}")
+        print(f"   ↳ Selected Method:     {repr(solve_method)}")
+        print(f"   ↳ Declared Variables:  {var_list}")
+        print(f"   ↳ Solve/Simplify Target: {repr(solve_for_target)}")
 
         if not formula_str:
+            print("   ⚠️ Empty formula string detected. Bailing early with '0'.")
             return "0"
 
         # Build local substitutions structures
@@ -1325,15 +1336,10 @@ class FormulaEntity(BaseEntity):
         for var_name, var_value in subs_map.items():
             if isinstance(var_value, str) and var_value.startswith('<') and var_value.endswith('>'):
                 raw_resolved = self.resolve_token_dependency(var_value)
-                
-                # 🎯 FIX: If the linked entity value is an equation containing an assignment match (e.g. "y = expression"),
-                # strip out the left-hand assignment side so only the clean right-hand algebraic expression is substituted.
                 if raw_resolved and isinstance(raw_resolved, str) and '=' in raw_resolved:
-                    # Capture everything after the relation operator mapping
                     parts = re.split(r'(<=|>=|==|<|>|=)', raw_resolved, 1)
                     if len(parts) >= 3:
                         raw_resolved = parts[2].strip()
-
                 resolved_subs[var_name] = f"({raw_resolved})"
             else:
                 resolved_subs[var_name] = var_value
@@ -1344,11 +1350,11 @@ class FormulaEntity(BaseEntity):
             return resolved
 
         processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
-        print(f"        String after macro substitution pipeline: {repr(processed_formula)}")
+        print(f"   ↳ Post-Macro substitution string: {repr(processed_formula)}")
 
         local_dict = {var: sp.Symbol(var) for var in var_list}
-        if 'pi' not in local_dict:
-            local_dict['pi'] = sp.pi
+        if 'pi' not in local_dict: local_dict['pi'] = sp.pi
+        if 'exp' not in local_dict: local_dict['exp'] = sp.exp
 
         if solve_method in ['leave as formula', 'variable substitution', 'simplify']:
             local_dict['integrate'] = sp.Integral
@@ -1357,103 +1363,173 @@ class FormulaEntity(BaseEntity):
 
         # Helper method to parse single standalone chunk strings via SymPy safely
         def parse_segment(expr_str):
-            if "\\" in expr_str:
-                return parse_latex(expr_str)
-            return sp.parse_expr(expr_str, local_dict=local_dict, evaluate=False)
+            s = str(expr_str).strip()
+            print(f"      🔬 [parse_segment] Input token segment string: {repr(s)}")
+            
+            if "\\" in s:
+                print("         ↳ Detected LaTeX patterns. Forwarding to parse_latex()")
+                return parse_latex(s)
+            
+            if is_fully_wrapped_tuple(s):
+                s = s[1:-1].strip()
+                print(f"         ↳ Stripped genuine external wrapper brackets: {repr(s)}")
+                
+                if '=' not in s:
+                    # 🎯 FIXED: Use bracket-aware top-level comma splitting here too
+                    comma_split = split_top_level_comma(s)
+                    if comma_split:
+                        s = f"{comma_split[0]} = {comma_split[1]}"
+                        print(f"         ↳ Re-aligned unassigned root-level comma tuple: {repr(s)}")
+                
+            if '=' in s:
+                parts = re.split(r'(<=|>=|==|<|>|=)', s, 1)
+                if len(parts) >= 3:
+                    s = parts[2].strip()
+                    print(f"         ↳ Assignment strip detected. Isolating right-hand side text: {repr(s)}")
+                    
+            try:
+                parsed_obj = sp.parse_expr(s, local_dict=local_dict, evaluate=False)
+                print(f"         ✅ [parse_segment] Success: {repr(parsed_obj)} (Type: {type(parsed_obj).__name__})")
+                return parsed_obj
+            except Exception as segment_err:
+                print(f"         ❌ [parse_segment] CRASH compiling segment string: {repr(s)}")
+                print(f"            Details: {segment_err}")
+                raise segment_err
 
-        # 🎯 CHOOSE CORRECT RELATION MATCH (Order sorted by length to prevent partial matches)
-        rel_match = re.search(r'(<=|>=|==|<|>|=)', processed_formula)
-        has_relation = rel_match is not None
+        # Helper to verify if the first '(' matches the final ')'
+        def is_fully_wrapped_tuple(s):
+            if not (s.startswith('(') and s.endswith(')')):
+                return False
+            
+            balance = 0
+            for i in range(len(s) - 1):
+                if s[i] == '(': balance += 1
+                elif s[i] == ')': balance -= 1
+                if balance == 0: return False
+            return True
+
+        # 🎯 NEW HELPER: Split string on the first comma found ONLY at the root depth (depth=0)
+        def split_top_level_comma(s):
+            depth = 0
+            for idx, char in enumerate(s):
+                if char == '(': depth += 1
+                elif char == ')': depth -= 1
+                elif char == ',' and depth == 0:
+                    # Found the root-level comma divide!
+                    return [s[:idx].strip(), s[idx+1:].strip()]
+            return None # No top-level comma found
+
+        # Pre-process the entire formula string to clean up tuple representations 
+        processed_formula_clean = processed_formula.strip()
         
+        if is_fully_wrapped_tuple(processed_formula_clean):
+            processed_formula_clean = processed_formula_clean[1:-1].strip()
+            
+            if '=' not in processed_formula_clean:
+                # 🎯 FIXED: Safely split on the root-level comma separator only
+                comma_split = split_top_level_comma(processed_formula_clean)
+                if comma_split:
+                    processed_formula_clean = f"{comma_split[0]} = {comma_split[1]}"
+
+        # Relation Operator Scanner
+        rel_match = re.search(r'(<=|>=|==|<|>)', processed_formula_clean)
+        if not rel_match and '=' in processed_formula_clean:
+            if processed_formula_clean.count('(') == processed_formula_clean.count(')'):
+                if not (processed_formula_clean.strip().startswith('integrate') or processed_formula_clean.strip().startswith('diff')):
+                    rel_match = re.search(r'(=)', processed_formula_clean)
+
+        has_relation = rel_match is not None
         rel_op = rel_match.group(1) if has_relation else ""
         display_op = "=" if rel_op == "==" else rel_op
 
-        print(f"~~~~~~~solve method: {solve_method}, relation operator: {repr(rel_op)}, solve_for_target: {solve_for_target}")
+        print(f"   ↳ Cleaned tracking string: {repr(processed_formula_clean)}")
+        print(f"   ↳ Relationship detection -> has_relation: {has_relation}, rel_op: {repr(rel_op)}")
 
         # 🎯 PROCESS SIMPLIFY STRATEGIES
         if solve_method == 'simplify':
-
-            # SCENARIO A: Target is "-- N/A --"
-            if not solve_for_target:
-                if not has_relation:
-                    parsed_expr = parse_segment(processed_formula)
-                    result = sp.simplify(parsed_expr.doit())
-                else:
-                    left_raw, right_raw = processed_formula.split(rel_op, 1)
-                    left_parsed = parse_segment(left_raw)
-                    right_parsed = parse_segment(right_raw)
-                    
-                    left_simplified = sp.simplify(left_parsed.doit())
-                    right_simplified = sp.simplify(right_parsed.doit())
-                    
-                    self.last_computed_sympy_result = (left_simplified, right_simplified)
-                    return f"{left_simplified} {display_op} {right_simplified}"
-
-            # SCENARIO B: Target Variable is explicitly chosen
-            else:
-                target_symbol = sp.Symbol(solve_for_target)
-                
-                if not has_relation:
-                    parsed_expr = parse_segment(processed_formula)
-                    equation = sp.Eq(parsed_expr.doit(), 0)
-                    rel_op = "="
-                else:
-                    left_raw, right_raw = processed_formula.split(rel_op, 1)
-                    left_parsed = parse_segment(left_raw).doit()
-                    right_parsed = parse_segment(right_raw).doit()
-                    
-                    if rel_op in ["=", "=="]: equation = sp.Eq(left_parsed, right_parsed)
-                    elif rel_op == "<":   equation = sp.Lt(left_parsed, right_parsed)
-                    elif rel_op == "<=":  equation = sp.Le(left_parsed, right_parsed)
-                    elif rel_op == ">":   equation = sp.Gt(left_parsed, right_parsed)
-                    elif rel_op == ">=":  equation = sp.Ge(left_parsed, right_parsed)
-
-                # 🎯 AUTOMATIC SIGN FLIPPING HANDLER FOR INEQUALITIES
-                if rel_op in ["<", "<=", ">", ">="]:
-                    try:
-                        solved_rel = sp.reduce_inequalities(equation, target_symbol)
-                        self.last_computed_sympy_result = solved_rel
-                        return str(solved_rel)
-                    except Exception as e:
-                        print(f"        ⚠️ Inequality solver fallback triggered: {e}")
-                        solutions = sp.solve(equation, target_symbol)
-                else:
-                    solutions = sp.solve(equation, target_symbol)
-                
-                if isinstance(solutions, list):
-                    if len(solutions) == 1:
-                        resolved_right_side = solutions[0]
-                    elif len(solutions) > 1:
-                        resolved_right_side = f"[{', '.join(str(s) for s in solutions)}]"
+            print("   ⚙️ Route chosen: [simplify]")
+            try:
+                if not solve_for_target:
+                    if not has_relation:
+                        parsed_expr = parse_segment(processed_formula_clean)
+                        result = sp.simplify(parsed_expr.doit())
                     else:
-                        resolved_right_side = "0"
+                        left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
+                        left_parsed = parse_segment(left_raw)
+                        right_parsed = parse_segment(right_raw)
+                        left_simplified = sp.simplify(left_parsed.doit())
+                        right_simplified = sp.simplify(right_parsed.doit())
+                        self.last_computed_sympy_result = (left_simplified, right_simplified)
+                        return f"{left_simplified} {display_op} {right_simplified}"
                 else:
-                    resolved_right_side = solutions
+                    target_symbol = sp.Symbol(solve_for_target)
+                    if not has_relation:
+                        parsed_expr = parse_segment(processed_formula_clean)
+                        equation = sp.Eq(parsed_expr.doit(), 0)
+                        rel_op = "="
+                    else:
+                        left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
+                        left_parsed = parse_segment(left_raw).doit()
+                        right_parsed = parse_segment(right_raw).doit()
+                        if rel_op in ["=", "=="]: equation = sp.Eq(left_parsed, right_parsed)
+                        elif rel_op == "<":   equation = sp.Lt(left_parsed, right_parsed)
+                        elif rel_op == "<=":  equation = sp.Le(left_parsed, right_parsed)
+                        elif rel_op == ">":   equation = sp.Gt(left_parsed, right_parsed)
+                        elif rel_op == ">=":  equation = sp.Ge(left_parsed, right_parsed)
 
-                if not isinstance(resolved_right_side, str):
-                    self.last_computed_sympy_result = sp.Eq(target_symbol, resolved_right_side)
-                else:
-                    self.last_computed_sympy_result = target_symbol
+                    if rel_op in ["<", "<=", ">", ">="]:
+                        try:
+                            solved_rel = sp.reduce_inequalities(equation, target_symbol)
+                            self.last_computed_sympy_result = solved_rel
+                            return str(solved_rel)
+                        except Exception as e:
+                            print(f"        ⚠️ Inequality solver fallback triggered: {e}")
+                            solutions = sp.solve(equation, target_symbol)
+                    else:
+                        solutions = sp.solve(equation, target_symbol)
+                    
+                    if isinstance(solutions, list):
+                        if len(solutions) == 1: resolved_right_side = solutions[0]
+                        elif len(solutions) > 1: resolved_right_side = f"[{', '.join(str(s) for s in solutions)}]"
+                        else: resolved_right_side = "0"
+                    else:
+                        resolved_right_side = solutions
 
-                # For inequalities, reduce_inequalities handles output layout. For standard equations, maintain dynamic target = solution layout
-                return f"{solve_for_target} = {resolved_right_side}"
+                    if not isinstance(resolved_right_side, str):
+                        self.last_computed_sympy_result = sp.Eq(target_symbol, resolved_right_side)
+                    else:
+                        self.last_computed_sympy_result = target_symbol
+
+                    return f"{solve_for_target} = {resolved_right_side}"
+                    
+            except Exception as eval_err:
+                print(f"   ❌ [CRITICAL simplify CRASH] Exception block caught: {eval_err}")
+                return processed_formula_clean
 
         # 🎯 RETAIN OTHER NATIVE SOLVE METHODS AS IS
         else:
-            if has_relation and solve_method == 'variable substitution':
-                left_raw, right_raw = processed_formula.split(rel_op, 1)
+            print(f"   ⚙️ Route chosen: [{solve_method}] (Default Fallback Pipeline)")
+            
+            # This is the exact block that ran during your leave as formula execution!
+            if has_relation and solve_method in ['leave as formula', 'variable substitution']:
+                print("      ↳ Block trigger: has_relation & (leave as formula / substitution)")
+                left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
+                print(f"        Executing split -> left_raw: {repr(left_raw)} || right_raw: {repr(right_raw)}")
                 parsed_expr = (parse_segment(left_raw), parse_segment(right_raw))
             
             elif has_relation and solve_method == 'leave as formula':
-                left_raw, right_raw = processed_formula.split(rel_op, 1)
+                print("      ↳ Block trigger: has_relation & leave as formula exclusive split")
+                left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
                 left_parsed = parse_segment(left_raw)
                 right_parsed = parse_segment(right_raw)
-                
                 self.last_computed_sympy_result = (left_parsed, right_parsed)
                 return f"{left_parsed} {display_op} {right_parsed}"
             
             else:
-                parsed_expr = parse_segment(processed_formula)
+                print("      ↳ Block trigger: Standard un-split single segment parse execution")
+                parsed_expr = parse_segment(processed_formula_clean)
+
+            print(f"   ↳ Pre-evaluation parsed expression object context: {repr(parsed_expr)}")
 
             if solve_method == 'expand polynomial':
                 result = sp.expand(parsed_expr.doit())
@@ -1477,14 +1553,19 @@ class FormulaEntity(BaseEntity):
                             result_left = parsed_expr[0].subs(sympy_subs_map)
                             result_right = parsed_expr[1].subs(sympy_subs_map)
                             self.last_computed_sympy_result = (result_left, result_right)
-                            # 🎯 FIX: Honor the actual operational sign during variable substitutions
                             return f"{result_left} {display_op} {result_right}"
                         else:
                             result = parsed_expr.subs(sympy_subs_map)
+                else:
+                    if isinstance(parsed_expr, tuple):
+                        self.last_computed_sympy_result = parsed_expr
+                        return f"{parsed_expr[0]} {display_op} {parsed_expr[1]}"
+                    result = parsed_expr
             else:
+                print("      ↳ Running base parsed_expr calculation assignment")
                 result = parsed_expr
 
-        print(f"        SymPy Final Computed Object: {repr(result)}")
+        print(f"   🎯 [SUCCESS] SymPy Final Computed Object: {repr(result)}")
         self.last_computed_sympy_result = result
         return str(result)
 
