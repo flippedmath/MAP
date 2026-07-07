@@ -1013,6 +1013,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (selectedMethod === 'simplify') {
                 if (simplifyWrapper) simplifyWrapper.style.display = 'flex';
                 if (substitutionSelect) substitutionSelect.value = ""; 
+
+                // 🎯 FIX: Clear selection memory on the card & reset the select element's value 
+                // to break the automatic fallback matching loop.
+                card.removeAttribute('data-selected-variable');
+                if (simplifySelect) simplifySelect.value = "";
+
                 populateVariablesDropdown(simplifySelect);
             } 
             else if (selectedMethod === 'variable substitution') {

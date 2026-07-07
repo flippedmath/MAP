@@ -1962,7 +1962,7 @@ def save_problem_workspace(request, problem_id):
                 # FIX: Changed lookups from 'variable substitution' to 'variable to solve for'
                 target_var = cleaned_provided_fields.get('variable to solve for', '').strip()
                 if not target_var:
-                    cleaned_provided_fields['variable to solve for'] = "x" 
+                    cleaned_provided_fields['variable to solve for'] = "" 
             else:
                 cleaned_provided_fields['variable to solve for'] = ""
 
