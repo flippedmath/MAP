@@ -682,10 +682,6 @@ def validate_entity_node_datatype(entity_segment_obj):
 
     return True
 
-
-import random
-import re
-
 class BaseEntity:
     """
     Abstract validation base class for processing structural configurations
@@ -1328,7 +1324,17 @@ class FormulaEntity(BaseEntity):
         resolved_subs = {}
         for var_name, var_value in subs_map.items():
             if isinstance(var_value, str) and var_value.startswith('<') and var_value.endswith('>'):
-                resolved_subs[var_name] = f"({self.resolve_token_dependency(var_value)})"
+                raw_resolved = self.resolve_token_dependency(var_value)
+                
+                # 🎯 FIX: If the linked entity value is an equation containing an assignment match (e.g. "y = expression"),
+                # strip out the left-hand assignment side so only the clean right-hand algebraic expression is substituted.
+                if raw_resolved and isinstance(raw_resolved, str) and '=' in raw_resolved:
+                    # Capture everything after the relation operator mapping
+                    parts = re.split(r'(<=|>=|==|<|>|=)', raw_resolved, 1)
+                    if len(parts) >= 3:
+                        raw_resolved = parts[2].strip()
+
+                resolved_subs[var_name] = f"({raw_resolved})"
             else:
                 resolved_subs[var_name] = var_value
 
@@ -1483,6 +1489,230 @@ class FormulaEntity(BaseEntity):
         return str(result)
 
 
+
+class GraphEntity(BaseEntity):
+    """
+    Validation and evaluation engine for the 'graph' token pattern.
+    Handles variable limit constraints, implicit relations, 
+    automated bounding rules, and grid rendering parameters.
+    """
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        # 🎯 FIX 1: Read incoming inputs directly from self.data instead of self.runtime_values
+        raw_formulas = self.data.get("formulas")
+        variables_str = self.data.get("variables", "x,y")
+        x_axis_input = self.data.get("x-axis range")
+        y_axis_input = self.data.get("y-axis range")
+
+        # 🎯 FIX 2: Dynamically re-assemble formula_0, formula_1... if top-level "formulas" is a flat string or empty
+        if isinstance(raw_formulas, list) and len(raw_formulas) > 0:
+            formulas = raw_formulas
+        else:
+            formulas = []
+            idx = 0
+            while f"formula_{idx}" in self.data:
+                val = self.data.get(f"formula_{idx}")
+                if val is not None and str(val).strip() != "":
+                    formulas.append(str(val).strip())
+                idx += 1
+                
+            # Secondary fallback if "formulas" was passed as a flat single expression string
+            if not formulas and isinstance(raw_formulas, str) and raw_formulas.strip():
+                formulas = [raw_formulas.strip()]
+
+        # Save them safely into runtime values for downstream execution methods (evaluate_output)
+        self.runtime_values["formulas"] = formulas
+        self.runtime_values["variables"] = variables_str
+        
+        # Extract grid visualization checkbox flag
+        show_grid_raw = self.data.get("show_grid", True)
+        self.runtime_values["show_grid"] = str(show_grid_raw).lower() in ["true", "1", "yes", "checked"]
+
+        # Parse declared axis/variable tokens
+        parsed_axis_vars = []
+        if variables_str:
+            parsed_axis_vars = [v.strip() for v in str(variables_str).split(",") if v.strip()]
+            for item in parsed_axis_vars:
+                # Enforce single character + optional numbers pattern
+                if not re.match(r'^[a-zA-Z]\d*$', item):
+                    self.errors["variables"] = f"'{item}' is not a valid coordinate variable (must be a single letter followed by 0 or more numbers)."
+                    return False
+        
+        if len(parsed_axis_vars) > 2:
+            self.errors["variables"] = "A graph component layout supports a maximum of 2 coordinate axis variables."
+            return False
+
+        self.runtime_values["parsed_variables_array"] = parsed_axis_vars
+
+        # 🎯 Check against our newly unified formulas array
+        if not formulas:
+            self.errors["formulas"] = "At least one formula expression string is required."
+            return False
+
+        normalized_formulas = []
+
+        for index, raw_expr in enumerate(formulas):
+            if not raw_expr or str(raw_expr).strip() == "":
+                self.errors["formulas"] = f"Formula element index [{index}] cannot be an empty string."
+                return False
+
+            # Replace token macro dependencies with a dummy number for clean processing
+            clean_expr = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '1', str(raw_expr).strip())
+            
+            # MATCH STRICT VARIABLE PATTERN: 1 letter followed by 0 or more numbers
+            found_symbols = set(re.findall(r'\b[a-zA-Z]\d*\b', clean_expr))
+            
+            # Apply implicit relation rules if '=' is missing
+            if '=' not in clean_expr:
+                if len(found_symbols) == 0:
+                    implicit_var = 'y' if 'y' in parsed_axis_vars or 'x' not in found_symbols else 'x'
+                    clean_expr = f"{implicit_var} = {clean_expr}"
+                    found_symbols.add(implicit_var)
+                elif len(found_symbols) == 1:
+                    alone_var = list(found_symbols)[0]
+                    implicit_var = 'y' if alone_var != 'y' else 'x'
+                    clean_expr = f"{implicit_var} = {clean_expr}"
+                    found_symbols.add(implicit_var)
+            else:
+                parts = clean_expr.split('=')
+                if len(parts) != 2:
+                    self.errors["formulas"] = f"Formula index [{index}] contains an invalid equation structure."
+                    return False
+
+            # Verify that total free variables for this line do not exceed 2
+            if len(found_symbols) > 2:
+                self.errors["formulas"] = f"Formula index [{index}] contains too many variables ({', '.join(found_symbols)}). A graph line supports up to 2 free variables."
+                return False
+
+            normalized_formulas.append(clean_expr)
+
+        self.runtime_values["normalized_formulas_list"] = normalized_formulas
+
+        # Handle Axis Ranges (Uses user inputs if valid, falls back to automatic calculations if blank)
+        self.runtime_values["resolved_x-axis range"] = self._process_axis_bounds("x-axis range", x_axis_input, normalized_formulas)
+        self.runtime_values["resolved_y-axis range"] = self._process_axis_bounds("y-axis range", y_axis_input, normalized_formulas)
+
+        # Populate cleaned_data contract for save views
+        if len(self.errors) == 0:
+            self.cleaned_data = {
+                "formulas": formulas,
+                "variables": variables_str,
+                "show_grid": self.runtime_values["show_grid"],
+                "resolved_x_range": self.runtime_values["resolved_x-axis range"],
+                "resolved_y_range": self.runtime_values["resolved_y-axis range"],
+                "parsed_variables": parsed_axis_vars
+            }
+
+            # 🎯 FIX: Forward raw bounding field components directly to saved segment row strings
+            # This allows the frontend fields to persist their states on workspace reloads!
+            axis_input_keys = ['x_min', 'x_max', 'x_step', 'y_min', 'y_max', 'y_step']
+            for field_key in axis_input_keys:
+                if field_key in self.data:
+                    self.cleaned_data[field_key] = self.data[field_key]
+                else:
+                    self.cleaned_data[field_key] = ""
+
+            # Keep formula fallback structures inside the database JSON object
+            for idx in range(len(formulas)):
+                self.cleaned_data[f"formula_{idx}"] = formulas[idx]
+
+        return len(self.errors) == 0
+
+    def _process_axis_bounds(self, axis_key, input_range, normalized_formulas):
+        is_blank = (
+            not input_range or 
+            not isinstance(input_range, list) or 
+            len(input_range) != 3 or 
+            any(x in [None, "", "null"] for x in input_range)
+        )
+
+        if not is_blank:
+            try:
+                min_val = float(self._resolve_nested_primitive(input_range[0]))
+                max_val = float(self._resolve_nested_primitive(input_range[1]))
+                step_val = float(self._resolve_nested_primitive(input_range[2]))
+                
+                if min_val >= max_val:
+                    self.errors[axis_key] = "The coordinate minimum range threshold cannot exceed its maximum."
+                if step_val <= 0:
+                    self.errors[axis_key] = "The step interval must be greater than zero."
+                return [min_val, max_val, step_val]
+            except (ValueError, TypeError):
+                self.errors[axis_key] = "User-defined bounds override contains malformed numbers."
+                return [-10.0, 10.0, 1.0]
+
+        # --- Automatic Bounding Estimator Engine ---
+        guessed_min, guessed_max, guessed_step = -10.0, 10.0, 1.0
+        
+        try:
+            for formula in normalized_formulas:
+                expr_body = formula.split('=')[-1].strip()
+                found_numbers = [float(n) for n in re.findall(r'[-+]?\d*\.\d+|\b[-+]?\d+\b', expr_body)]
+                
+                if found_numbers:
+                    max_coef = max(abs(n) for n in found_numbers if n != 0)
+                    if max_coef > 0:
+                        calculated_pad = round(max_coef * 2.5)
+                        calculated_pad = max(5.0, min(calculated_pad, 500.0)) 
+                        
+                        guessed_max = float(calculated_pad)
+                        guessed_min = float(-calculated_pad)
+                        
+                        span = guessed_max - guessed_min
+                        if span <= 20: guessed_step = 1.0
+                        elif span <= 100: guessed_step = 5.0
+                        else: guessed_step = 25.0
+        except Exception:
+            pass
+
+        return [guessed_min, guessed_max, guessed_step]
+
+    def _resolve_nested_primitive(self, value):
+        if isinstance(value, str) and re.match(r"^<([^>]+)>$", value.strip()):
+            return self.resolve_token_dependency(value)
+        return value
+
+    def evaluate_output(self):
+        raw_formulas = self.runtime_values.get("formulas", [])
+        var_list = self.runtime_values.get("parsed_variables_array", ["x", "y"])
+        resolved_x = self.runtime_values.get("resolved_x-axis range", [-10.0, 10.0, 1.0])
+        resolved_y = self.runtime_values.get("resolved_y-axis range", [-10.0, 10.0, 1.0])
+        show_grid = self.runtime_values.get("show_grid", True)
+
+        processed_formulas = []
+        
+        # Safe contextual macro dependency replacement
+        def bracket_replacer(match):
+            target_token = match.group(1) if match.group(1) else match.group(2)
+            try:
+                resolved = self.resolve_token_dependency(f'<{target_token.strip()}>')
+                return f"({resolved})"
+            except Exception:
+                return "1"  # Structural numeric safety fallback during early layout checks
+
+        for formula_expr in raw_formulas:
+            clean_expr = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, str(formula_expr).strip())
+            processed_formulas.append(clean_expr)
+
+        graph_manifest = {
+            "archetype": "graph",
+            "formulas": processed_formulas,
+            "axis_names": var_list,
+            "visualization": {
+                "show_grid_overlay": show_grid,
+            },
+            "bounds": {
+                "x_range": {"min": resolved_x[0], "max": resolved_x[1], "step": resolved_x[2]},
+                "y_range": {"min": resolved_y[0], "max": resolved_y[1], "step": resolved_y[2]}
+            }
+        }
+
+        return json.dumps(graph_manifest)
+    
+
 class MatrixEntity(BaseEntity):
     """
     Validation engine for the 'matrix' or 'matrixAnswer' token patterns.
@@ -1534,6 +1764,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "rand": RandomDoubleEntity,
         "primeFactors": PrimeFactorsEntity,
         "formula": FormulaEntity,
+        "graph": GraphEntity,
     }
     
     # Fallback to base configuration validator if a custom token model isn't written yet
@@ -1579,7 +1810,12 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
         try:
             evaluated_res = validator.evaluate_output()
             evaluated_output = str(evaluated_res)
-            latex_output = evaluated_output
+            
+            # 🎯 Graph Specific Override: Graphs don't need LaTeX math rendering
+            if archetype_name == 'graph':
+                latex_output = "[Graph Component]"  # or return evaluated_output if frontend parses JSON there
+            else:
+                latex_output = evaluated_output
             
             # Dynamically update the shared context ledger for downstream dependency cascading
             target_entry = next((x for x in all_entities_payload if x.get('sequence_token') == sequence_token), None)
@@ -1631,16 +1867,19 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             evaluated_output = "⚠️ Error"
             latex_output = "⚠️ Error"
     else:
-        # Fallback string parsing for invalid states (matches preview function legacy fallback)
+        # 🎯 Updated fallback string parsing for invalid states
         try:
             if clean_inputs.get('formula'):
                 evaluated_output = str(validator.evaluate_output())
                 latex_output = evaluated_output
+            elif archetype_name == 'graph':
+                evaluated_output = "[Invalid Graph Config]"
+                latex_output = "[Invalid Graph Config]"
             else:
                 evaluated_output = "0"
                 latex_output = "0"
         except Exception:
-            evaluated_output = clean_inputs.get('formula', '0')
+            evaluated_output = clean_inputs.get('formula', clean_inputs.get('nodes', '0'))
             latex_output = str(evaluated_output)
 
     # Secondary Regex Parse if SymPy dropped variables

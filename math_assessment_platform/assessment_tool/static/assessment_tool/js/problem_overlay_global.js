@@ -124,8 +124,15 @@ document.addEventListener('DOMContentLoaded', function() {
         window.isHydratingWorkspace = true; // Set both flags at the top
 
         try {
-            if (!segments || segments.length === 0) {
-                console.warn("⚠️ Database segment array payload is unpopulated or missing. Resetting sidebar panels to initial default states.");
+            // Differentiate missing data from an empty new workspace
+            if (!segments) {
+                console.warn("⚠️ Database segment array payload is missing from network packet.");
+                clearAndShowPlaceholders();
+                return;
+            }
+
+            if (segments.length === 0) {
+                console.log("ℹ️ Workspace payload is empty. Preparing pristine workspace layout states.");
                 clearAndShowPlaceholders();
                 return; // 🌟 Safe early exit! The 'finally' block will still unlock the state.
             }
@@ -359,6 +366,91 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 </div>
             `;
+        } else if (token === 'graph') {
+            // Read saved formulas list array or structure a default element list array
+            const initialFormulas = Array.isArray(savedValues.formulas) ? savedValues.formulas : (savedValues.formulas ? [savedValues.formulas] : ['']);
+            const showGridChecked = savedValues.show_grid !== false;
+
+            // 🎯 BOUNDS RECOVERY FIX: Look for flat key values first, fall back to historical positional arrays if needed
+            const legacyX = savedValues['x-axis range'] || [];
+            const xMinVal = savedValues['x_min'] !== undefined ? savedValues['x_min'] : (legacyX[0] !== undefined ? legacyX[0] : '');
+            const xMaxVal = savedValues['x_max'] !== undefined ? savedValues['x_max'] : (legacyX[1] !== undefined ? legacyX[1] : '');
+            const xStepVal = savedValues['x_step'] !== undefined ? savedValues['x_step'] : (legacyX[2] !== undefined ? legacyX[2] : '');
+
+            const legacyY = savedValues['y-axis range'] || [];
+            const yMinVal = savedValues['y_min'] !== undefined ? savedValues['y_min'] : (legacyY[0] !== undefined ? legacyY[0] : '');
+            const yMaxVal = savedValues['y_max'] !== undefined ? savedValues['y_max'] : (legacyY[1] !== undefined ? legacyY[1] : '');
+            const yStepVal = savedValues['y_step'] !== undefined ? savedValues['y_step'] : (legacyY[2] !== undefined ? legacyY[2] : '');
+
+            fieldsHtml = `
+                <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
+                    <!-- Dynamic List of Formula Inputs -->
+                    <div class="graph-formulas-container" style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
+                        <span style="font-size: 0.75rem; font-weight: 600; color: #475569;">Formulas List:</span>
+                        ${initialFormulas.map((f, i) => `
+                            <div class="graph-formula-row" style="display: flex; align-items: center; gap: 4px; width: 100%;">
+                                <div class="linked-input-wrapper" data-input-key="formula_${i}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
+                                    <input type="text" class="val-graph-formula-expr" value="${f}" placeholder="e.g. y = x^2 or 3*x" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                                    <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                                    <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                                </div>
+                                ${i > 0 ? `<button type="button" class="btn-remove-graph-formula" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem;"><i class="fas fa-minus-circle"></i></button>` : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                    <button type="button" class="btn-add-graph-formula" style="align-self: flex-start; background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569; font-size: 0.72rem; padding: 3px 8px; cursor: pointer;"><i class="fas fa-plus"></i> Add Plot Line Formula</button>
+
+                    <div style="display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; margin-bottom: 4px;">
+                        <!-- Hidden variable input ensures serialization script keeps working out of view -->
+                        <input type="hidden" class="val-graph-variables" value="${savedValues.variables || 'x,y'}">
+                        
+                        <div style="display: flex; align-items: center; padding: 6px 0;">
+                            <label style="font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                                <input type="checkbox" class="val-graph-show-grid" ${showGridChecked ? 'checked' : ''} style="cursor: pointer;"> Visualize Grid Layout
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Configurable Bounds Ranges -->
+                    <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed #cbd5e1; padding-top: 6px; margin-top: 4px;">
+                        <span style="font-size: 0.72rem; font-weight: 600; color: #64748b;">Axis Limits Configuration (Leave empty to Auto-Calculate):</span>
+                        
+                        <!-- X Axis Bounds -->
+                        <div style="display: grid; grid-template-columns: 45px repeat(3, 1fr); gap: 6px; align-items: center;">
+                            <span style="font-size: 0.75rem; color: #475569; font-weight: 500;">X-Axis:</span>
+                            <div class="linked-input-wrapper" data-input-key="x_min" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
+                                <input type="number" step="any" class="val-graph-x-min" value="${safeNumValue(xMinVal, '')}" placeholder="Min" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
+                            </div>
+                            <div class="linked-input-wrapper" data-input-key="x_max" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
+                                <input type="number" step="any" class="val-graph-x-max" value="${safeNumValue(xMaxVal, '')}" placeholder="Max" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
+                            </div>
+                            <div class="linked-input-wrapper" data-input-key="x_step" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
+                                <input type="number" step="any" class="val-graph-x-step" value="${safeNumValue(xStepVal, '')}" placeholder="Step" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
+                            </div>
+                        </div>
+
+                        <!-- Y Axis Bounds -->
+                        <div style="display: grid; grid-template-columns: 45px repeat(3, 1fr); gap: 6px; align-items: center;">
+                            <span style="font-size: 0.75rem; color: #475569; font-weight: 500;">Y-Axis:</span>
+                            <div class="linked-input-wrapper" data-input-key="y_min" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
+                                <input type="number" step="any" class="val-graph-y-min" value="${safeNumValue(yMinVal, '')}" placeholder="Min" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
+                            </div>
+                            <div class="linked-input-wrapper" data-input-key="y_max" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
+                                <input type="number" step="any" class="val-graph-y-max" value="${safeNumValue(yMaxVal, '')}" placeholder="Max" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
+                            </div>
+                            <div class="linked-input-wrapper" data-input-key="y_step" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
+                                <input type="number" step="any" class="val-graph-y-step" value="${safeNumValue(yStepVal, '')}" placeholder="Step" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
         } else {
             fieldsHtml = `<p style="font-size:0.8rem; color:#64748b; margin:0;">Standard attributes container template wrapper.</p>`;
         }
@@ -399,6 +491,65 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
+        // --- NEW BINDING LOGIC: Handle multi-formula arrays inside Graphs dynamically ---
+        if (token === 'graph') {
+            const container = card.querySelector('.graph-formulas-container');
+            const addBtn = card.querySelector('.btn-add-graph-formula');
+
+            addBtn.addEventListener('click', function() {
+                const rowIndex = container.querySelectorAll('.graph-formula-row').length;
+                const row = document.createElement('div');
+                row.className = 'graph-formula-row';
+                row.style.cssText = 'display: flex; align-items: center; gap: 4px; width: 100%; margin-top: 4px;';
+                row.innerHTML = `
+                    <div class="linked-input-wrapper" data-input-key="formula_${rowIndex}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
+                        <input type="text" class="val-graph-formula-expr" value="" placeholder="e.g. y = x^2 or 3*x" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
+                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+                    </div>
+                    <button type="button" class="btn-remove-graph-formula" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem;"><i class="fas fa-minus-circle"></i></button>
+                `;
+                container.appendChild(row);
+                
+                // 🔄 Force structural recalculation for the new input row hook
+                updateWorkspaceSimulationPreview();
+            });
+
+            container.addEventListener('click', function(e) {
+                const removeBtn = e.target.closest('.btn-remove-graph-formula');
+                if (removeBtn) {
+                    console.group("%c🗑️ [Graph UI Deletion] Remove Button Clicked", "background: #ef4444; color: white; padding: 2px 6px; border-radius: 4px;");
+                    
+                    const row = removeBtn.closest('.graph-formula-row');
+                    row.remove();
+                    
+                    const remainingRows = container.querySelectorAll('.val-graph-formula-expr');
+                    console.log(`Remaining '.val-graph-formula-expr' inputs in DOM count: ${remainingRows.length}`);
+                    
+                    // 1. Instantly update the static rich-text workspace preview
+                    updateWorkspaceSimulationPreview();
+
+                    // 2. 🎯 THE ARCHITECTURAL CORRECTION:
+                    // Dispatch the event from a native input control so your global 
+                    // listener catches a valid e.target form element!
+                    if (remainingRows.length > 0) {
+                        console.log("Dispatching input event through remaining active input field control node...");
+                        remainingRows[0].dispatchEvent(new Event('input', { bubbles: true }));
+                    } else {
+                        // Fallback: If they deleted the last formula row, dispatch from a 
+                        // neighboring bounds numeric input element on the same card.
+                        const neighboringInput = card.querySelector('.val-graph-x-min');
+                        if (neighboringInput) {
+                            console.log("No formulas left. Dispatching change through bounds element...");
+                            neighboringInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                    }
+                    
+                    console.groupEnd();
+                }
+            });
+        }
+
         const refreshIconBtn = card.querySelector('.btn-refresh-workspace-component-value');
         if (refreshIconBtn) {
             refreshIconBtn.onmouseenter = () => refreshIconBtn.style.color = '#0284c7';
@@ -435,7 +586,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (savedValue && typeof savedValue === 'string' && savedValue.trim().match(/^<([^>]+)>$/)) {
                 const cleanTokenString = savedValue.trim();
-                // console.log(`  📍 Found active dependency link rule under field row [${inputKey}] targeting: "${cleanTokenString}"`);
+                // console.log(`  📍 Found active dependency link row [${inputKey}] targeting: "${cleanTokenString}"`);
                 const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
                 
                 const labelEl = wrapper.querySelector('label');
@@ -465,7 +616,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         card.addEventListener('input', function(e) {
             if (e.target.matches('input, select, textarea')) {
-                if (saveStatusSpan) {
+                if (typeof saveStatusSpan !== 'undefined' && saveStatusSpan) {
                     saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
                 }
                 updateWorkspaceSimulationPreview();
@@ -740,6 +891,22 @@ document.addEventListener('DOMContentLoaded', function() {
             const formulaStr = getLiveComponentValue(card, 'formula', tokenIdentifier, visitedTokens);
             console.groupEnd();
             return formulaStr;
+        }
+        // 🛠️ ADDED: Graph Archetype Entity Evaluation Engine
+        else if (baseArchetype === 'graph') {
+            // Fetch live data metrics via the graph component keys
+            const graphNodes = getLiveComponentValue(card, 'nodes', '[]', visitedTokens);
+            const graphEdges = getLiveComponentValue(card, 'edges', '[]', visitedTokens);
+            const graphData  = getLiveComponentValue(card, 'data', '', visitedTokens);
+
+            console.log(`%c📊 Graph entity parsed: Nodes: "${graphNodes}", Edges: "${graphEdges}"`, "color: #a6e3a1;");
+
+            // Format a clean trace summary for the engine's text layer resolution
+            if (graphData && graphData !== '') {
+                val = graphData;
+            } else {
+                val = `Graph(${graphNodes || 'empty'}, ${graphEdges || 'empty'})`;
+            }
         }
 
         // Final Output Summary Resolution (Fallback check if local engine rules fell through)
@@ -1110,7 +1277,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const isFormulaCondition = baseArchetypeToken === 'formula';
                 
                 // If it looks like a known archetype, treat it as a variable processing path
-                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors'].includes(baseArchetypeToken);
+                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors', 'graph'].includes(baseArchetypeToken);
 
                 if (isVar) {
                     let displayVal = formulaLiveLatexCache[cleanToken];
@@ -1151,9 +1318,42 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.log(`%c✔ Render Success -> Target Replacement: "${match}" -> Computed Result Value: "${displayVal}"`, "color: #16a34a; font-weight: bold;");
                     console.groupEnd();
 
+                    // 🎯 STEP 1: Handle Formula Math text rendering
                     if (baseArchetypeToken === 'formula') {
                         return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
                     }
+                    // 🎯 STEP 2: Handle Live Dynamic Graph Rendering
+                    else if (baseArchetypeToken === 'graph') {
+                        try {
+                            const graphConfig = typeof displayVal === 'string' ? JSON.parse(displayVal) : displayVal;
+                            const previewCanvasId = `live-preview-canvas-${cleanToken}`;
+                            
+                            // 👇 SANITIZE FORMULAS: Convert ** to ^ so the preview engine can read them
+                            if (graphConfig && graphConfig.formulas) {
+                                graphConfig.formulas = graphConfig.formulas.map(fStr => {
+                                    let rhs = fStr.split('=')[1] || fStr;
+                                    return rhs.replace(/\*\*/g, '^').trim();
+                                });
+                            }
+
+                            setTimeout(() => {
+                                if (typeof renderGraphComponentCanvas === 'function') {
+                                    renderGraphComponentCanvas(previewCanvasId, graphConfig);
+                                }
+                            }, 0);
+
+                            return `
+                                <div class="simulated-live-graph-preview-container" style="display: block; margin: 12px auto; max-width: 360px; padding: 8px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+                                    <div id="${previewCanvasId}" style="display: flex; justify-content: center; width: 100%;"></div>
+                                </div>
+                            `;
+                        } catch (jsonErr) {
+                            console.error("Malformed graph entity JSON stream block encountered during rendering pass:", jsonErr);
+                            return `<span style="color: #ef4444; font-family: monospace;">[Malformed Graph State Data]</span>`;
+                        }
+                    }
+
+                    // 🎯 STEP 3: Fallback for all other standard variable badges (rand, randInt, etc)
                     return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
                 
                 } else if (answerFieldsTokens.some(i => i.token === baseArchetypeToken)) {
@@ -1330,6 +1530,73 @@ document.addEventListener('DOMContentLoaded', function() {
                 inputsCollected["substitutions"] = substitutions;
 
                 console.log("Cleaned substitutions mapping payload: ", inputsCollected["substitutions"]);
+            } 
+            // 🎯 ARCHETYPE SPECIFIC OVERRIDES: Apply specialized array serialization for graph types
+            else if (baseArchetypeToken === 'graph') {
+                console.group("%c💾 [Serializer] Packaging Graph Payload", "background: #3b82f6; color: white; padding: 2px 6px; border-radius: 4px;");
+                // 1. Extract the numerical bounds securely from your custom class elements
+                const xMinVal = parseFloat(card.querySelector('.val-graph-x-min')?.value) || -5;
+                const xMaxVal = parseFloat(card.querySelector('.val-graph-x-max')?.value) || 5;
+                const xStepVal = parseFloat(card.querySelector('.val-graph-x-step')?.value) || 0.5;
+
+                const yMinVal = parseFloat(card.querySelector('.val-graph-y-min')?.value) || -5;
+                const yMaxVal = parseFloat(card.querySelector('.val-graph-y-max')?.value) || 5;
+                const yStepVal = parseFloat(card.querySelector('.val-graph-y-step')?.value) || 0.5;
+
+                // 2. Extract the grid checkbox state explicitly
+                const isGridChecked = card.querySelector('.val-graph-show-grid')?.checked ?? true;
+
+                // 3. Map values directly to the keys expected by the python processing system
+                inputsCollected["x-axis range"] = [xMinVal, xMaxVal, xStepVal];
+                inputsCollected["y-axis range"] = [yMinVal, yMaxVal, yStepVal];
+                inputsCollected["show_grid"] = isGridChecked;
+                inputsCollected["show_grid_overlay"] = isGridChecked;
+
+                // 🎯 FIX: Clear potential stale backward-compatibility keys first
+                let purgeIdx = 0;
+                while (inputsCollected[`formula_${purgeIdx}`] !== undefined) {
+                    delete inputsCollected[`formula_${purgeIdx}`];
+                    purgeIdx++;
+                }
+
+                // 🎯 4. Gather up all rows by reading the wrapper container structure
+                const activeFormulas = [];
+                const formulaWrappers = card.querySelectorAll('.graph-formulas-container .linked-input-wrapper');
+                
+                formulaWrappers.forEach((wrapper, index) => {
+                    let finalRowVal = "";
+                    const boundToken = wrapper.getAttribute('data-bound-token');
+                    const exprInput = wrapper.querySelector('.val-graph-formula-expr');
+
+                    if (boundToken) {
+                        // Priority A: Row has a linked macro token dependency
+                        let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                        if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
+                        if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
+                        finalRowVal = cleanToken;
+
+                        // 🔍 VISUAL HOTFIX: Dynamically hide the underlying text box since a token is active
+                        if (exprInput) {
+                            exprInput.style.display = 'none';
+                        }
+                    } else if (exprInput) {
+                        // Priority B: Standard manual string text box entry
+                        finalRowVal = exprInput.value.trim();
+                        
+                        // Ensure input visibility is restored if no token is bound
+                        exprInput.style.display = '';
+                    }
+
+                    if (finalRowVal) {
+                        activeFormulas.push(finalRowVal);
+                        inputsCollected[`formula_${index}`] = finalRowVal;
+                    }
+                });
+                
+                // Ensure the base formulas key mirrors the unified structural layout array
+                inputsCollected["formulas"] = activeFormulas;
+                console.log("Final compiled fields payload object structure:", JSON.parse(JSON.stringify(inputsCollected)));
+                console.groupEnd();
             }
 
             // 🎯 NEW CACHE LOCK BREAKER: Check if the user is actively editing this card
@@ -1536,16 +1803,13 @@ document.addEventListener('DOMContentLoaded', function() {
             const errorBanner = document.getElementById('workspace-validation-error-banner');
             const errorsList = document.getElementById('workspace-validation-errors-list');
             
-            // Clear out any old lingering feedback items
             errorsList.innerHTML = '';
             
-            // Check if errors exist in the payload object
+            // 🎯 MOVE THIS ABOVE: Process errors regardless of global execution flags
             if (data.errors && Object.keys(data.errors).length > 0) {
-                errorBanner.style.display = 'flex'; // Unhide banner block
+                if (errorBanner) errorBanner.style.display = 'flex';
                 
-                // Loop through each component variable signature (e.g., 'rand1')
                 Object.entries(data.errors).forEach(([tokenKey, fieldErrors]) => {
-                    // Loop through individual field failures on that component card
                     Object.entries(fieldErrors).forEach(([fieldKey, errorMessage]) => {
                         const errorItem = document.createElement('div');
                         errorItem.style.display = 'flex';
@@ -1559,22 +1823,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 });
             } else {
-                // Safe transaction state reached: keep banner cleanly hidden away
-                errorBanner.style.display = 'none';
+                if (errorBanner) errorBanner.style.display = 'none';
             }
 
-            // 🎯 RACE CONDITION GUARD
             if (currentTimestamp !== activeBatchSyncTimestamp) {
-                console.warn(`⏳ Stale response detected! Current global lock index is [${activeBatchSyncTimestamp}] but this network request returned from index [${currentTimestamp}]. Dropping updates to prevent screen stutters.`);
-                console.groupEnd();
-                console.groupEnd();
+                console.groupEnd(); console.groupEnd();
                 return;
             }
 
-            if (!data.success) {
+            // 🎯 ADJUSTED GUARD: Only throw a terminal platform error if there are no validation errors to review
+            if (!data.success && (!data.errors || Object.keys(data.errors).length === 0)) {
                 console.error("❌ Math Validation Engine reported system operational failures:", data.error);
-                console.groupEnd();
-                console.groupEnd();
+                console.groupEnd(); console.groupEnd();
                 return;
             }
 
@@ -1604,7 +1864,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let targetDisplay = card.querySelector('.latex-render-box');
                 console.log(`Determined operational asset token archetype model: '${baseArchetype}'`);
 
-                if (baseArchetype === 'primeFactors' || baseArchetype === 'formula') {
+                if (baseArchetype === 'primeFactors' || baseArchetype === 'formula' || baseArchetype === 'graph') {
                     if (!targetDisplay) {
                         const fieldsWrapper = card.querySelector('.component-fields-wrapper');
                         if (fieldsWrapper) {
@@ -1615,14 +1875,94 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                 }
+                
                 if (baseArchetype === 'formula') {
                     if (targetDisplay && typeof katex !== 'undefined') {
+                        targetDisplay.style.textAlign = 'center';
                         katex.render(result.latex_output, targetDisplay, { throwOnError: false });
                     } else if (typeof katex === 'undefined') {
                         console.error("❌ KaTeX script dependencies are not present on page framework view layout.");
                     }
+                } else if (baseArchetype === 'graph') {
+                    // 🎯 RENDER INTERACTIVE MATH CANVAS GRAPH
+                    if (targetDisplay) {
+                        try {
+                            let rawOutput = result.evaluated_output;
+                            
+                            console.group(`%c🔄 [Batch Sync] Redrawing Graph Component Card (${token})`, "background: #10b981; color: white; padding: 2px 6px; border-radius: 4px;");
+                            console.log("Raw evaluation response packet payload returned from processing pipeline:", rawOutput);
+
+                            // Check if the output is an explicit error string from the backend layout engine
+                            if (typeof rawOutput === 'string' && rawOutput.startsWith('[Invalid')) {
+                                targetDisplay.style.textAlign = 'center';
+                                targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ ${rawOutput.replace(/[\[\]]/g, '')}</span>`;
+                                return;
+                            }
+
+                            // Dual-Pass Engine Safeguard: Unroll string-serialized JSON tokens cleanly
+                            let graphConfig = rawOutput;
+                            if (typeof graphConfig === 'string') {
+                                graphConfig = JSON.parse(graphConfig);
+                            }
+
+                            console.log("Parsed Configuration targeting drawing engines:", graphConfig);
+                            console.log("Formulas array length to process:", graphConfig?.formulas?.length, graphConfig?.formulas);
+                            
+                            targetDisplay.textContent = ''; // Flush layout text out cleanly
+                            targetDisplay.style.textAlign = 'left';
+                            
+                            const canvasId = `graph-plot-${token}`;
+                            let canvasContainer = document.getElementById(canvasId);
+                            if (!canvasContainer) {
+                                canvasContainer = document.createElement('div');
+                                canvasContainer.id = canvasId;
+                                canvasContainer.style.cssText = 'margin: 10px auto; width: 100%; max-width: 340px; height: 240px;';
+                                targetDisplay.appendChild(canvasContainer);
+                            }
+                            // Force-flush the canvas inner HTML vector space right before re-rendering
+                            // This cleanly evicts function-plot's state cache and guarantees a pristine drawing surface!
+                            canvasContainer.innerHTML = '';
+
+                            // Fallback array if formulas key is completely missing or empty on setup
+                            const formulasArray = graphConfig.formulas || [];
+                            if (formulasArray.length === 0) {
+                                console.log("Formulas list array is totally empty! Hiding canvas view.");
+                                canvasContainer.style.display = 'none';
+                                targetDisplay.style.textAlign = 'center';
+                                targetDisplay.innerHTML = `<span style="color: #64748b; font-size: 0.85rem; font-style: italic;">Enter a function formula above to render graph...</span>`;
+                                console.groupEnd();
+                                return;
+                            } else {
+                                canvasContainer.style.display = 'block';
+                            }
+
+                            // 🎯 SINGLE POINT OF TRUTH INVOCATION: 
+                            // Reuses the identical rendering pipeline, uniform polyline resolution, 
+                            // tick rules, and cache-eviction engines built earlier.
+                            if (typeof renderGraphComponentCanvas === 'function') {
+                                // Explicitly ensure formulas python powers syntax handles conversion properly
+                                if (graphConfig.formulas) {
+                                    graphConfig.formulas = graphConfig.formulas.map(fStr => {
+                                        let rhs = fStr.split('=')[1] || fStr;
+                                        return rhs.replace(/\*\*/g, '^').trim();
+                                    });
+                                }
+                                console.log("Invoking canvas plotting coordinator with clean strings...");
+                                renderGraphComponentCanvas(canvasId, graphConfig);
+                            } else {
+                                throw new Error("The global abstraction engine 'renderGraphComponentCanvas' is missing.");
+                            }
+                            console.groupEnd();
+                        } catch (err) {
+                            console.error("Failed executing canvas plotter lifecycle:", err);
+                            console.groupEnd();
+                            targetDisplay.style.textAlign = 'center';
+                            targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ System error compiling graph visualization structure.</span>`;
+                        }
+                    }
                 } else {
                     if (targetDisplay) {
+                        targetDisplay.style.textAlign = 'center';
                         targetDisplay.textContent = result.evaluated_output;
                     }
                 }
@@ -2039,22 +2379,68 @@ document.addEventListener('DOMContentLoaded', function() {
                     inputValues['variable to solve for'] = solveForSelect ? solveForSelect.value.trim() : '';
                 }
 
-                // 2. EXTRACTION: Standard Wrapper-based inputs
-                const inputWrappers = card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper)');
-                inputWrappers.forEach(wrapper => {
-                    const inputKey = wrapper.getAttribute('data-input-key');
-                    const boundToken = wrapper.getAttribute('data-bound-token');
+                // 2. EXTRACTION: Standard Wrapper-based inputs (with specialized array formatting for graph layouts)
+                if (baseToken === 'graph') {
+                    const activeFormulas = [];
+                    const formulaWrappers = card.querySelectorAll('.graph-formulas-container .linked-input-wrapper');
                     
-                    if (boundToken) {
-                        inputValues[inputKey] = boundToken;
-                    } else {
-                        const interactiveField = wrapper.querySelector('input, select');
-                        // Exclude inputs that are part of the 'solve-for' dropdown already captured above
-                        if (interactiveField && !interactiveField.classList.contains('val-input-simplify-target')) {
-                            inputValues[inputKey] = interactiveField.value.trim();
+                    formulaWrappers.forEach((wrapper, index) => {
+                        let finalRowVal = "";
+                        const boundToken = wrapper.getAttribute('data-bound-token');
+                        const exprInput = wrapper.querySelector('.val-graph-formula-expr');
+
+                        if (boundToken) {
+                            let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                            if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
+                            if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
+                            finalRowVal = cleanToken;
+                        } else if (exprInput) {
+                            finalRowVal = exprInput.value.trim();
                         }
-                    }
-                });
+
+                        if (finalRowVal) {
+                            activeFormulas.push(finalRowVal);
+                            inputValues[`formula_${index}`] = finalRowVal;
+                        }
+                    });
+
+                    // 🎯 CRITICAL FIX: Inject the missing master property required by Python validation schemas
+                    inputValues["formulas"] = activeFormulas;
+
+                    // Safely pull any regular structural settings (like axis variables or grid fields)
+                    const normalWrappers = card.querySelectorAll('.linked-input-wrapper:not(.graph-formula-row .linked-input-wrapper)');
+                    normalWrappers.forEach(wrapper => {
+                        const inputKey = wrapper.getAttribute('data-input-key');
+                        if (!inputKey) return;
+                        
+                        const boundToken = wrapper.getAttribute('data-bound-token');
+                        if (boundToken) {
+                            inputValues[inputKey] = boundToken;
+                        } else {
+                            const interactiveField = wrapper.querySelector('input, select');
+                            if (interactiveField) {
+                                inputValues[inputKey] = interactiveField.value.trim();
+                            }
+                        }
+                    });
+                } else {
+                    // Standard extraction routing for all other non-graph components
+                    const inputWrappers = card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper)');
+                    inputWrappers.forEach(wrapper => {
+                        const inputKey = wrapper.getAttribute('data-input-key');
+                        if (!inputKey) return;
+
+                        const boundToken = wrapper.getAttribute('data-bound-token');
+                        if (boundToken) {
+                            inputValues[inputKey] = boundToken;
+                        } else {
+                            const interactiveField = wrapper.querySelector('input, select');
+                            if (interactiveField && !interactiveField.classList.contains('val-input-simplify-target')) {
+                                inputValues[inputKey] = interactiveField.value.trim();
+                            }
+                        }
+                    });
+                }
 
                 // 3. EXTRACTION: Dynamic Substitution rows
                 if (baseToken === 'formula') {
@@ -2263,6 +2649,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 else if (baseArchetype === 'rand') rawOutput = ['double'];
                 else if (baseArchetype === 'formula') rawOutput = ['double', 'integer', 'formula'];
                 else if (baseArchetype === 'matrix') rawOutput = ['matrix'];
+                else if (baseArchetype === 'graph') rawOutput = ['content'];
             }
 
             // Normalize the output property into an array context seamlessly
@@ -2275,12 +2662,19 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // 🎯 3. Determine compatibility dynamically via array intersection (.some)
             let isCompatible = derivedOutputs.some(type => acceptedTargetTypes.includes(type));
-            // console.log(`Intersection Type Match Result (derivedOutputs vs acceptedTargetTypes): ${isCompatible}`);
-
+            
             // FORCE COMPATIBILITY OVERRIDE: permit substitution inputs to couple with double, integer, or formula tokens
             if (inputKey.startsWith('sub_')) {
                 const isSubCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
                 isCompatible = isSubCompatible;
+            }
+
+            // 🎯 GRAPH FORMULA OVERRIDE: Allow 'text' inputs belonging to formula row expressions 
+            // to link up cleanly with standalone formula tokens!
+            if (targetTypeAttr === 'text' && (inputKey.startsWith('formula_') || currentCard.getAttribute('data-token') === 'graph')) {
+                if (derivedOutputs.includes('formula') || derivedOutputs.includes('double') || derivedOutputs.includes('integer')) {
+                    isCompatible = true;
+                }
             }
 
             if (isCompatible) {
@@ -2419,4 +2813,84 @@ document.addEventListener('DOMContentLoaded', function() {
         document.addEventListener('change', triggerLiveSync);
     })();
 
+
+
+    /**
+     * 🎨 Unified Graph Rendering Engine Coordinator
+     * Safely initializes or updates a functionPlot canvas element.
+     * 
+     * @param {string} targetCanvasId - The absolute DOM selector ID of the target canvas div
+     * @param {Object} graphConfig - The structured backend JSON configuration packet
+     */
+    function renderGraphComponentCanvas(targetCanvasId, graphConfig) {
+        if (!graphConfig || graphConfig.archetype !== 'graph') return;
+
+        // 1. Grab the direct, native browser-compiled instance from window scope
+        const activePlotEngine = window.functionPlot || (typeof functionPlot !== 'undefined' ? functionPlot : null);
+        if (!activePlotEngine) return;
+
+        const xMin = graphConfig.bounds?.x_range?.min ?? -5;
+        const xMax = graphConfig.bounds?.x_range?.max ?? 5;
+        const xStep = graphConfig.bounds?.x_range?.step ?? 1;
+
+        const yMin = graphConfig.bounds?.y_range?.min ?? -5;
+        const yMax = graphConfig.bounds?.y_range?.max ?? 5;
+        const yStep = graphConfig.bounds?.y_range?.step ?? 1;
+
+        // 🧮 Compute uniform tick alignment arrays
+        const xTicks = [];
+        for (let val = xMin; val <= xMax; val = parseFloat((val + xStep).toFixed(4))) xTicks.push(val);
+        
+        const yTicks = [];
+        for (let val = yMin; val <= yMax; val = parseFloat((val + yStep).toFixed(4))) yTicks.push(val);
+
+        const showGrid = graphConfig.visualization?.show_grid_overlay ?? true;
+
+        // 🗺️ Map formula items cleanly to uniform polylines
+        const formattedFnEntries = (graphConfig.formulas || []).map(formula => ({
+            fn: formula,
+            graphType: 'polyline',
+            nSamples: 250
+        }));
+
+        // 🚀 Step 1: Initialize/Update the plot
+        const chartInstance = activePlotEngine({
+            target: `#${targetCanvasId}`,
+            width: 340,
+            height: 240,
+            disableZoom: true,
+            grid: showGrid,
+            xAxis: {
+                domain: [xMin, xMax],
+                label: graphConfig.axis_names?.[0] || 'x',
+                ticks: xTicks,
+                tickValues: xTicks
+            },
+            yAxis: {
+                domain: [yMin, yMax],
+                label: graphConfig.axis_names?.[1] || 'y',
+                ticks: yTicks,
+                tickValues: yTicks
+            },
+            data: formattedFnEntries
+        });
+
+        // 🚀 Step 2: Clear cached configuration arrays to bypass the initialization cache locks
+        if (chartInstance && chartInstance.meta) {
+            if (chartInstance.options) {
+                chartInstance.options.data = formattedFnEntries;
+            }
+            if (chartInstance.meta.xAxis) {
+                chartInstance.meta.xAxis.tickValues(xTicks);
+                chartInstance.meta.xAxis.tickSize(showGrid ? -chartInstance.meta.height : 0);
+            }
+            if (chartInstance.meta.yAxis) {
+                chartInstance.meta.yAxis.tickValues(yTicks);
+                chartInstance.meta.yAxis.tickSize(showGrid ? -chartInstance.meta.width : 0);
+            }
+            chartInstance.draw();
+        }
+
+        return chartInstance;
+    }
 });

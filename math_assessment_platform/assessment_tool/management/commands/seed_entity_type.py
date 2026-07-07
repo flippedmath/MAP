@@ -130,7 +130,7 @@ class Command(BaseCommand):
             "token": "graph",
             "answer_field": False,
             "inputs": {
-                "formulas": {"field": "array", "value": ["array(['formula'])"]},
+                "formulas": {"field": "array", "value": ["string", "array(['formula'])"]},
                 "variables": {"field": "text", "value": ["array(['string'])"], "default": "x,y"},
                 "x-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 0.5]},
                 "y-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 0.5]}

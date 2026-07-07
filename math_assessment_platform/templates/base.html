@@ -50,10 +50,19 @@
     {% if user.is_authenticated and user.user_type != 'Student' and load_problem_workspace %}
         {% include "assessment_tool/components/problem_workspace_overlay.html" %}
         
+        <!-- KaTeX Math Layouts -->
         <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
         
+        <!-- Quill Rich Text Frames -->
         <script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
         
+        <!-- 🎯 Graphing Engine Prerequisites: D3.js must load BEFORE function-plot.js -->
+        <!-- Load D3 first -->
+        <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+        <!-- Force the browser-ready UMD fallback bundle for version 2 -->
+        <script src="https://cdn.jsdelivr.net/npm/function-plot@1.25.4/dist/function-plot.js"></script>
+        
+        <!-- Core Application Management Ledger (Always place this last so it can read global libraries above) -->
         <script src="{% static 'assessment_tool/js/problem_overlay_global.js' %}"></script>
     {% endif %}
 
