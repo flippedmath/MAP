@@ -1626,8 +1626,13 @@ def reorder_nested_item_ajax(request):
         if next_branch_id:
             next_order = BranchGroup.objects.get(id=next_branch_id).order or ""
 
+
         # 3. Calculate position using your established midpoint algorithm function loop string builder
         new_order = calculate_midpoint_order(prev_order, next_order)
+
+        print(f"prev_branch_id: {prev_branch_id} -- prev_order: {prev_order}")
+        print(f"next_branch_id: {next_branch_id} -- next_order: {next_order}")
+        print(f"branch_id: {branch_id} -- new_order: {new_order}")
 
         # 4. Atomic write transaction execution state loop
         with transaction.atomic():

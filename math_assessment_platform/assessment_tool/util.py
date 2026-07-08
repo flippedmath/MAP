@@ -425,16 +425,43 @@ def generate_unique_course_version(dest_status, source_course=None):
 def calculate_midpoint_order(prev="", next=""):
     """
     Generates a lexicographical midpoint string between prev and next strings.
-    Adapted from the project's sort_by_string.py algorithm.
+    Handles empty bounds cleanly for front/back insertions to avoid sorting flips
+    and string structural expansion.
     """
 
     ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     CHAR_TO_INT = {char: i for i, char in enumerate(ALPHABET)}
     BASE = len(ALPHABET)
 
+    # 🎯 EDGE CASE 1: Initial item or completely empty list context
+    if not prev and not next:
+        return "M"  # Pick a stable character right near the middle of the alphabet
+
+    # 🎯 EDGE CASE 2: Moving an item to the absolute FRONT of the list (prev is empty)
+    if not prev and next:
+        for i, char in enumerate(next):
+            val = CHAR_TO_INT[char]
+            if val > 0:
+                # Decrement this character to make it smaller, then buffer the midpoint space
+                return next[:i] + ALPHABET[val - 1] + ALPHABET[BASE // 2]
+        # Fallback if next is entirely '0' elements (e.g. "000") -> pad '0's and append mid-alphabet character
+        return "0" * len(next) + ALPHABET[BASE // 2]
+
+    # 🎯 EDGE CASE 3: Appending an item to the absolute BACK of the list (next is empty)
+    if prev and not next:
+        last_char = prev[-1]
+        last_val = CHAR_TO_INT[last_char]
+        if last_val < BASE - 1:
+            # Increment the last character by 1 to keep the key short and readable
+            return prev[:-1] + ALPHABET[last_val + 1]
+        # Fallback if the string already ends with 'z' -> extend with a mid-alphabet safety character
+        return prev + ALPHABET[BASE // 2]
+
+    # --- Standard Range Validation ---
     if next and prev >= next:
         raise ValueError(f"Invalid range: {prev} is not less than {next}")
 
+    # --- Core Midpoint String Matching Algorithm Loop ---
     res = []
     i = 0
     while True:
