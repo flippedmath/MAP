@@ -136,15 +136,67 @@ class Command(BaseCommand):
         {
             "name": "Matrix",
             "token": "matrix",
+            "answer_field": True,
             "inputs": {
+                # Configuration & Sizing (Hidden visually if linked_matrix is populated)
                 "rows": {"field": "integer", "value": ["integer"], "default": 3},
-                "cols": {"field": "integer", "value": ["integer"], "default": 3},
-                "cells": {"field": "double", "value": ["array([array([['double', 'integer', 'formula', 'string']])])"], "default": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+                "columns": {"field": "integer", "value": ["integer"], "default": 3},
+                
+                # The structured layout holding grid data (raw values or token string links)
+                "matrix_data": {"field": "grid", "value": ["array(['array(['string'])'])"], "default": [["1", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]]},
+                
+                # Pure alternative input override
+                "linked_matrix": {"field": "entity", "value": ["matrix", "or_null"], "default": None},
+                
+                # Operation Configuration
+                "calculate": {
+                    "field": "dropdown", 
+                    "value": ["string_match(['leave as matrix', 'multiply', 'add', 'subtract', 'inversion', 'transpose', 'scalar', 'determinate'])"], 
+                    "default": "leave as matrix"
+                },
+                
+                # Dependency Inputs (Conditionally revealed based on 'calculate')
+                "matrix B": {"field": "entity", "value": ["matrix", "or_null"], "default": None},
+                "scalar": {"field": "double", "value": ["double"], "default": 1.0}
             },
-            "output": ["matrix"],
-            "entity_name_list": "Dynamic Variables",
+            "output": ["matrix", "double"],
+            "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Create a Matrix"
+            "note": (
+                "<div style='font-family: system-ui, sans-serif; font-size: 0.75rem; color: #1e293b; max-width: 480px; max-height: 400px; overflow-y: auto; padding-right: 4px;'>\n"
+                "<p style='padding: 3px; color: #475569;'><strong>Matrix Operations:</strong> Define a local grid size up to any size, or link a source Matrix. Individual cells accept manual numbers, formulas (using standard operators like <code>^</code> or <code>**</code>), or direct token entity links.</p>\n"
+                "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>Calculation Rules & Constraints</p>\n"
+                "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>\n"
+                "  <thead>\n"
+                "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Action</th><th style='padding: 3px;'>Output Type</th><th style='padding: 3px;'>Requirements</th></tr>\n"
+                "  </thead>\n"
+                "  <tbody>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>leave as matrix</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Returns current state without transformations.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>multiply (AxB)</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Requires <strong>Matrix B</strong> link. Columns A must equal Rows B.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>add / subtract</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Requires <strong>Matrix B</strong> link. Must share identical dimensions.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>inversion (A^-1)</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Must be a square matrix with a non-zero determinant.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>transpose</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Flips rows and columns smoothly across main diagonal.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>scalar (A*c)</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Multiplies all active indices against the <strong>scalar</strong> value.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>determinate</td><td style='padding: 3px; color: #16a34a; font-weight: 600;'>double</td><td style='padding: 3px; color: #475569;'>Must be a square matrix. Returns a scalar value.</td></tr>\n"
+                "  </tbody>\n"
+                "</table>\n"
+                "</div>"
+            )
+        },
+        {
+            "name": "Matrix Calculations By Index",
+            "token": "matrixResultByIndex",
+            "answer_field": True,
+            "inputs": {
+                "matrix": {"field": "entity", "value": ["matrix"]},
+                "row": {"field": "integer", "value": ["integer"], "default": 1},
+                "column": {"field": "integer", "value": ["integer"], "default": 1}
+            },
+            "output": ["double", "integer", "formula"],
+            "points": {"field": "double", "value": ["double"], "default": 1.0},
+            "entity_name_list": "Answer Input Fields",
+            "disabled": False,
+            "note": "Pull out a specific cell value in a given matrix"
         },
         {
             "name": "Prime Factors",
@@ -273,21 +325,6 @@ class Command(BaseCommand):
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
             "note": "Perform one of AxB/A+B/A-B/A^-1/transpose(A)/A*c/det(A) on matricies"
-        },
-        {
-            "name": "Matrix Calculations By Index",
-            "token": "matrixResultByIndex",
-            "answer_field": True,
-            "inputs": {
-                "matrix": {"field": "entity", "value": ["matrix"]},
-                "row": {"field": "integer", "value": ["integer"], "default": 1},
-                "column": {"field": "integer", "value": ["integer"], "default": 1}
-            },
-            "output": ["double", "integer", "formula"],
-            "points": {"field": "double", "value": ["double"], "default": 1.0},
-            "entity_name_list": "Answer Input Fields",
-            "disabled": False,
-            "note": "Pull out a specific cell value in a given matrix"
         },
         {
             "name": "Graph Between Points",
