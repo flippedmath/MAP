@@ -1296,12 +1296,16 @@ class FormulaEntity(BaseEntity):
         parsed_variables = []
         if variables_str:
             # 🎯 Compiled regex pattern matching any lowercase Greek letter base name
-            greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
+            greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
             
             raw_elements = [v.strip() for v in str(variables_str).split(",") if v.strip()]
             for item in raw_elements:
+                # 🎯 FIX: Block SymPy internal protected constants E and I from being used as variables
+                if item in ('E', 'I'):
+                    self.errors["variables"] = f"'{item}' is a reserved mathematical constant in SymPy and cannot be used as a variable identifier."
+                    break
+
                 item_lower = item.lower()
-                
                 # Standard character checks (e.g., x, y3, z_2)
                 is_standard = bool(re.match(r'^[a-zA-Z][0-9]*$', item))
                 is_subscript = bool(re.match(r'^[a-zA-Z]_[0-9]+$', item))
@@ -1982,7 +1986,7 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                             sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
                         
                         # 🎯 Compiled regex pattern matching any lowercase Greek letter
-                        greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
+                        greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
                         
                         extracted_vars = []
                         for sym in sym_set:

@@ -54,8 +54,23 @@ class Command(BaseCommand):
             "note": (
                 "<div style='font-family: system-ui, sans-serif; font-size: 0.75rem; color: #1e293b; max-width: 480px; max-height: 400px; overflow-y: auto; padding-right: 4px;'>"
                 "<p style='padding: 3px; color: #475569;'>When multiplying '*' must be used between terms. When identifying 'power of', two asterix should be used between the terms --> '**'</p>"
-                # --- SECTION 1: ALGEBRA ---
-                "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>1. Algebra Components</p>"
+                
+                # --- SECTION 1: VARIABLE FORMATS ---
+                "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>1. Valid Variable Identifiers</p>"
+                "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>"
+                "  <thead>"
+                "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Variable Type</th><th style='padding: 3px;'>Valid Examples</th><th style='padding: 3px;'>Syntax / Constraints</th></tr>"
+                "  </thead>"
+                "  <tbody>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Standard Characters</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>x, y, z2, A5</td><td style='padding: 3px; color: #475569;'>A single letter optionally followed exclusively by zero or more digits.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Standard Subscripts</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>x_1, y_22, A_0</td><td style='padding: 3px; color: #475569;'>A single letter followed by an underscore and one or more digits.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Greek Letters</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>alpha, beta, theta</td><td style='padding: 3px; color: #475569;'>Full lowercase spelled names of standard Greek alphabet characters.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Greek Subscripts</td><td style='padding: 3px; font-family: monospace; font-weight: bold;'>alpha_3, theta_12, pi3</td><td style='padding: 3px; color: #475569;'>Spelled Greek words followed directly by digits, or by an underscore and digits.</td></tr>"
+                "  </tbody>"
+                "</table>"
+
+                # --- SECTION 2: ALGEBRA ---
+                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>2. Algebra Components</p>"
                 "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>"
                 "  <thead>"
                 "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Math Notation</th><th style='padding: 3px;'>Valid SymPy String Example</th><th style='padding: 3px;'>Valid LaTeX</th><th style='padding: 3px;'>Syntax Breakdown</th></tr>"
@@ -68,8 +83,8 @@ class Command(BaseCommand):
                 "  </tbody>"
                 "</table>"
 
-                # --- SECTION 2: TRIGONOMETRY ---
-                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>2. Trigonometry Components</p>"
+                # --- SECTION 3: TRIGONOMETRY ---
+                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>3. Trigonometry Components</p>"
                 "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>"
                 "  <thead>"
                 "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Math Notation</th><th style='padding: 3px;'>Valid SymPy String Example</th><th style='padding: 3px;'>Valid LaTeX</th><th style='padding: 3px;'>Syntax Breakdown</th></tr>"
@@ -82,8 +97,8 @@ class Command(BaseCommand):
                 "  </tbody>"
                 "</table>"
 
-                # --- SECTION 3: CALCULUS ---
-                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>3. Calculus Components</p>"
+                # --- SECTION 4: CALCULUS ---
+                "<p style='margin: 12px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>4. Calculus Components</p>"
                 "<table style='width: 100%; border-collapse: collapse; text-align: left;'>"
                 "  <thead>"
                 "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Calculus Operation</th><th style='padding: 3px;'>Math Notation</th><th style='padding: 3px;'>Valid SymPy String Example</th><th style='padding: 3px;'>Valid LaTeX</th><th style='padding: 3px;'>Syntax Breakdown</th></tr>"

@@ -966,7 +966,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // 1. Regex pattern for lowercase Greek letters
-            const greekRegexStr = '^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)';
+            const greekRegexStr = '^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)';
             
             // 2. Grab all alphanumeric/underscore word blocks to inspect
             const allWordMatches = formulaStr.match(/\b[a-zA-Z][a-zA-Z0-9_]*\b/g) || [];
@@ -974,6 +974,9 @@ document.addEventListener('DOMContentLoaded', function() {
             // 3. Filter using the updated structural rules
             const variableMatches = allWordMatches.filter(word => {
                 const lowerWord = word.toLowerCase();
+
+                // 🎯 FIX: Reject standalone uppercase E and I constants
+                if (word === 'E' || word === 'I') return false;
 
                 // Condition A: Single character patterns (x, x3, x_3)
                 if (/^[a-zA-Z][0-9]*$/.test(word)) return true;
