@@ -951,14 +951,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!formulaStr) return [];
             
             const cleanStr = formulaStr.trim();
-            // Check if this input is a linked token macro (e.g., <formula4>)
             const tokenMatch = cleanStr.match(/^<([^>]+)>$/);
             
             if (tokenMatch) {
                 const targetTokenIndexName = tokenMatch[1].strip ? tokenMatch[1].strip() : tokenMatch[1];
-                
-                // Crawl the DOM to look for the sidebar card matching that token definition name
-                // Note: Adjust the attribute selector name below ('data-indexed-token' or 'data-token') to match your app's exact DOM setup
                 const sourceCard = document.querySelector(`[data-indexed-token="${targetTokenIndexName}"], [data-token="${targetTokenIndexName}"]`);
                 if (sourceCard) {
                     const sourceVarsInput = sourceCard.querySelector('.val-input-variables');
@@ -969,11 +965,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 return [];
             }
 
-            // Fallback to standard local regex extraction if it's a regular math string
-            // 🎯 FIXED: Explicitly matches a single letter followed exclusively by zero or more numbers
-            const variableMatches = formulaStr.match(/\b[a-zA-Z][0-9]*\b/g) || [];
+            // 1. Regex pattern for lowercase Greek letters
+            const greekRegexStr = '^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)';
             
-            // Clean up duplicates and return directly—no blacklist array array scanning required!
+            // 2. Grab all alphanumeric/underscore word blocks to inspect
+            const allWordMatches = formulaStr.match(/\b[a-zA-Z][a-zA-Z0-9_]*\b/g) || [];
+            
+            // 3. Filter using the updated structural rules
+            const variableMatches = allWordMatches.filter(word => {
+                const lowerWord = word.toLowerCase();
+
+                // Condition A: Single character patterns (x, x3, x_3)
+                if (/^[a-zA-Z][0-9]*$/.test(word)) return true;
+                if (/^[a-zA-Z]_[0-9]+$/.test(word)) return true;
+                
+                // Condition B: Greek letter patterns (alpha, alpha3, alpha_3)
+                if (new RegExp(greekRegexStr + '$').test(lowerWord)) return true;
+                if (new RegExp(greekRegexStr + '_[0-9]+$').test(lowerWord)) return true;
+                if (new RegExp(greekRegexStr + '[0-9]+$').test(lowerWord)) return true;
+                
+                return false;
+            });
+            
             return [...new Set(variableMatches)];
         }
 

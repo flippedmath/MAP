@@ -1295,11 +1295,26 @@ class FormulaEntity(BaseEntity):
 
         parsed_variables = []
         if variables_str:
+            # 🎯 Compiled regex pattern matching any lowercase Greek letter base name
+            greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
+            
             raw_elements = [v.strip() for v in str(variables_str).split(",") if v.strip()]
             for item in raw_elements:
-                if not re.match(r'^[a-zA-Z][0-9]*$', item):
+                item_lower = item.lower()
+                
+                # Standard character checks (e.g., x, y3, z_2)
+                is_standard = bool(re.match(r'^[a-zA-Z][0-9]*$', item))
+                is_subscript = bool(re.match(r'^[a-zA-Z]_[0-9]+$', item))
+                
+                # 🎯 FIXED: Greek character checks supporting subscripts (e.g., alpha, alpha3, alpha_3)
+                is_greek_base = bool(re.match(greek_pattern + r'$', item_lower))
+                is_greek_num  = bool(re.match(greek_pattern + r'[0-9]+$', item_lower))
+                is_greek_sub  = bool(re.match(greek_pattern + r'_[0-9]+$', item_lower))
+                
+                if not (is_standard or is_subscript or is_greek_base or is_greek_num or is_greek_sub):
                     self.errors["variables"] = f"'{item}' is not a valid algebraic variable identifier."
                     break
+                    
                 parsed_variables.append(item)
         
         if "variables" not in self.errors:
@@ -1966,7 +1981,25 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                                 
                             sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
                         
-                        extracted_vars = [str(sym) for sym in sym_set if re.match(r'^[a-zA-Z]\d*$', str(sym))]
+                        # 🎯 Compiled regex pattern matching any lowercase Greek letter
+                        greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
+                        
+                        extracted_vars = []
+                        for sym in sym_set:
+                            sym_str = str(sym)
+                            
+                            # Condition A: Standard single letter structures (x, x4, x_3)
+                            is_standard = bool(re.match(r'^[a-zA-Z]\d*$', sym_str))
+                            is_subscript = bool(re.match(r'^[a-zA-Z]_\d+$', sym_str))
+                            
+                            # Condition B: Greek structures, including digits or underscores (alpha, alpha3, alpha_3)
+                            is_greek_base = bool(re.match(greek_pattern + r'$', sym_str, re.IGNORECASE))
+                            is_greek_sub = bool(re.match(greek_pattern + r'_\d+$', sym_str, re.IGNORECASE))
+                            is_greek_num = bool(re.match(greek_pattern + r'\d+$', sym_str, re.IGNORECASE))
+                            
+                            if is_standard or is_subscript or is_greek_base or is_greek_sub or is_greek_num:
+                                extracted_vars.append(sym_str)
+
                     except Exception as e:
                         print(f"⚠️ Shared helper SymPy LaTeX conversion error: {str(e)}")
 
@@ -1990,15 +2023,35 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             evaluated_output = clean_inputs.get('formula', clean_inputs.get('nodes', '0'))
             latex_output = str(evaluated_output)
 
-    # Secondary Regex Parse if SymPy dropped variables
-    if archetype_name.lower().startswith('formula') and not extracted_vars:
-        try:
-            raw_formula_text = str(clean_inputs.get('formula', ''))
-            clean_text = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '', raw_formula_text)
-            matches = re.findall(r'\b[a-zA-Z]\d*\b', clean_text)
-            extracted_vars = list(set(matches))
-        except Exception:
-            pass
+    # 🎯 FIX: Post-processing string cleanup filter using specialized rules 
+    # for both plain text and SymPy's custom LaTeX output strings.
+    if archetype_name.lower().startswith('formula'):
+        # 1. Clean Plain Text Output
+        if isinstance(evaluated_output, str):
+            evaluated_output = re.sub(r'\b-1\*1\b', '-1', evaluated_output)
+            evaluated_output = re.sub(r'\b1\*', '', evaluated_output)
+            evaluated_output = re.sub(r'\*1\b', '', evaluated_output)
+
+        # 2. Clean LaTeX Output (Handles SymPy's "1 y", "1 \cdot", and "\left(-1\right) 1")
+        if isinstance(latex_output, str):
+            # Fix \left(-1\right) 1 -> \left(-1\right)
+            latex_output = re.sub(r'\\left\(-1\\right\)\s+1\b', r'\\left(-1\\right)', latex_output)
+            # Fix standalone -1 \cdot 1 or similar
+            latex_output = re.sub(r'\b-1\s+\\cdot\s+1\b', '-1', latex_output)
+            
+            # 🎯 ADDED FIX FOR TRAILING MULTIPLIERS (Formula 6): Clean up trailing \cdot 1
+            latex_output = re.sub(r'\s+\\cdot\s+1\b', '', latex_output)
+            
+            # 🎯 ADDED FIX FOR NEGATIVE COEFFICIENT DOTS (Formula 11): Fix \left(-1\right) \cdot X -> -X
+            latex_output = re.sub(r'\\left\(-1\\right\)\s+\\cdot\s+', '-', latex_output)
+            
+            # 🎯 MOVE THIS HERE: Fix Strips both the 1 AND the \cdot when it's a leading coefficient
+            latex_output = re.sub(r'\b1\s+\\cdot\s*', '', latex_output)
+            
+            # Fix leading 1 before variables/functions (e.g., "1 y" -> "y")
+            latex_output = re.sub(r'\b1\s+([a-zA-Z\\])', r'\1', latex_output)
+
+    # Sort the extracted vars to have consistency in how they are shown to the user
     extracted_vars.sort()
 
     return {
