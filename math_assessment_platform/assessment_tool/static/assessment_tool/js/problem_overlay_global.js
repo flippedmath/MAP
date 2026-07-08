@@ -469,7 +469,23 @@ document.addEventListener('DOMContentLoaded', function() {
                     <span style="font-size: 0.77rem; background:${isVariable ? '#e0f2fe' : '#dcfce7'}; color:${isVariable ? '#0369a1' : '#166534'}; padding:1px 6px; border-radius:10px; font-weight:500;">${typeBadgeText}</span>
                     
                     ${tokenNoteHint ? `
-                        <div class="workspace-info-tooltip-container" style="position: relative; display: inline-block;">
+                        <div class="workspace-info-tooltip-container" 
+                             style="position: relative; display: inline-block;"
+                             onmouseenter="(() => {
+                                 const overlay = this.querySelector('.workspace-info-tooltip-overlay');
+                                 const container = this.closest('div[style*=\\'overflow-y: auto\\']');
+                                 if (!overlay || !container) return;
+                                 
+                                 // Reset to default first
+                                 overlay.style.bottom = '102%';
+                                 overlay.style.top = 'auto';
+                                 
+                                 // Shift down flush to top if it clips the ceiling
+                                 if (overlay.getBoundingClientRect().top < container.getBoundingClientRect().top) {
+                                     overlay.style.bottom = 'auto';
+                                     overlay.style.top = '0px';
+                                 }
+                             })()">
                             <i class="fas fa-info-circle" style="color: #94a3b8; cursor: pointer; font-size: 0.85rem; transition: color 0.15s;"></i>
                             <div class="workspace-info-tooltip-overlay">
                                 <strong>&lt;${indexedTokenString}&gt; Definition Note:</strong><br>

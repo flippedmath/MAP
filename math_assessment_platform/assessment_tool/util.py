@@ -1285,8 +1285,11 @@ class FormulaEntity(BaseEntity):
                 return False
         
         if formula_expr and str(formula_expr).strip() != "0":
+            # Apply implicit multiplication rules before testing syntax validity
+            implicit_clean_expr = self.insert_implicit_multiplication(str(formula_expr))
+            
             # Temporarily substitute macro tokens with an arbitrary integer for raw syntax evaluation
-            clean_syntax_check = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '1', str(formula_expr))
+            clean_syntax_check = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '1', implicit_clean_expr)
             print(f"        Formula string before SymPy validation check: {repr(clean_syntax_check)}")
             is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(clean_syntax_check)
             if not is_valid_syntax:
@@ -1349,6 +1352,51 @@ class FormulaEntity(BaseEntity):
 
         return len(self.errors) == 0
 
+
+    def insert_implicit_multiplication(self, formula_str: str) -> str:
+        if not formula_str:
+            return ""
+            
+        # Clean up whitespace but keep the characters intact
+        s = formula_str.strip()
+
+        # Convert standard caret power notation to SymPy Python exponents
+        s = s.replace('^', '**')
+        
+        # 🎯 Complete list of standard SymPy functions (longer names go FIRST to prevent partial matching)
+        funcs = (
+            r'(?:'
+            r'asin|acos|atan|acot|acsc|asec|'  # Inverse Trig
+            r'sinh|cosh|tanh|coth|csch|sech|'  # Hyperbolic
+            r'asinh|acosh|atanh|acoth|acsch|asech|'  # Inverse Hyperbolic
+            r'sin|cos|tan|cot|csc|sec|'        # Standard & Reciprocal Trig
+            r'exp|log|ln|sqrt|diff|integrate|limit' # Calculus & Core
+            r')'
+        )
+        
+        # 1. Number followed by a letter/variable/backslash (e.g., 8x -> 8*x, 8alpha -> 8*alpha)
+        s = re.sub(r'(\d)([a-zA-Z\\])', r'\1*\2', s)
+        
+        # 2. Number followed by an opening parenthesis (e.g., 8(x+1) -> 8*(x+1))
+        s = re.sub(r'(\d)\(', r'\1*(', s)
+        
+        # 3. Standalone variable followed by an opening parenthesis, EXCLUDING system function names (e.g., x(y+1) -> x*(y+1))
+        s = re.sub(r'\b(?!' + funcs + r'\b)([a-zA-Z\d_]+)\(', r'\1*(', s)
+        
+        # 4. Closing parenthesis followed by an opening parenthesis (e.g., (x+1)(x-1) -> (x+1)*(x-1))
+        s = re.sub(r'\)\(', r')*(', s)
+        
+        # 5. Closing parenthesis followed by a number or variable (e.g., (x+1)8 -> (x+1)*8, (x+1)y -> (x+1)*y)
+        s = re.sub(r'\)([\d[a-zA-Z])', r')*\1', s)
+        
+        # 6. Variable followed by a known math function name (e.g., xacot(x) -> x*acot(x))
+        s = re.sub(r'\b(?!' + funcs + r'\b)([a-zA-Z\d_]+)(' + funcs + r')\b', r'\1*\2', s)
+        
+        # 7. Numbers before functions: (e.g., 5coth(x) -> 5*coth(x))
+        s = re.sub(r'(\d)(' + funcs + r')\b', r'\1*\2', s)
+
+        return s
+
     def evaluate_output(self):
         formula_str = str(self.runtime_values.get("formula", "")).strip()
         solve_method = str(self.runtime_values.get("solve method", "leave as formula")).strip()
@@ -1397,6 +1445,10 @@ class FormulaEntity(BaseEntity):
 
         processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
         print(f"   ↳ Post-Macro substitution string: {repr(processed_formula)}")
+
+        # Inbound implicit math expansion immediately following macro expansion
+        processed_formula = self.insert_implicit_multiplication(processed_formula)
+        print(f"   ↳ Post-Implicit multiplication expansion: {repr(processed_formula)}")
 
         local_dict = {var: sp.Symbol(var) for var in var_list}
         if 'pi' not in local_dict: local_dict['pi'] = sp.pi
