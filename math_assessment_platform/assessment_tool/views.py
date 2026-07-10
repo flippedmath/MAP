@@ -1873,34 +1873,57 @@ def save_problem_workspace(request, problem_id):
     except Problem.DoesNotExist:
         return JsonResponse({"success": False, "error": f"Problem reference ID {problem_id} not found."}, status=404)
 
-    # 🔒 SECURITY FENCE
     if not verify_workspace_clearance(request.user, problem):
         return JsonResponse({'success': False, 'error': 'Permission Denied: Insufficient authorization clearing.'}, status=403)
 
     user_inputs = payload.get("inputs", [])
-    body_html = payload.get("body_html", "").strip() # Extract raw rich-text markup sent down by Quill
+    body_html = payload.get("body_html", "").strip() 
     
     if not isinstance(user_inputs, list):
         return JsonResponse({"success": False, "error": "The workspace inputs block layout must be an array list structure."}, status=400)
 
-    # Cache format patterns locally for this loop session to minimize database load
-    cached_patterns = {}
+    # =========================================================================
+    # 🎯 FIX A: TOPOLOGICAL SORT TO RUN VALIDATION IN DEPENDENCY ORDER
+    # =========================================================================
+    sorted_user_inputs = []
+    visited_tokens = set()
+    input_map = {entity.get("sequence_token"): entity for entity in user_inputs if entity.get("sequence_token")}
 
-    # 🎯 STEP A: VALIDATION LOOP (Before touch transactions)
+    def visit_node(node_token):
+        if node_token in visited_tokens:
+            return
+        node_data = input_map.get(node_token)
+        if not node_data:
+            return
+            
+        # Discover dependencies linked via strings inside input properties
+        inputs_str = json.dumps(node_data.get("inputs", {}))
+        for token_key in input_map.keys():
+            if f"<{token_key}>" in inputs_str and token_key != node_token:
+                visit_node(token_key)
+                
+        visited_tokens.add(node_token)
+        sorted_user_inputs.append(node_data)
+
+    for entity in user_inputs:
+        seq = entity.get("sequence_token")
+        if seq and seq not in visited_tokens:
+            visit_node(seq)
+            
+    # Fallback to catch any elements missing structural sequence tags
+    for entity in user_inputs:
+        if not entity.get("sequence_token"):
+            sorted_user_inputs.append(entity)
+    # =========================================================================
+
+    cached_patterns = {}
     validated_engines = []
-    # 🎯 FIX: Track tokens that successfully pass validation in this request session
     locally_validated_tokens = set()
 
-    print("\n" + "="*60)
-    print(f"📥 BEGIN WORKSPACE SAVE VALIDATION FOR PROBLEM ID: {problem_id}")
-    print(f"Total input cards received: {len(user_inputs)}")
-    print("="*60)
-
-    for index, entity_data in enumerate(user_inputs):
+    # Process using our newly sorted array dependency pipeline loop
+    for index, entity_data in enumerate(sorted_user_inputs):
         token_id = entity_data.get("token") 
-        sequence_token = entity_data.get("sequence_token", token_id) # The unique identifier (e.g., 'formula2')
-        
-        print(f"\n🔍 Processing card [{index}] | Sequence Token: <{sequence_token}> | Type: {token_id}")
+        sequence_token = entity_data.get("sequence_token", token_id)
 
         if not token_id:
             return JsonResponse({"success": False, "error": f"Missing 'token' identity string at index [{index}]."}, status=400)
@@ -1920,7 +1943,6 @@ def save_problem_workspace(request, problem_id):
 
         substitutions_map = {}
         cleaned_provided_fields = {}
-
         solve_method = provided_fields.get("solve method", "")
 
         for key, value in provided_fields.items():
@@ -1932,58 +1954,40 @@ def save_problem_workspace(request, problem_id):
             else:
                 cleaned_provided_fields[key] = value
 
-        # 🎯 STEP A: VALIDATION LOOP (Inside your existing for loop)
         if token_id == 'formula':
             if not cleaned_provided_fields.get('formula'):
-                print(f"⚠️  [{sequence_token}] Formula field is empty. Injecting fallback '0'.")
                 cleaned_provided_fields['formula'] = "0"
-
+                
             if solve_method == 'variable substitution':
                 has_substitutions = len(substitutions_map) > 0 or "substitutions" in provided_fields
-                
                 if not has_substitutions:
                     is_linked_dependency = any(
-                        f"<{sequence_token}>" in str(entity.get("inputs", {})) or 
-                        sequence_token in str(entity.get("inputs", {}))
-                        for entity in user_inputs if entity.get("sequence_token") != sequence_token
+                        f"<{sequence_token}>" in str(entity.get("inputs", {}))
+                        for entity in sorted_user_inputs if entity.get("sequence_token") != sequence_token
                     )
-                    
-                    print(f"📋 [{sequence_token}] No substitutions found. Dependency scan linkage status: {is_linked_dependency}")
-                    
                     if not is_linked_dependency:
-                        return JsonResponse({
-                            "success": False,
-                            "error": f"Validation failed for '{sequence_token}': Please add at least one variable substitution row or link to evaluate."
-                        }, status=422)
+                        return JsonResponse({"success": False, "error": f"Validation failed for '{sequence_token}': Missing substitution rows."}, status=422)
                 
-                # Look for the new key name when validating variables
+                # FIX: Explicitly keep 'variable to solve for' empty for substitution mode
+                cleaned_provided_fields['variable to solve for'] = ""
+                
+            elif solve_method == 'simplify':
+                target_var = cleaned_provided_fields.get('variable to solve for', '').strip()
+                if not target_var: 
+                    cleaned_provided_fields['variable to solve for'] = "" 
+            else:
+                # Catch-all or methods that DO require a target variable fallback
                 vars_list = [v.strip() for v in cleaned_provided_fields.get('variables', '').split(',') if v.strip()]
                 if vars_list and not cleaned_provided_fields.get('variable to solve for'):
                     cleaned_provided_fields['variable to solve for'] = vars_list[0]
-                elif not cleaned_provided_fields.get('variable to solve for'):
-                    cleaned_provided_fields['variable to solve for'] = "x"
-                
-            elif solve_method == 'simplify':
-                # FIX: Changed lookups from 'variable substitution' to 'variable to solve for'
-                target_var = cleaned_provided_fields.get('variable to solve for', '').strip()
-                if not target_var:
-                    cleaned_provided_fields['variable to solve for'] = "" 
-            else:
-                cleaned_provided_fields['variable to solve for'] = ""
+                else:
+                    cleaned_provided_fields['variable to solve for'] = cleaned_provided_fields.get('variable to solve for', '').strip()
 
-        # 🧪 DIAGNOSTIC PRINT: Inspect fields sent to validator constructor
-        print(f"⚙️  Sending fields to get_entity_validator for <{sequence_token}>:")
-        print(f"    - Cleaned Fields: {cleaned_provided_fields}")
-        print(f"    - Substitutions Map: {substitutions_map}")
-
-        # 🎯 FIX: Dynamically inject a temporary validation pass flag into upstream payload 
-        # dictionary nodes so that downstream validators know they passed this request session.
         runtime_payload = []
-        for entity in user_inputs:
+        for entity in sorted_user_inputs:
             entity_copy = dict(entity)
             ent_seq = entity_copy.get("sequence_token")
             if ent_seq in locally_validated_tokens:
-                # If this sibling token passed verification earlier in the loop, mark it valid in memory
                 entity_copy["is_validated_dependency"] = True
                 entity_copy["outstanding_errors"] = False
             runtime_payload.append(entity_copy)
@@ -1992,21 +1996,13 @@ def save_problem_workspace(request, problem_id):
             token_id, 
             cleaned_provided_fields, 
             blueprint, 
-            all_entities_payload=runtime_payload  # 🎯 Pass the runtime annotated payload track
+            all_entities_payload=runtime_payload
         )
 
         if not validator.is_valid():
             error_details = ", ".join([f"[{k}]: {v}" for k, v in validator.errors.items()])
-            friendly_name = blueprint.get("name", token_id)
-            print(f"❌ BACKEND VALIDATION FAILURE FOR {friendly_name} (<{sequence_token}>): {error_details}")
-            return JsonResponse({
-                "success": False,
-                "error": f"Validation failed for '{friendly_name}' component: {error_details}"
-            }, status=422)
+            return JsonResponse({"success": False, "error": f"Validation failed for '{blueprint.get('name', token_id)}' component: {error_details}"}, status=422)
             
-        print(f"✅ Card <{sequence_token}> successfully verified.")
-
-        # 🎯 FIX: Register this sequence token identifier as verified
         if sequence_token:
             locally_validated_tokens.add(sequence_token)
 
@@ -2019,78 +2015,51 @@ def save_problem_workspace(request, problem_id):
             "substitutions_map": substitutions_map
         })
 
-    print("\n💾 All components valid. Proceeding to Atomic Database Write...")
-
     # 🎯 STEP B: ATOMIC DATABASE SAVE TRANSACTION
     with transaction.atomic():
-        
-        # 1. Update the parent Problem parameters if altered
         problem.title = payload.get("title", problem.title)
         problem.save()
 
-        # 2. Synchronize Canvas Text directly to the Related QuestionBlock row entry
         structured_json_string = json.dumps({"html_content": body_html})
-        q_block, created = QuestionBlock.objects.get_or_create(
-            problem=problem,
-            defaults={'content': structured_json_string}
-        )
+        q_block, created = QuestionBlock.objects.get_or_create(problem=problem, defaults={'content': structured_json_string})
         if not created:
             q_block.content = structured_json_string
             q_block.save()
 
-        # 3. Clear previous variable configurations for a fresh workspace compile write
         EntitySegment.objects.filter(problem=problem).delete()
 
-        # 4. Commit verified segments safely
         for engine_item in validated_engines:
             token_id = engine_item["token_id"]
             sequence_token = engine_item["sequence_token"]
             shuffle_seed = engine_item["shuffle_seed"]
             blueprint = engine_item["blueprint"]
             validator = engine_item["validator"]
-            item_substitutions = engine_item["substitutions_map"]  # 🎯 Read it back safely here
+            item_substitutions = engine_item["substitutions_map"]
             
-            # Extract directly from the dynamic cleaned_data map
             content_payload = dict(validator.cleaned_data)
 
-            # Inject the sub_ mappings back into the content payload dictionary 
-            # so they are saved cleanly in your database row's JSON field
-            if token_id == 'formula':
+            # 🎯 FIX B: RESTORE SUBSTITUTIONS FOR BOTH FORMULA AND MATRIX COMPONENT TYPES
+            if token_id in ['formula', 'matrix']:
                 for sub_key, sub_value in item_substitutions.items():
                     content_payload[sub_key] = sub_value
             
             points_value = content_payload.get("points") or blueprint.get("points", {}).get("default", 0.0)
-            
-            # Combine the user parameters and append display configurations to content payload JSON
             content_payload["answer_field"] = blueprint.get("answer_field", False)
             content_payload["sequence_token"] = sequence_token 
             content_payload["shuffle_seed"] = shuffle_seed
 
             blueprint_default = blueprint.get("default_answer")
-            if blueprint_default in [True, False]:
-                default_answer_fallback = blueprint_default
-            else:
-                if str(blueprint_default).lower() in ['true', '1', 'yes']:
-                    default_answer_fallback = True
-                else:
-                    default_answer_fallback = False
+            default_answer_fallback = str(blueprint_default).lower() in ['true', '1', 'yes'] if blueprint_default not in [True, False] else blueprint_default
 
             EntitySegment.objects.create(
                 problem=problem,
                 problem_type_id_originator=EntityType.objects.get(name=token_id),
                 content=json.dumps(content_payload),
                 points=float(points_value) if points_value is not None else 0.0,
-                default_answer=str(default_answer_fallback),
-                parent_entity=None,
-                is_answer_to_multi_choice=None,
-                space_allocation=None
+                default_answer=str(default_answer_fallback)
             )
 
-    print("🎉 Workspace transaction complete!")
-    return JsonResponse({
-        "success": True,
-        "message": f"Workspace structure compiled successfully. Saved {len(user_inputs)} components and canvas."
-    })
+    return JsonResponse({"success": True, "message": "Workspace structure compiled successfully."})
 
 
 

@@ -136,14 +136,24 @@ class Command(BaseCommand):
         {
             "name": "Matrix",
             "token": "matrix",
-            "answer_field": True,
             "inputs": {
                 # Configuration & Sizing (Hidden visually if linked_matrix is populated)
                 "rows": {"field": "integer", "value": ["integer"], "default": 3},
                 "columns": {"field": "integer", "value": ["integer"], "default": 3},
                 
-                # The structured layout holding grid data (raw values or token string links)
-                "matrix_data": {"field": "grid", "value": ["array(['array(['string'])'])"], "default": [["1", "0", "0"], ["0", "1", "0"], ["0", "0", "1"]]},
+                # 🎯 Declared variable lists input block (Matches formula configurations perfectly)
+                "variables": {"field": "string", "value": ["string"], "default": ""},
+                
+                # 🎯 FIXED: Replaced legacy flat "entries" with the actual incoming 2D matrix_data schema
+                "matrix_data": {
+                    "field": "array", 
+                    "value": ["array(['string'])"], 
+                    "default": [
+                        ["1", "0", "0"],
+                        ["0", "1", "0"],
+                        ["0", "0", "1"]
+                    ]
+                },
                 
                 # Pure alternative input override
                 "linked_matrix": {"field": "entity", "value": ["matrix", "or_null"], "default": None},
@@ -160,11 +170,11 @@ class Command(BaseCommand):
                 "scalar": {"field": "double", "value": ["double"], "default": 1.0}
             },
             "output": ["matrix", "double"],
-            "entity_name_list": "Answer Input Fields",
+            "entity_name_list": "Dynamic Variables",
             "disabled": False,
             "note": (
                 "<div style='font-family: system-ui, sans-serif; font-size: 0.75rem; color: #1e293b; max-width: 480px; max-height: 400px; overflow-y: auto; padding-right: 4px;'>\n"
-                "<p style='padding: 3px; color: #475569;'><strong>Matrix Operations:</strong> Define a local grid size up to any size, or link a source Matrix. Individual cells accept manual numbers, formulas (using standard operators like <code>^</code> or <code>**</code>), or direct token entity links.</p>\n"
+                "<p style='padding: 3px; color: #475569;'><strong>Matrix Operations:</strong> Define a local grid size, declare custom algebraic variables, or link a source Matrix. Individual cells strictly accept manual numbers, declared input variables, or clean macro token entity links.</p>\n"
                 "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>Calculation Rules & Constraints</p>\n"
                 "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>\n"
                 "  <thead>\n"

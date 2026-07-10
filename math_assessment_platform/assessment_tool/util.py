@@ -13,6 +13,7 @@ from django.db import IntegrityError
 import random
 import json
 import sympy as sp
+from sympy import Matrix as SymPyMatrix
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.parsing.latex import parse_latex
 from django.core.exceptions import ValidationError
@@ -1890,46 +1891,277 @@ class GraphEntity(BaseEntity):
         }
 
         return json.dumps(graph_manifest)
-    
+
 
 class MatrixEntity(BaseEntity):
     """
-    Validation engine for the 'matrix' or 'matrixAnswer' token patterns.
+    Validation and evaluation engine for structural matrix layouts.
+    Reconstructs 2D data matrices sent from UI grids into evaluated SymPy structures,
+    handling nested token resolution, variables, and scalar operations.
     """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.last_computed_sympy_result = None
+
     def is_valid(self):
         if not super().is_valid():
             return False
 
-        rows = self.cleaned_data.get("rows")
-        cols = self.cleaned_data.get("cols")
-        cells = self.data.get("inputs", {}).get("cells")  # Grab raw inputs array reference
-
-        if not isinstance(cells, list):
-            self.errors["cells"] = "Cells property must be a multi-dimensional array matrix layout."
-            return False
-
-        # 1. Rule: Row length validation
-        if len(cells) != rows:
-            self.errors["cells"] = f"Row multi-array count balance error. Expected {rows} rows, received {len(cells)}."
-            return False
-
-        # 2. Rule: Column elements uniform length validation matrices verification
-        for index, row_item in enumerate(cells):
-            if not isinstance(row_item, list):
-                self.errors["cells"] = f"Row at matrix index {index} must be a valid list."
-                return False
-            if len(row_item) != cols:
-                self.errors["cells"] = f"Column elements mismatch at row index {index}. Expected {cols} columns, received {len(row_item)}."
+        # 🎯 1. PARSE DECLARED VARIABLE IDENTIFIERS AND RESOLVE VALUES
+        variables_str = self.runtime_values.get("variables", "")
+        parsed_variables = []
+        variable_substitutions = {}
+        
+        if variables_str:
+            try:
+                variables_dict = json.loads(variables_str) if isinstance(variables_str, str) else variables_str
+            except Exception:
+                self.errors["variables"] = "Failed to parse variables object schema."
                 return False
 
-        # If everything balances out, clean up elements structure copies safely
-        self.cleaned_data["cells"] = cells
+            greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
+            
+            for item, raw_val in variables_dict.items():
+                item = item.strip()
+                if item in ('E', 'I'):
+                    self.errors["variables"] = f"'{item}' is a reserved mathematical constant in SymPy."
+                    break
+
+                item_lower = item.lower()
+                is_standard = bool(re.match(r'^[a-zA-Z][0-9]*$', item))
+                is_subscript = bool(re.match(r'^[a-zA-Z]_[0-9]+$', item))
+                is_greek_base = bool(re.match(greek_pattern + r'$', item_lower))
+                is_greek_num  = bool(re.match(greek_pattern + r'[0-9]+$', item_lower))
+                is_greek_sub  = bool(re.match(greek_pattern + r'_[0-9]+$', item_lower))
+                
+                if not (is_standard or is_subscript or is_greek_base or is_greek_num or is_greek_sub):
+                    self.errors["variables"] = f"'{item}' is not a valid algebraic variable identifier."
+                    break
+                    
+                parsed_variables.append(item)
+
+                val_str = str(raw_val).strip()
+                if re.match(r"^(?:&lt;|<)[^>&]+(?:&gt;|>)$", val_str):
+                    resolved_dep = self.resolve_token_dependency(val_str)
+                    if isinstance(resolved_dep, str) and '=' in resolved_dep:
+                        resolved_dep = resolved_dep.split('=')[-1].strip()
+                    variable_substitutions[item] = resolved_dep
+                elif val_str:
+                    variable_substitutions[item] = val_str
+
+        if "variables" not in self.errors:
+            self.runtime_values["parsed_variables_array"] = parsed_variables
+            self.runtime_values["_variable_substitutions_map"] = variable_substitutions
+
+        if self.cleaned_data.get("linked_matrix"):
+            return True
+
+        # 🎯 2. RECONCILE FRONTEND MIGRATION & AUTO-EXPAND FLAT PLAIN DATA
+        rows = int(self.runtime_values.get("rows", 3))
+        cols = int(self.runtime_values.get("columns", 3))
+        
+        matrix_data = self.runtime_values.get("matrix_data") or self.cleaned_data.get("matrix_data", [])
+
+        # 🎯 THE PATCH: Intercept flat strings/numbers and build the expected 2D shape dynamically
+        if isinstance(matrix_data, (str, int, float)):
+            fallback_val = str(matrix_data)
+            matrix_data = [[fallback_val for _ in range(cols)] for _ in range(rows)]
+
+        if not matrix_data or not isinstance(matrix_data, list):
+            self.errors["matrix_data"] = "Matrix configuration is empty or structural layout format is invalid."
+            return False
+
+        if len(matrix_data) != rows:
+            self.errors["matrix_data"] = f"Grid row mismatch. Expected {rows} rows, found {len(matrix_data)}."
+            return False
+
+        # Build dynamic environment context map to validate custom algebraic equations inside cells
+        local_dict = {var: sp.Symbol(var) for var in parsed_variables}
+
+        # Validate cell strings using the structured 2D array layout
+        for r_idx in range(rows):
+            row_data = matrix_data[r_idx]
+            if not isinstance(row_data, list) or len(row_data) != cols:
+                self.errors["matrix_data"] = f"Grid column size mismatch at row {r_idx}. Expected {cols} columns."
+                return False
+
+            for c_idx in range(cols):
+                cell_value = row_data[c_idx]
+
+                if cell_value is None:
+                    continue
+                
+                s_val = str(cell_value).strip()
+                if not s_val:
+                    continue
+
+                if re.match(r"^(?:&lt;|<)[^>&]+(?:&gt;|>)$", s_val):
+                    continue
+
+                if re.match(r"^-?\d+(?:\.\d+)?$", s_val):
+                    continue
+
+                if s_val in local_dict:
+                    continue
+
+                try:
+                    sp.parse_expr(s_val, local_dict=local_dict, evaluate=False)
+                except Exception:
+                    self.errors["matrix_data"] = (
+                        f"Invalid cell calculation at row {r_idx}, column {c_idx} ('{cell_value}'). "
+                        f"Cells must contain numbers, valid variables, references, or evaluate mathematically."
+                    )
+                    return False
+            
+        # Cache clean matrix grid internally for execution phases
+        self.runtime_values["_reconstructed_2d_grid"] = matrix_data
         return len(self.errors) == 0
-    
+
+    def _resolve_cell_to_scalar(self, cell_value, local_dict) -> sp.Expr:
+        if cell_value is None:
+            return sp.Integer(0)
+
+        s = str(cell_value).strip()
+        if not s:
+            return sp.Integer(0)
+
+        token_match = re.match(r"^(?:&lt;|<)([^>&]+)(?:&gt;|>)$", s)
+        if token_match:
+            clean_token = token_match.group(1).strip()
+            resolved_raw = self.resolve_token_dependency(f"<{clean_token}>")
+            
+            if isinstance(resolved_raw, str) and '=' in resolved_raw:
+                parts = resolved_raw.split('=')
+                resolved_raw = parts[-1].strip()
+
+            return sp.parse_expr(str(resolved_raw), local_dict=local_dict, evaluate=True)
+
+        return sp.parse_expr(s, local_dict=local_dict, evaluate=True)
+
+    def _build_sympy_matrix(self, local_dict) -> SymPyMatrix:
+        linked_token = self.cleaned_data.get("linked_matrix")
+        if linked_token:
+            raw_target_matrix_val = self.resolve_token_dependency(linked_token)
+            
+            # Cast stringified SymPy expressions for Matrix A/Override targets
+            if isinstance(raw_target_matrix_val, str):
+                s_a = raw_target_matrix_val.strip()
+                
+                # 🎯 FIX: Route stringified Matrix layouts through parse_expr to respect local_dict overrides
+                if s_a.startswith("Matrix("):
+                    return sp.parse_expr(s_a, local_dict=local_dict, evaluate=True)
+                else:
+                    return sp.parse_expr(s_a, local_dict=local_dict, evaluate=True)
+                    
+            if isinstance(raw_target_matrix_val, SymPyMatrix):
+                # 🎯 FIX: If it's already an active SymPy Matrix instance object, 
+                # we must explicitly substitute our local variables into it
+                return raw_target_matrix_val.subs(local_dict)
+                
+            if isinstance(raw_target_matrix_val, list):
+                return SymPyMatrix(raw_target_matrix_val).subs(local_dict)
+                
+            raise ValueError(f"Unable to parse linked object source data for token {linked_token}.")
+
+        r_count = int(self.runtime_values.get("rows", 3))
+        c_count = int(self.runtime_values.get("columns", 3))
+        raw_grid = self.runtime_values.get("_reconstructed_2d_grid", [])
+
+        if not raw_grid:
+            raise ValueError("Execution context structure missing critical target grid matrix references.")
+
+        evaluated_2d_array = []
+        for r_idx in range(r_count):
+            current_row = []
+            for c_idx in range(c_count):
+                cell_scalar = self._resolve_cell_to_scalar(raw_grid[r_idx][c_idx], local_dict)
+                current_row.append(cell_scalar)
+            evaluated_2d_array.append(current_row)
+
+        return SymPyMatrix(evaluated_2d_array)
+
     def evaluate_output(self):
-        # Placeholder layout text representation for matrix entities
-        cells = self.cleaned_data.get("cells") or [[0,0],[0,0]]
-        return str(cells)
+        action = self.runtime_values.get("calculate", "leave as matrix")
+        var_list = self.runtime_values.get("parsed_variables_array", [])
+        subs_map = self.runtime_values.get("_variable_substitutions_map", {})
+        
+        # Build evaluation substitution dictionary context mapping
+        local_dict = {}
+        for var in var_list:
+            if var in subs_map and subs_map[var] is not None:
+                # 🎯 FIX: Wrap string expressions using sp.Symbol inside a global evaluate=False context
+                # This ensures SymPy treats substituted values textually without computing the math layout
+                if action == "leave as matrix":
+                    local_dict[var] = sp.Symbol(f"({subs_map[var]})") if "-" in str(subs_map[var]) else sp.Symbol(str(subs_map[var]))
+                else:
+                    local_dict[var] = sp.parse_expr(str(subs_map[var]), evaluate=True)
+            else:
+                local_dict[var] = sp.Symbol(var)
+
+        if 'pi' not in local_dict: local_dict['pi'] = sp.pi
+        if 'exp' not in local_dict: local_dict['exp'] = sp.exp
+
+        # 🎯 FIX: Apply global context manager suppression rule for non-simplification matrix formatting
+        if action == "leave as matrix":
+            with sp.evaluate(False):
+                matrix_A = self._build_sympy_matrix(local_dict)
+                result = matrix_A
+        else:
+            matrix_A = self._build_sympy_matrix(local_dict)
+            if action == "transpose":
+                result = matrix_A.T
+            elif action == "inversion":
+                if not matrix_A.is_square:
+                    raise ValueError("Matrix inversion operation is restricted to square configurations.")
+                if matrix_A.det() == 0:
+                    raise ValueError("Matrix inversion impossible: System is singular (determinant is zero).")
+                result = matrix_A.inv()
+            elif action == "determinate":
+                if not matrix_A.is_square:
+                    raise ValueError("Determinant calculation parameters are restricted to square patterns.")
+                result = matrix_A.det()
+            elif action == "scalar":
+                scalar_multiplier = self.resolve_numeric_value("scalar", default_fallback=1.0)
+                result = matrix_A * scalar_multiplier
+            elif action in ["multiply", "add", "subtract"]:
+                matrix_b_token = self.cleaned_data.get("matrix B")
+                if not matrix_b_token:
+                    raise ValueError(f"Operation workflow action '{action}' requires a valid linked Matrix B input assignment.")
+                
+                resolved_b_data = self.resolve_token_dependency(matrix_b_token)
+                
+                # 🎯 FIX: Cast stringified SymPy expressions smoothly back into functional structures
+                if isinstance(resolved_b_data, str):
+                    s_b = resolved_b_data.strip()
+                    if s_b.startswith("Matrix("):
+                        matrix_B = sp.sympify(s_b)
+                    else:
+                        matrix_B = sp.parse_expr(s_b, local_dict=local_dict, evaluate=True)
+                elif isinstance(resolved_b_data, list):
+                    matrix_B = SymPyMatrix(resolved_b_data)
+                else:
+                    matrix_B = resolved_b_data
+                
+                if not isinstance(matrix_B, SymPyMatrix):
+                    raise TypeError("Resolved calculation targets for Matrix B failed validation checks.")
+
+                if action == "multiply":
+                    if matrix_A.cols != matrix_B.rows:
+                        raise ValueError(f"Incompatible dimensions: Matrix A columns ({matrix_A.cols}) must match Matrix B rows ({matrix_B.rows}).")
+                    result = matrix_A * matrix_B
+                elif action == "add":
+                    if matrix_A.shape != matrix_B.shape:
+                        raise ValueError(f"Incompatible addition sizes: Grid shapes {matrix_A.shape} and {matrix_B.shape} must align exactly.")
+                    result = matrix_A + matrix_B
+                elif action == "subtract":
+                    if matrix_A.shape != matrix_B.shape:
+                        raise ValueError(f"Incompatible subtraction sizes: Grid shapes {matrix_A.shape} and {matrix_B.shape} must align exactly.")
+                    result = matrix_A - matrix_B
+            else:
+                result = matrix_A
+
+        self.last_computed_sympy_result = result
+        return str(result)
     
 
 def get_entity_validator(token_string, data_payload, pattern_blueprint, all_entities_payload=None):
@@ -1944,6 +2176,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "primeFactors": PrimeFactorsEntity,
         "formula": FormulaEntity,
         "graph": GraphEntity,
+        "matrix": MatrixEntity,
     }
     
     # Fallback to base configuration validator if a custom token model isn't written yet
@@ -1985,14 +2218,28 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
     latex_output = "???"
     extracted_vars = []
 
+    # Shared variable tracking storage
+    sym_set = set()
+
     if is_valid:
         try:
             evaluated_res = validator.evaluate_output()
             evaluated_output = str(evaluated_res)
             
-            # 🎯 Graph Specific Override: Graphs don't need LaTeX math rendering
+            # 🎯 Component Type Specific Pre-Formatting Overrides
             if archetype_name == 'graph':
-                latex_output = "[Graph Component]"  # or return evaluated_output if frontend parses JSON there
+                latex_output = "[Graph Component]"
+            elif archetype_name.lower().startswith('matrix'):
+                # 🎯 Matrix Specific Output Rendering: Formats SymPy matrices as proper LaTeX structural layouts
+                if hasattr(validator, 'last_computed_sympy_result'):
+                    result_obj = validator.last_computed_sympy_result
+                    latex_output = sp.latex(result_obj)
+                    
+                    # Scrape free variables from every calculation cell inside the Matrix frame shape
+                    if hasattr(result_obj, 'free_symbols'):
+                        sym_set = result_obj.free_symbols
+                else:
+                    latex_output = evaluated_output
             else:
                 latex_output = evaluated_output
             
@@ -2001,7 +2248,7 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             if target_entry:
                 target_entry['simulated_value'] = evaluated_output
 
-            # --- SymPy LaTeX Rendering Factory ---
+            # --- SymPy LaTeX Rendering Factory for Formulas ---
             if archetype_name.lower().startswith('formula'):
                 if hasattr(validator, 'last_computed_sympy_result'):
                     try:
@@ -2036,35 +2283,33 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                                 latex_output = sp.latex(result_obj)
                                 
                             sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
-                        
-                        # 🎯 Compiled regex pattern matching any lowercase Greek letter
-                        greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
-                        
-                        extracted_vars = []
-                        for sym in sym_set:
-                            sym_str = str(sym)
-                            
-                            # Condition A: Standard single letter structures (x, x4, x_3)
-                            is_standard = bool(re.match(r'^[a-zA-Z]\d*$', sym_str))
-                            is_subscript = bool(re.match(r'^[a-zA-Z]_\d+$', sym_str))
-                            
-                            # Condition B: Greek structures, including digits or underscores (alpha, alpha3, alpha_3)
-                            is_greek_base = bool(re.match(greek_pattern + r'$', sym_str, re.IGNORECASE))
-                            is_greek_sub = bool(re.match(greek_pattern + r'_\d+$', sym_str, re.IGNORECASE))
-                            is_greek_num = bool(re.match(greek_pattern + r'\d+$', sym_str, re.IGNORECASE))
-                            
-                            if is_standard or is_subscript or is_greek_base or is_greek_sub or is_greek_num:
-                                extracted_vars.append(sym_str)
 
                     except Exception as e:
                         print(f"⚠️ Shared helper SymPy LaTeX conversion error: {str(e)}")
+
+            # --- Unified Variable Extraction Pass (Formulas & Matrices) ---
+            if sym_set:
+                # 🎯 Compiled regex pattern matching any lowercase Greek letter
+                greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
+                
+                for sym in sym_set:
+                    sym_str = str(sym)
+                    
+                    is_standard = bool(re.match(r'^[a-zA-Z]\d*$', sym_str))
+                    is_subscript = bool(re.match(r'^[a-zA-Z]_\d+$', sym_str))
+                    is_greek_base = bool(re.match(greek_pattern + r'$', sym_str, re.IGNORECASE))
+                    is_greek_sub = bool(re.match(greek_pattern + r'_\d+$', sym_str, re.IGNORECASE))
+                    is_greek_num = bool(re.match(greek_pattern + r'\d+$', sym_str, re.IGNORECASE))
+                    
+                    if is_standard or is_subscript or is_greek_base or is_greek_sub or is_greek_num:
+                        extracted_vars.append(sym_str)
 
         except Exception as eval_err:
             print(f"❌ Evaluation crash on <{sequence_token}>: {str(eval_err)}")
             evaluated_output = "⚠️ Error"
             latex_output = "⚠️ Error"
     else:
-        # 🎯 Updated fallback string parsing for invalid states
+        # Fallback parsing for invalid states
         try:
             if clean_inputs.get('formula'):
                 evaluated_output = str(validator.evaluate_output())
@@ -2072,6 +2317,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'graph':
                 evaluated_output = "[Invalid Graph Config]"
                 latex_output = "[Invalid Graph Config]"
+            elif archetype_name.lower().startswith('matrix'):
+                evaluated_output = "[Invalid Matrix Config]"
+                latex_output = "[Invalid Matrix Config]"
             else:
                 evaluated_output = "0"
                 latex_output = "0"
@@ -2079,35 +2327,21 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             evaluated_output = clean_inputs.get('formula', clean_inputs.get('nodes', '0'))
             latex_output = str(evaluated_output)
 
-    # 🎯 FIX: Post-processing string cleanup filter using specialized rules 
-    # for both plain text and SymPy's custom LaTeX output strings.
+    # Post-processing string cleanup filters for Formula assets
     if archetype_name.lower().startswith('formula'):
-        # 1. Clean Plain Text Output
         if isinstance(evaluated_output, str):
             evaluated_output = re.sub(r'\b-1\*1\b', '-1', evaluated_output)
             evaluated_output = re.sub(r'\b1\*', '', evaluated_output)
             evaluated_output = re.sub(r'\*1\b', '', evaluated_output)
 
-        # 2. Clean LaTeX Output (Handles SymPy's "1 y", "1 \cdot", and "\left(-1\right) 1")
         if isinstance(latex_output, str):
-            # Fix \left(-1\right) 1 -> \left(-1\right)
             latex_output = re.sub(r'\\left\(-1\\right\)\s+1\b', r'\\left(-1\\right)', latex_output)
-            # Fix standalone -1 \cdot 1 or similar
             latex_output = re.sub(r'\b-1\s+\\cdot\s+1\b', '-1', latex_output)
-            
-            # 🎯 ADDED FIX FOR TRAILING MULTIPLIERS (Formula 6): Clean up trailing \cdot 1
             latex_output = re.sub(r'\s+\\cdot\s+1\b', '', latex_output)
-            
-            # 🎯 ADDED FIX FOR NEGATIVE COEFFICIENT DOTS (Formula 11): Fix \left(-1\right) \cdot X -> -X
             latex_output = re.sub(r'\\left\(-1\\right\)\s+\\cdot\s+', '-', latex_output)
-            
-            # 🎯 MOVE THIS HERE: Fix Strips both the 1 AND the \cdot when it's a leading coefficient
             latex_output = re.sub(r'\b1\s+\\cdot\s*', '', latex_output)
-            
-            # Fix leading 1 before variables/functions (e.g., "1 y" -> "y")
             latex_output = re.sub(r'\b1\s+([a-zA-Z\\])', r'\1', latex_output)
 
-    # Sort the extracted vars to have consistency in how they are shown to the user
     extracted_vars.sort()
 
     return {

@@ -1,3 +1,47 @@
+import { processEntity as randIntProcessor } from './entities/randInt.js';
+// import { processEntity as randProcessor } from './entities/rand.js';
+// import { processEntity as primeFactorsProcessor } from './entities/primeFactors.js';
+// import { processEntity as formulaProcessor } from './entities/formula.js';
+// import { processEntity as matrixProcessor } from './entities/matrix.js';
+// import { processEntity as graphProcessor } from './entities/graph.js';
+
+
+
+// 1. Map tokens directly to their synchronous functions
+const ENTITY_REGISTRY = {
+    'randInt': randIntProcessor,
+    // 'rand': randProcessor,
+    // 'primeFactors': primeFactorsProcessor,
+    // 'formula': formulaProcessor,
+    // 'matrix': matrixProcessor,
+    // 'graph': graphProcessor,
+};
+
+
+/**
+ * Processes a token synchronously using the pre-loaded registry.
+ * 
+ * @param {string} token - The token string (e.g., 'randInt')
+ * @param {Object} contextData - Any data the entity file needs to do its job
+ */
+function getEntityInformation(token, contextData) {
+    // 2. Check if the token processor exists in our registry
+    const processor = ENTITY_REGISTRY[token];
+    
+    if (!processor) {
+        console.warn(`Token "${token}" is not registered or supported.`);
+        return '';
+    }
+
+    try {
+        // 3. Directly execute the synchronous function and return its string
+        return processor(contextData);
+    } catch (error) {
+        console.error(`Failed to execute entity processor for token: ${token}`, error);
+        return '';
+    }
+}
+
 // -------------------------------------------------------------
 // Global Problem Workspace Overlay Controller Engine
 // -------------------------------------------------------------
@@ -156,10 +200,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 const savedSequenceToken = segment.sequence_token; 
                 createTokenBadge(segment.token, savedSequenceToken);
-                createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
+                const latestCard =createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
             
-                const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
-                const latestCard = builtCards[builtCards.length - 1];
                 if (latestCard) {
                     if (segment.simulated_value !== undefined) {
                         latestCard.setAttribute('data-simulated-value', segment.simulated_value);
@@ -251,33 +293,10 @@ document.addEventListener('DOMContentLoaded', function() {
         let fieldsHtml = '';
         // Add new entity Step 1: if new fields exist, then add the html here for the new entity
         if (token === 'randInt') {
-            fieldsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
-                    <div class="linked-input-wrapper" data-input-key="min" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: 
-                            <input type="number" class="val-input-min" value="${safeNumValue(savedValues.min, -9)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        </label>
-                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-                    
-                    <div class="linked-input-wrapper" data-input-key="max" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: 
-                            <input type="number" class="val-input-max" value="${safeNumValue(savedValues.max, 9)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        </label>
-                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-
-                    <div class="linked-input-wrapper" data-input-key="step" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: 
-                            <input type="number" class="val-input-step" value="${safeNumValue(savedValues.step, 1)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        </label>
-                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-                </div>
-            `;
+            fieldsHtml = getEntityInformation(token, {
+                "action": "fieldsHtml",
+                "savedValues": savedValues 
+            });
         } else if (token === 'rand') {
             fieldsHtml = `
                 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
@@ -451,6 +470,129 @@ document.addEventListener('DOMContentLoaded', function() {
                     </div>
                 </div>
             `;
+        } else if (token === 'matrix') {
+            const rowCount = parseInt(savedValues.rows) || 3;
+            const colCount = parseInt(savedValues.columns) || 3;
+            const currentCalcMode = savedValues.calculate || 'leave as matrix';
+            
+            const linkedMatrixToken = savedValues.linked_matrix || '';
+            const isLinked = !!linkedMatrixToken;
+            const linkedMatrixBToken = savedValues['matrix B'] || '';
+
+            let rawGrid = savedValues.matrix_data;
+            if (!Array.isArray(rawGrid)) {
+                rawGrid = Array.from({ length: rowCount }, (_, r) => 
+                    Array.from({ length: colCount }, (_, c) => (r === c ? "1" : "0"))
+                );
+            }
+
+            fieldsHtml = `
+                <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box;">
+                    
+                    <!-- Matrix Source Override Selector -->
+                    <div class="linked-input-wrapper" data-input-key="linked_matrix" data-input-type="matrix" style="position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; box-sizing: border-box; background: #f1f5f9; padding: 6px 8px; border-radius: 4px; border: 1px dashed #cbd5e1;">
+                        <div style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1;">
+                            <span style="font-size: 0.75rem; font-weight: 600; color: #334155;">Link Source Matrix Override</span>
+                            <span class="link-status-text" style="font-size: 0.75rem; color: ${isLinked ? '#0284c7' : '#64748b'}; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                ${isLinked ? `Linked to: ${linkedMatrixToken}` : 'Local Grid Active (Unlinked)'}
+                            </span>
+                        </div>
+                        <input type="hidden" class="val-matrix-linked" value="${linkedMatrixToken}">
+                        <div style="position: relative; display: flex; align-items: center; flex-shrink: 0;">
+                            <!-- 🎯 FIX: Added dynamic class, color, and icon mutations based on link state -->
+                            <button type="button" class="btn-input-link-trigger ${isLinked ? 'is-linked' : ''}" title="Link matrix token" style="background: #ffffff; border: 1px solid ${isLinked ? '#fca5a5' : '#cbd5e1'}; border-radius: 4px; color: ${isLinked ? '#ef4444' : '#94a3b8'}; cursor: pointer; font-size: 0.75rem; height: 28px; width: 28px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
+                                <i class="fas ${isLinked ? 'fa-times' : 'fa-link'}"></i>
+                            </button>
+                            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: auto; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 150px; padding: 4px 0; margin-top: 4px; box-sizing: border-box;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Structured Variable Substitutions (Always Visible) -->
+                    <div class="row-variable-substitutions" style="display: flex; flex-direction: column; gap: 6px; width: 100%; border-bottom: 1px dashed #cbd5e1; padding-bottom: 8px; box-sizing: border-box;">
+                        <span style="font-size: 0.72rem; font-weight: 600; color: #475569;">Matrix Variable Substitutions:</span>
+                        <div class="substitutions-list-container" style="display: flex; flex-direction: column; gap: 6px;">
+                            <!-- Dynamic evaluation input rows go here -->
+                        </div>
+                        <div class="substitution-picker-wrapper" style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
+                            <span style="font-size: 0.75rem; color: #64748b;">Assign value to:</span>
+                            <select class="picker-unused-variables" style="flex-grow: 1; font-size: 0.75rem; padding: 3px; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569; background: white;">
+                                <!-- Populate dynamically using your variables extraction loop -->
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Local Grid Configuration Layout Block (Hidden when linked) -->
+                    <div class="matrix-local-grid-config-group" style="display: ${isLinked ? 'none' : 'flex'}; flex-direction: column; gap: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; box-sizing: border-box; width: 100%;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; box-sizing: border-box;">
+                            <div class="linked-input-wrapper" data-input-key="rows" data-input-type="integer" style="box-sizing: border-box;">
+                                <label style="font-size: 0.75rem; color: #475569; display: block; width: 100%;">Grid Rows:
+                                    <input type="number" min="1" max="10" class="val-matrix-rows" value="${rowCount}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                                </label>
+                            </div>
+                            <div class="linked-input-wrapper" data-input-key="columns" data-input-type="integer" style="box-sizing: border-box;">
+                                <label style="font-size: 0.75rem; color: #475569; display: block; width: 100%;">Grid Columns:
+                                    <input type="number" min="1" max="10" class="val-matrix-columns" value="${colCount}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="linked-input-wrapper" data-input-key="matrix_data" data-input-type="grid" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
+                            <span style="font-size: 0.75rem; font-weight: 500; color: #475569;">Matrix Indices Values:</span>
+                            <div class="matrix-grid-cells-container" style="display: grid; grid-template-columns: repeat(${colCount}, 1fr); gap: 4px; width: 100%; max-height: 180px; overflow-y: auto; padding: 2px; box-sizing: border-box;">
+                                ${Array.from({ length: rowCount }).map((_, r) => 
+                                    Array.from({ length: colCount }).map((_, c) => {
+                                        const val = (rawGrid[r] && rawGrid[r][c] !== undefined) ? rawGrid[r][c] : '0';
+                                        return `<input type="text" class="val-matrix-cell" data-row="${r}" data-col="${c}" value="${val}" style="width:100%; box-sizing:border-box; text-align:center; font-size:0.77rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px; font-family:monospace;">`;
+                                    }).join('')
+                                ).join('')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Operation Configuration Block -->
+                    <div style="display: grid; grid-template-columns: 1fr; gap: 8px; border-top: 1px dashed #cbd5e1; padding-top: 8px; box-sizing: border-box; width: 100%;">
+                        <div class="linked-input-wrapper" data-input-key="calculate" data-input-type="text" style="display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; width: 100%;">
+                            <label style="font-size: 0.75rem; color: #475569; font-weight: 500;">Transformation Operation:</label>
+                            <select class="val-matrix-calculate" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                                <option value="leave as matrix" ${currentCalcMode === 'leave as matrix' ? 'selected' : ''}>leave as matrix</option>
+                                <option value="multiply" ${currentCalcMode === 'multiply' ? 'selected' : ''}>multiply (AxB)</option>
+                                <option value="add" ${currentCalcMode === 'add' ? 'selected' : ''}>add</option>
+                                <option value="subtract" ${currentCalcMode === 'subtract' ? 'selected' : ''}>subtract</option>
+                                <option value="inversion" ${currentCalcMode === 'inversion' ? 'selected' : ''}>inversion (A^-1)</option>
+                                <option value="transpose" ${currentCalcMode === 'transpose' ? 'selected' : ''}>transpose</option>
+                                <option value="scalar" ${currentCalcMode === 'scalar' ? 'selected' : ''}>scalar (A*c)</option>
+                                <option value="determinate" ${currentCalcMode === 'determinate' ? 'selected' : ''}>determinate</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Secondary Matrix Target Selection Box -->
+                    <div class="row-matrix-b-dependency linked-input-wrapper" data-input-key="matrix B" data-input-type="matrix" style="display: ${['multiply', 'add', 'subtract'].includes(currentCalcMode) ? 'flex' : 'none'}; position: relative; align-items: center; justify-content: space-between; gap: 8px; width: 100%; box-sizing: border-box; background: #f8fafc; padding: 6px 8px; border-radius: 4px; border: 1px solid #e2e8f0;">
+                        <div style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1;">
+                            <span style="font-size: 0.75rem; font-weight: 600; color: #475569;">Secondary Matrix B Target</span>
+                            <span class="matrix-b-status-text" style="font-size: 0.75rem; color: ${linkedMatrixBToken ? '#16a34a' : '#ef4444'}; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                ${linkedMatrixBToken ? `Linked to: ${linkedMatrixBToken}` : 'Required: Select a matrix (e.g. matrix2)'}
+                            </span>
+                        </div>
+                        <input type="hidden" class="val-matrix-b-target" value="${linkedMatrixBToken}">
+                        <div style="position: relative; display: flex; align-items: center; flex-shrink: 0;">
+                            <!-- 🎯 FIXED: Replaced 'isLinked' with '!!linkedMatrixBToken' to correctly trigger class mutations and change the icon layout to fa-times -->
+                            <button type="button" class="btn-input-link-trigger ${linkedMatrixBToken ? 'is-linked' : ''}" title="Link matrix token" style="background: #ffffff; border: 1px solid ${linkedMatrixBToken ? '#fca5a5' : '#cbd5e1'}; border-radius: 4px; color: ${linkedMatrixBToken ? '#ef4444' : '#94a3b8'}; cursor: pointer; font-size: 0.75rem; height: 28px; width: 28px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
+                                <i class="fas ${linkedMatrixBToken ? 'fa-times' : 'fa-link'}"></i>
+                            </button>
+                            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: auto; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 150px; padding: 4px 0; margin-top: 4px; box-sizing: border-box;"></div>
+                        </div>
+                    </div>
+
+                    <!-- Scalar Multiplier Input Field -->
+                    <div class="row-matrix-scalar-dependency linked-input-wrapper" data-input-key="scalar" data-input-type="double" style="display: ${currentCalcMode === 'scalar' ? 'flex' : 'none'}; position: relative; align-items: flex-end; gap: 4px; width: 100%; box-sizing: border-box;">
+                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1; display: block; width: 100%;">Scalar Factor Multiplier (c): 
+                            <input type="number" step="any" class="val-matrix-scalar-factor" value="${savedValues.scalar !== undefined ? savedValues.scalar : 1.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                        </label>
+                    </div>
+
+                </div>
+            `;
         } else {
             fieldsHtml = `<p style="font-size:0.8rem; color:#64748b; margin:0;">Standard attributes container template wrapper.</p>`;
         }
@@ -566,6 +708,79 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
 
+        // --- MATRIX ENGINE BINDING LOGIC: Handle runtime layout & visibility shifts ---
+        if (token === 'matrix') {
+            const rowsInput = card.querySelector('.val-matrix-rows');
+            const colsInput = card.querySelector('.val-matrix-columns');
+            const cellsContainer = card.querySelector('.matrix-grid-cells-container');
+            const linkedMatrixInput = card.querySelector('.val-matrix-linked');
+            const localGridGroup = card.querySelector('.matrix-local-grid-config-group');
+            const calcSelect = card.querySelector('.val-matrix-calculate');
+            
+            const matrixBRow = card.querySelector('.row-matrix-b-dependency');
+            const scalarRow = card.querySelector('.row-matrix-scalar-dependency');
+
+            // 1. Live Structural Layout Modifiers (Row / Column adjustment engine)
+            const reconstructGrid = () => {
+                if (!rowsInput || !colsInput || !cellsContainer) return;
+                
+                const rCount = Math.max(1, Math.min(10, parseInt(rowsInput.value) || 3));
+                const cCount = Math.max(1, Math.min(10, parseInt(colsInput.value) || 3));
+                
+                // Cache any currently typed out user values to preserve state during grid rebuild
+                const valueCache = {};
+                card.querySelectorAll('.val-matrix-cell').forEach(cell => {
+                    const r = cell.getAttribute('data-row');
+                    const c = cell.getAttribute('data-col');
+                    valueCache[`${r}_${c}`] = cell.value;
+                });
+
+                // Apply updated layout grid configurations
+                cellsContainer.style.gridTemplateColumns = `repeat(${cCount}, 1fr)`;
+                
+                let newCellsHtml = '';
+                for (let r = 0; r < rCount; r++) {
+                    for (let c = 0; c < cCount; c++) {
+                        // Recover existing value, fallback to standard identity calculation matrix value
+                        const cachedVal = valueCache[`${r}_${c}`];
+                        const defaultVal = cachedVal !== undefined ? cachedVal : (r === c ? "1" : "0");
+                        
+                        newCellsHtml += `
+                            <input type="text" class="val-matrix-cell" data-row="${r}" data-col="${c}" value="${defaultVal}" placeholder="0" title="Row ${r + 1}, Col ${c + 1}" style="width:100%; box-sizing:border-box; text-align:center; font-size:0.77rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px; font-family:monospace;">
+                        `;
+                    }
+                }
+                cellsContainer.innerHTML = newCellsHtml;
+                
+                // 🎯 FIX: Let the DOM events bubble naturally to the sync architecture instead of manually invoking an un-debounced sync step here!
+            };
+
+            // 🎯 FIX: Listen to 'input' so changes process instantly via your debouncer container shell frame
+            if (rowsInput) rowsInput.addEventListener('input', reconstructGrid);
+            if (colsInput) colsInput.addEventListener('input', reconstructGrid);
+
+            // 2. Conditional Form Visibility Evaluation Engine
+            card.addEventListener('input', function(e) {
+                // If a source matrix is linked, hide the local grid configuration context completely
+                if (e.target === linkedMatrixInput) {
+                    const hasLink = !!linkedMatrixInput.value.trim();
+                    localGridGroup.style.display = hasLink ? 'none' : 'flex';
+                }
+
+                // Contextually toggle dependency input groups based on the calculation transformation picked
+                if (e.target === calcSelect) {
+                    const mode = calcSelect.value;
+                    
+                    if (matrixBRow) {
+                        matrixBRow.style.display = ['multiply', 'add', 'subtract'].includes(mode) ? 'flex' : 'none';
+                    }
+                    if (scalarRow) {
+                        scalarRow.style.display = (mode === 'scalar') ? 'flex' : 'none';
+                    }
+                }
+            });
+        }
+
         const refreshIconBtn = card.querySelector('.btn-refresh-workspace-component-value');
         if (refreshIconBtn) {
             refreshIconBtn.onmouseenter = () => refreshIconBtn.style.color = '#0284c7';
@@ -641,79 +856,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         updateWorkspaceSimulationPreview();
         console.groupEnd();
-    }
 
-    // Streamlined lookup: reads local fields directly with recursive link token traversal
-    function getLiveComponentValue(card, inputKey, defaultFallback) {
-        console.group(`%c🔍 [Live Component Lookup] Key: "${inputKey}"`, "color: #94a3b8; font-style: italic;");
-        if (!card) {
-            console.warn(`⚠️ getLiveComponentValue aborting: 'card' DOM reference parameter is null. Returning fallback: "${defaultFallback}"`);
-            console.groupEnd();
-            return defaultFallback;
-        }
-        
-        let rawValue = '';
-        let linkedTokenName = null;
-
-        // Check if wrapped in a structured input wrapper
-        const wrapper = card.querySelector(`.linked-input-wrapper[data-input-key="${inputKey}"]`);
-        if (wrapper) {
-            // 🎯 STEP 1: Safely read the bound token and strip any brackets immediately
-            const rawBoundToken = wrapper.getAttribute('data-bound-token');
-            if (rawBoundToken) {
-                linkedTokenName = rawBoundToken.replace(/[<>]/g, '').trim();
-            }
-            
-            const nativeInput = wrapper.querySelector('input, select');
-            rawValue = (nativeInput && nativeInput.value !== '') ? nativeInput.value.trim() : '';
-            // console.log(`📍 Found structured input wrapper. Raw value: "${rawValue}", Target Clean Token: "${linkedTokenName}"`);
-        } else {
-            // Legacy fallback class check
-            const legacyInput = card.querySelector(`.val-input-${inputKey}`);
-            rawValue = legacyInput ? legacyInput.value.trim() : '';
-            // console.log(`📍 Falling back to standard class matching lookup. Raw value: "${rawValue}"`);
-        }
-
-        // 🎯 STEP 2: Parse raw input content string macro tag if data-bound-token wasn't set on the wrapper
-        if (!linkedTokenName && rawValue !== '') {
-            const dynamicTokenRegex = /^<([a-zA-Z0-9_]+)>$/;
-            const match = String(rawValue).match(dynamicTokenRegex);
-            if (match) {
-                linkedTokenName = match[1].trim();
-            }
-        }
-
-        // 🎯 STEP 3: If an upstream link token relationship is established, resolve it recursively
-        if (linkedTokenName) {
-            // console.log(`🔗 [Link Intercept] Resolving active layout link dependency row targeting token: "${linkedTokenName}"`);
-            
-            // Locate the active interactive workspace card row using case-sensitive matching logic
-            const upstreamCard = Array.from(document.querySelectorAll('.workspace-component-card')).find(c => {
-                const delBtn = c.querySelector('.btn-delete-workspace-component');
-                // Target 'data-indexed-token' on delete button or 'data-token' if used as custom backup signature
-                const tokenSignature = delBtn ? delBtn.getAttribute('data-indexed-token') : null;
-                return tokenSignature === linkedTokenName;
-            });
-
-            if (upstreamCard) {
-                // console.log(`%c✔ Upstream card found for "${linkedTokenName}". Cascading recursive calculation...`, "color: #38bdf8; font-weight: bold;");
-                
-                // Recursively compute live numbers up the variable dependency chain
-                const computedUpstreamValue = evaluateSingleCardOutput(upstreamCard, linkedTokenName);
-                
-                // console.log(`🏁 Recursive resolution complete. Token "${linkedTokenName}" mapped to value: "${computedUpstreamValue}"`);
-                console.groupEnd();
-                return computedUpstreamValue || defaultFallback;
-            } else {
-                console.warn(`⚠️ Upstream card reference for link token "${linkedTokenName}" is not available in the DOM tree yet.`);
-            }
-        }
-
-        // Step 4: Fall back to native primitive input values if no active link dependencies exist
-        const finalReturnedValue = rawValue !== '' ? rawValue : defaultFallback;
-        // console.log(`📍 Primitive value evaluated successfully: "${finalReturnedValue}"`);
-        console.groupEnd();
-        return finalReturnedValue;
+        return card;
     }
 
     // -------------------------------------------------------------------------
@@ -1116,7 +1260,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
-        function createSubstitutionRow(varName, initialValue = "") {
+        function createSubstitutionRow(varName, initialValue = "", silent = false) {
             if (substitutionsContainer.querySelector(`[data-var-name="${varName}"]`)) {
                 return;
             }
@@ -1147,7 +1291,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
             substitutionsContainer.appendChild(row);
             refreshUnusedVariablesPicker();
-            card.dispatchEvent(new Event('change', { bubbles: true }));
+            // Only dispatch if we aren't performing a silent hydration pass
+            if (!silent) {
+                card.dispatchEvent(new Event('change', { bubbles: true }));
+            }
         }
 
         if (unusedVariablesPicker) {
@@ -1182,9 +1329,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
             Object.entries(savedValues).forEach(([key, vVal]) => {
                 if (key.startsWith('sub_')) {
-                    createSubstitutionRow(key.replace('sub_', ''), vVal);
+                    createSubstitutionRow(key.replace('sub_', ''), vVal, true);
                 }
             });
+            // 🎯 OMNIBUS UPDATE: Fire exactly ONE update event now that the card is fully built
+            card.dispatchEvent(new Event('change', { bubbles: true }));
         } else {
             // Only do a raw dynamic DOM extraction if there are no saved values (brand new card)
             updateVariablesIndexAndSyncUI();
@@ -1349,7 +1498,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const isFormulaCondition = baseArchetypeToken === 'formula';
                 
                 // If it looks like a known archetype, treat it as a variable processing path
-                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors', 'graph'].includes(baseArchetypeToken);
+                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors', 'graph', 'matrix'].includes(baseArchetypeToken);
 
                 if (isVar) {
                     let displayVal = formulaLiveLatexCache[cleanToken];
@@ -1502,7 +1651,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // 2. UNIVERSAL FIELD EXTRACTOR: Look through wrapper elements for user selections or linked macro pills
             card.querySelectorAll('.linked-input-wrapper').forEach(wrapper => {
                 const key = wrapper.getAttribute('data-input-key');
-                if (!key || key.startsWith('sub_')) return;
+                if (!key || (key.startsWith('sub_') && baseArchetypeToken !== 'matrix')) return;
 
                 // Priority A: Check if an active macro token is linked to this input
                 const boundToken = wrapper.getAttribute('data-bound-token');
@@ -1668,6 +1817,91 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Ensure the base formulas key mirrors the unified structural layout array
                 inputsCollected["formulas"] = activeFormulas;
                 console.log("Final compiled fields payload object structure:", JSON.parse(JSON.stringify(inputsCollected)));
+                console.groupEnd();
+            }
+            // 🎯 ARCHETYPE SPECIFIC OVERRIDES: Apply specialized 2D array parsing for matrix types
+            else if (baseArchetypeToken === 'matrix') {
+                console.group(`%c💾 [Serializer] Packaging Matrix Payload for [${token}]`, "background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px;");
+                
+                const rowsInput = card.querySelector('.val-matrix-rows');
+                const colsInput = card.querySelector('.val-matrix-columns');
+                
+                const rowCount = parseInt(rowsInput?.value) || 3;
+                const colCount = parseInt(colsInput?.value) || 3;
+
+                // Build a 2D grid matching your active layout dimensions
+                const structureGrid = Array.from({ length: rowCount }, () => 
+                    Array.from({ length: colCount }, () => "0")
+                );
+
+                // Collect values straight out of our interactive matrix cells
+                card.querySelectorAll('.val-matrix-cell').forEach(cell => {
+                    const r = parseInt(cell.getAttribute('data-row'));
+                    const c = parseInt(cell.getAttribute('data-col'));
+                    
+                    if (r < rowCount && c < colCount) {
+                        structureGrid[r][c] = cell.value.trim() || "0";
+                    }
+                });
+
+                // Explicitly bind the array object structures back to your parameters schema
+                inputsCollected["rows"] = rowCount;
+                inputsCollected["columns"] = colCount;
+                inputsCollected["matrix_data"] = structureGrid;
+
+                // Sanitize calculation inputs and dependency options to keep properties consistent
+                inputsCollected["calculate"] = card.querySelector('.val-matrix-calculate')?.value || "leave as matrix";
+                inputsCollected["matrix B"] = card.querySelector('.val-matrix-b-target')?.value || "";
+                inputsCollected["scalar"] = card.querySelector('.val-matrix-scalar-factor')?.value || "1.0";
+
+                // 🎯 ADDED: Dynamic Matrix Variable Substitution Collector
+                const substitutions = {};
+                const subsContainer = card.querySelector('.substitutions-list-container');
+                
+                if (subsContainer) {
+                    subsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
+                        const vName = row.getAttribute('data-var-name');
+                        if (!vName) return;
+
+                        const boundToken = row.getAttribute('data-bound-token');
+                        const nativeInput = row.querySelector('.val-substitution-input');
+                        let rawValue = "";
+
+                        if (boundToken) {
+                            // Read from bound entity token linkage
+                            rawValue = boundToken;
+                        } else if (nativeInput) {
+                            // Fallback to custom typed string expression value
+                            rawValue = nativeInput.value;
+                        }
+
+                        if (rawValue && rawValue.trim() !== "") {
+                            let cleanString = rawValue.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                            
+                            // Keep token formatting uniform, or leave raw if it's text expressions/numbers
+                            const looksLikeToken = /^[a-zA-Z]+\d+$/.test(cleanString.replace(/[<>]/g, ''));
+                            if (boundToken || looksLikeToken) {
+                                cleanString = cleanString.replace(/[<>]/g, '');
+                                substitutions[vName] = `<${cleanString}>`;
+                            } else {
+                                substitutions[vName] = cleanString;
+                            }
+                        } else {
+                            substitutions[vName] = "";
+                        }
+                    });
+                }
+                
+                // Stringify dictionary structure for unified variable pipeline transport
+                inputsCollected["variables"] = Object.keys(substitutions).length > 0 ? JSON.stringify(substitutions) : "";
+                
+                // 🎯 OPTION A FIX: Explicitly drop the legacy flat entries array parameter if captured by fallback scraper loops
+                if ("entries" in inputsCollected) {
+                    delete inputsCollected["entries"];
+                }
+
+                console.log("Compiled 2D grid matrix configuration:", structureGrid);
+                console.log("Compiled Matrix Variables payload dictionary:", inputsCollected["variables"]);
                 console.groupEnd();
             }
 
@@ -1936,7 +2170,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let targetDisplay = card.querySelector('.latex-render-box');
                 console.log(`Determined operational asset token archetype model: '${baseArchetype}'`);
 
-                if (baseArchetype === 'primeFactors' || baseArchetype === 'formula' || baseArchetype === 'graph') {
+                if (baseArchetype === 'primeFactors' || baseArchetype === 'formula' || baseArchetype === 'graph' || baseArchetype === 'matrix') {
                     if (!targetDisplay) {
                         const fieldsWrapper = card.querySelector('.component-fields-wrapper');
                         if (fieldsWrapper) {
@@ -2031,6 +2265,37 @@ document.addEventListener('DOMContentLoaded', function() {
                             targetDisplay.style.textAlign = 'center';
                             targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ System error compiling graph visualization structure.</span>`;
                         }
+                    }
+                } else if (baseArchetype === 'matrix') {
+                    // 🎯 RENDER MATRIX MATH LAYOUT OUTPUT
+                    if (targetDisplay) {
+                        console.group(`%c🔄 [Batch Sync] Redrawing Matrix Component Card (${token})`, "background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px;");
+                        
+                        let rawOutput = result.evaluated_output;
+                        
+                        // Handle server-side constraint errors explicitly inside the component frame
+                        if (typeof rawOutput === 'string' && rawOutput.startsWith('[Invalid')) {
+                            targetDisplay.style.textAlign = 'center';
+                            targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ ${rawOutput.replace(/[\[\]]/g, '')}</span>`;
+                            console.groupEnd();
+                            return;
+                        }
+
+                        // Route to LaTeX visualization if a valid LaTeX structure is supplied from backend math steps
+                        if (result.latex_output && typeof katex !== 'undefined') {
+                            targetDisplay.style.textAlign = 'center';
+                            targetDisplay.textContent = ''; // Clear prior elements
+                            katex.render(result.latex_output, targetDisplay, { throwOnError: false });
+                        } 
+                        // Fallback fallback: display standard text/JSON matrix arrays cleanly if KaTeX isn't needed
+                        else {
+                            targetDisplay.style.textAlign = 'center';
+                            targetDisplay.style.fontFamily = 'monospace';
+                            targetDisplay.style.fontSize = '0.85rem';
+                            targetDisplay.textContent = rawOutput;
+                        }
+                        
+                        console.groupEnd();
                     }
                 } else {
                     if (targetDisplay) {
@@ -2495,8 +2760,47 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         }
                     });
-                } else {
-                    // Standard extraction routing for all other non-graph components
+                } 
+                // 🎯 NEW BLOCK FOR MATRIX COMPONENT GRID PROCESSING
+                else if (baseToken === 'matrix') {
+                    const activeEntries = [];
+                    const matrixWrappers = card.querySelectorAll('.matrix-entries-container .linked-input-wrapper');
+                    
+                    matrixWrappers.forEach((wrapper, index) => {
+                        let finalCellVal = "";
+                        const boundToken = wrapper.getAttribute('data-bound-token');
+                        const entryInput = wrapper.querySelector('.val-matrix-entry-input');
+
+                        if (boundToken) {
+                            let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                            if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
+                            if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
+                            finalCellVal = cleanToken;
+                        } else if (entryInput) {
+                            finalCellVal = entryInput.value.trim();
+                        }
+
+                        inputValues[`entry_${index}`] = finalCellVal;
+                        activeEntries.push(finalCellVal);
+                    });
+
+                    // Pass the master layout array back up to the python schema verification layers
+                    inputValues["entries"] = activeEntries;
+
+                    // Pull general configuration inputs (such as dimensions or targeted operations)
+                    const matrixConfigWrappers = card.querySelectorAll('.linked-input-wrapper:not(.matrix-entries-container .linked-input-wrapper)');
+                    matrixConfigWrappers.forEach(wrapper => {
+                        const inputKey = wrapper.getAttribute('data-input-key');
+                        if (!inputKey) return;
+                        
+                        const interactiveField = wrapper.querySelector('input, select');
+                        if (interactiveField) {
+                            inputValues[inputKey] = interactiveField.value.trim();
+                        }
+                    });
+                } 
+                else {
+                    // Standard extraction routing for all other non-graph, non-matrix components
                     const inputWrappers = card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper)');
                     inputWrappers.forEach(wrapper => {
                         const inputKey = wrapper.getAttribute('data-input-key');
@@ -2631,11 +2935,118 @@ document.addEventListener('DOMContentLoaded', function() {
         if (linkBtn.classList.contains('is-linked')) {
             wrapper.removeAttribute('data-bound-token');
             
+            const inputKey = wrapper.getAttribute('data-input-key') || ''; // <-- Keep track of this key
+
+            // 🌟 MATRIX FIX: If unlinking the main matrix override, reveal local grids again
+            if (inputKey === 'linked_matrix') {
+                const statusLabel = wrapper.querySelector('.link-status-text');
+                if (statusLabel) {
+                    statusLabel.textContent = 'Local Grid Active (Unlinked)';
+                    statusLabel.style.color = '#64748b';
+                }
+                const activeCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
+                if (activeCard) {
+                    const localGridGroup = activeCard.querySelector('.matrix-local-grid-config-group');
+                    if (localGridGroup) localGridGroup.style.display = 'flex'; // Unhide!
+                }
+                
+                const rawInput = wrapper.querySelector('input, select');
+                if (rawInput) rawInput.value = '';
+
+                linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+                linkBtn.className = 'btn-input-link-trigger';
+                linkBtn.style.color = '#94a3b8';
+                linkBtn.style.borderColor = '#cbd5e1';
+
+                if (rawInput) {
+                    rawInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                
+                if (activeCard) {
+                    const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                    if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                        dispatchWorkspaceBatchSync(cardId);
+                    } else {
+                        updateWorkspaceSimulationPreview();
+                    }
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+                return; // 🚀 EXIT EARLY
+            }
+
+            // 🎯 🌟 MATRIX FIX: Reset matrix B status text and clear out hidden inputs cleanly
+            if (inputKey === 'matrix B') {
+                const bStatusLabel = wrapper.querySelector('.matrix-b-status-text');
+                if (bStatusLabel) {
+                    bStatusLabel.textContent = 'Required: Select a matrix (e.g. matrix2)';
+                    bStatusLabel.style.color = '#ef4444';
+                }
+                
+                // Clear the hidden payload backup field value
+                const rawInput = wrapper.querySelector('input.val-matrix-b-target, input, select');
+                if (rawInput) rawInput.value = '';
+
+                linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+                linkBtn.className = 'btn-input-link-trigger';
+                linkBtn.style.color = '#94a3b8';
+                linkBtn.style.borderColor = '#cbd5e1';
+
+                if (rawInput) {
+                    rawInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+                
+                const activeCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
+                if (activeCard) {
+                    const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                    if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                        dispatchWorkspaceBatchSync(cardId);
+                    } else {
+                        updateWorkspaceSimulationPreview();
+                    }
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+                return; // 🚀 EXIT EARLY
+            }
+            // 🎯 🌟 ADDED OVERRIDE: Handle unlinking variable substitution rows smoothly
+            if (inputKey && inputKey.startsWith('sub_')) {
+                wrapper.removeAttribute('data-bound-token');
+
+                // Purge any green pill indicator visual layout node tags out of view
+                const pill = wrapper.querySelector('.linked-token-pill');
+                if (pill) pill.remove();
+
+                // Re-reveal the editable input box layout surface cleanly
+                const rawInput = wrapper.querySelector('.val-substitution-input');
+                if (rawInput) {
+                    rawInput.value = '';
+                    rawInput.style.display = '';
+                }
+
+                // Restore the link button look back to standard default slate styling
+                linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+                linkBtn.className = 'btn-input-link-trigger';
+                linkBtn.style.color = '#94a3b8';
+                linkBtn.style.borderColor = '#cbd5e1';
+
+                const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+                if (activeCard) {
+                    const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                    if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                        dispatchWorkspaceBatchSync(cardId);
+                    } else {
+                        updateWorkspaceSimulationPreview();
+                    }
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+                return; // 🚀 EXIT EARLY
+            }
+
             // Safely find the input or label to restore viewports accurately without breaking sub_ layouts
             const labelEl = wrapper.querySelector('label');
             if (labelEl) {
-                const inputKey = wrapper.getAttribute('data-input-key') || '';
-                // Dynamic sub_ rows use block, standard inputs use default blank flex layouts
                 labelEl.style.display = inputKey.startsWith('sub_') ? 'block' : '';
             }
             
@@ -2658,14 +3069,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // 🚀 FIX: Pull the parent workspace component block token ID
-            const activeCard = linkBtn.closest('.workspace-block-card');
+            const activeCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
             if (activeCard) {
                 const cardId = activeCard.querySelector('.btn-delete-workspace-component')
                                          ?.getAttribute('data-indexed-token');
                 
                 if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
-                    // console.log(`🧼 Token unlink action cleared on [${cardId}]. Packaging updated graph topology...`);
-                    // Call the background synchronization system for this structural node change
                     dispatchWorkspaceBatchSync(cardId);
                 } else {
                     updateWorkspaceSimulationPreview();
@@ -2687,25 +3096,17 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 🔍 RE-INDEX COMPATIBILITY BY INSPECTING LIVE ACTIVE DOM SIDEBAR CARDS
         const targetTypeAttr = wrapper.getAttribute('data-input-type') || ''; // e.g., 'double' or 'integer'
-        const currentCard = linkBtn.closest('.workspace-block-card');
-        const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
+        const currentCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
+        const activeCards = Array.from(document.querySelectorAll('.workspace-block-card, .workspace-component-card'));
         
-        // console.log(`\n--- 🏁 Linker Diagnostics Started ---`);
-        // console.log(`Target Input Key: "${wrapper.getAttribute('data-input-key')}"`);
-        // console.log(`Target Raw Type Attribute: "${targetTypeAttr}"`);
-
-        // 🎯 1. Normalize the field's accepted types into an array.
         let acceptedTargetTypes = [targetTypeAttr];
         if (targetTypeAttr === 'double') {
             acceptedTargetTypes.push('integer');
         }
-        // console.log(`Normalized Accepted Types Array:`, acceptedTargetTypes);
-        // console.log(`Global Database Registry (dynamicVarsTokens):`, dynamicVarsTokens);
 
         let availableOptionsHtml = '';
         
         activeCards.forEach(card => {
-            // Prevent linking a card back into itself
             if (card === currentCard) return;
 
             const deleteBtn = card.querySelector('.btn-delete-workspace-component');
@@ -2714,34 +3115,20 @@ document.addEventListener('DOMContentLoaded', function() {
             const indexedToken = deleteBtn.getAttribute('data-indexed-token'); // e.g., "randInt2"
             const baseArchetype = card.getAttribute('data-token');             // e.g., "rand"
 
-            // console.log(`\nEvaluating Sidebar Option Card -> [${indexedToken}] (Archetype: "${baseArchetype}")`);
-
-            // 🎯 2. LOOK UP DATA DIRECTLY FROM YOUR ENTITY_TYPE DATABASE LEDGER
             const tokenDefinition = dynamicVarsTokens.find(t => t.token === baseArchetype);
-            
-            if (!tokenDefinition) {
-                console.error(`❌ DATABASE MISMATCH: No token schema configuration row found matching archetype: "${baseArchetype}" in dynamicVarsTokens ledger.`);
-                return;
-            }
-            
-            // console.log(`Found Registry Schema Definition for "${baseArchetype}":`, tokenDefinition);
+            if (!tokenDefinition) return;
 
-            // 🎯 PARSE FORMAT PATTERN BLUUPRINT FROM THE SEED MODEL DYNAMICALLY
             let blueprintData = {};
             if (tokenDefinition.format_pattern) {
                 try {
                     blueprintData = typeof tokenDefinition.format_pattern === 'string'
                         ? JSON.parse(tokenDefinition.format_pattern)
                         : tokenDefinition.format_pattern;
-                } catch (e) {
-                    console.warn(`⚠️ Failed to parse format_pattern for ${baseArchetype}:`, e);
-                }
+                } catch (e) {}
             }
 
-            // Extract the output property from the parsed blueprint, or use tokenDefinition properties
             let rawOutput = blueprintData.output || tokenDefinition.output;
 
-            // Strict fallback default values if the property is missing everywhere
             if (!rawOutput) {
                 if (baseArchetype === 'randInt') rawOutput = ['integer'];
                 else if (baseArchetype === 'rand') rawOutput = ['double'];
@@ -2750,25 +3137,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 else if (baseArchetype === 'graph') rawOutput = ['content'];
             }
 
-            // Normalize the output property into an array context seamlessly
             const derivedOutputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
-            
-            // console.log(`Normalized Token Source Outputs:`, derivedOutputs);
-
-            // Check if the input key is a template substitution row
             const inputKey = wrapper.getAttribute('data-input-key') || '';
-            
-            // 🎯 3. Determine compatibility dynamically via array intersection (.some)
             let isCompatible = derivedOutputs.some(type => acceptedTargetTypes.includes(type));
             
-            // FORCE COMPATIBILITY OVERRIDE: permit substitution inputs to couple with double, integer, or formula tokens
             if (inputKey.startsWith('sub_')) {
-                const isSubCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
-                isCompatible = isSubCompatible;
+                isCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
             }
 
-            // 🎯 GRAPH FORMULA OVERRIDE: Allow 'text' inputs belonging to formula row expressions 
-            // to link up cleanly with standalone formula tokens!
             if (targetTypeAttr === 'text' && (inputKey.startsWith('formula_') || currentCard.getAttribute('data-token') === 'graph')) {
                 if (derivedOutputs.includes('formula') || derivedOutputs.includes('double') || derivedOutputs.includes('integer')) {
                     isCompatible = true;
@@ -2776,18 +3152,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             if (isCompatible) {
-                // console.log(`✅ MATCH SUCCESS: Adding <${indexedToken}> into dropdown list.`);
                 availableOptionsHtml += `
                     <button type="button" class="select-link-token-option" data-target-token="&lt;${indexedToken}&gt;" style="width: 100%; text-align: left; padding: 6px 12px; background: none; border: none; font-size: 0.75rem; cursor: pointer; transition: background 0.15s; color: #334155;">
                         &lt;${indexedToken}&gt;
                     </button>
                 `;
-            } else {
-                // console.log(`🚫 MATCH FAILED: <${indexedToken}> is incompatible with fields requiring ${targetTypeAttr}.`);
             }
         });
-
-        // console.log(`\n--- 🏁 Linker Diagnostics Complete. Total generated choices: ${availableOptionsHtml ? 'Options Present' : 'Zero Options Found'} ---`);
 
         if (!availableOptionsHtml) {
             availableOptionsHtml = `<div style="padding: 6px 12px; font-size: 0.7rem; color: #94a3b8; font-style: italic;">No matching outputs</div>`;
@@ -2797,7 +3168,9 @@ document.addEventListener('DOMContentLoaded', function() {
         dropdown.style.display = 'block';
     });
 
-    // Handle token option assignment action click events
+    // -------------------------------------------------------------
+    // ATTACH SELECTION EVENT DELEGATOR TO DRIVEN DROPDOWN OPTIONS
+    // -------------------------------------------------------------
     document.body.addEventListener('click', function(e) {
         const optionBtn = e.target.closest('.select-link-token-option');
         if (!optionBtn) return;
@@ -2810,6 +3183,149 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const wrapper = optionBtn.closest('.linked-input-wrapper');
         const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
+        
+        // 🌟 MATRIX FIX: Identify which input key is being updated
+        const inputKey = wrapper.getAttribute('data-input-key') || '';
+
+        // 🌟 MATRIX FIX: Handle main matrix override tracking
+        if (inputKey === 'linked_matrix') {
+            const statusLabel = wrapper.querySelector('.link-status-text');
+            if (statusLabel) {
+                statusLabel.textContent = `Linked to: ${rawTokenId}`;
+                statusLabel.style.color = '#0284c7';
+            }
+
+            // Hide the local grid group container
+            const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+            if (activeCard) {
+                const localGridGroup = activeCard.querySelector('.matrix-local-grid-config-group');
+                if (localGridGroup) localGridGroup.style.display = 'none'; // Hide grid layout
+            }
+
+            // Save the value safely directly onto your tracking node
+            const actualInputNode = wrapper.querySelector('input, select');
+            if (actualInputNode) {
+                actualInputNode.value = chosenTokenString;
+            }
+
+            // Transform link icon to an active red delete close asset marker
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+
+            // Close options dropdown picker instance frame
+            wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+
+            // Bubble a simulated keystroke notice so live variables parser extracts immediately
+            if (actualInputNode) {
+                actualInputNode.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+
+            // Trigger workspace preview validation updates
+            if (activeCard) {
+                const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                    dispatchWorkspaceBatchSync(cardId);
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+            } else {
+                updateWorkspaceSimulationPreview();
+            }
+            return; // 🚀 EXIT EARLY
+        }
+
+        // 🎯 🌟 MATRIX FIX: Handle Matrix B tracking and icon conversions gracefully
+        if (inputKey === 'matrix B') {
+            const bStatusLabel = wrapper.querySelector('.matrix-b-status-text');
+            if (bStatusLabel) {
+                bStatusLabel.textContent = `Linked to: ${rawTokenId}`;
+                bStatusLabel.style.color = '#16a34a';
+            }
+
+            const actualInputNode = wrapper.querySelector('input.val-matrix-b-target, input, select');
+            if (actualInputNode) {
+                actualInputNode.value = chosenTokenString;
+            }
+
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+
+            wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+
+            if (actualInputNode) {
+                actualInputNode.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+
+            const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+            if (activeCard) {
+                const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                    dispatchWorkspaceBatchSync(cardId);
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+            } else {
+                updateWorkspaceSimulationPreview();
+            }
+            return; // 🚀 EXIT EARLY: Avoid creating an inline green pill for this custom container layout row!
+        }
+        // 🎯 🌟 ADDED OVERRIDE: Precise visual layout insertion for Matrix dynamic variable sub rows
+        if (inputKey && inputKey.startsWith('sub_')) {
+            wrapper.setAttribute('data-bound-token', chosenTokenString);
+
+            // Hide the text field input safely out of the layout row flex stream
+            const rawInput = wrapper.querySelector('.val-substitution-input');
+            if (rawInput) {
+                rawInput.value = chosenTokenString;
+                rawInput.style.display = 'none';
+            }
+
+            // Create or update an inline visual token indicator pill tailored for this flex spacing
+            let pill = wrapper.querySelector('.linked-token-pill');
+            if (!pill) {
+                pill = document.createElement('span');
+                pill.className = 'linked-token-pill';
+                pill.setAttribute('data-indexed-token', rawTokenId);
+                pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; font-family: monospace; font-size: 0.75rem; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-left: 4px; display: inline-block;';
+                
+                // Nest it cleanly inside the inner label wrapper div right after the "=" sign label
+                const innerFlexContainer = wrapper.firstElementChild;
+                if (innerFlexContainer) {
+                    innerFlexContainer.appendChild(pill);
+                } else {
+                    wrapper.insertBefore(pill, linkBtn);
+                }
+            }
+            pill.textContent = chosenTokenString;
+
+            // Transform the link icon into a red delete cross action button
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+
+            // Close the current token picker selection menu drop box viewport
+            const dropdown = wrapper.querySelector('.linkable-tokens-dropdown');
+            if (dropdown) dropdown.style.display = 'none';
+
+            // Sync alterations upward to layout cache layers
+            const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+            if (activeCard) {
+                const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                    dispatchWorkspaceBatchSync(cardId);
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+            } else {
+                updateWorkspaceSimulationPreview();
+            }
+            return; // 🚀 EXIT EARLY
+        }
         
         // 🎯 FIX: Find the targeted raw input tag control inside this layout wrapper frame
         const actualInputNode = wrapper.querySelector('input, select');
@@ -2854,14 +3370,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         // 🚀 FIX: Find the enclosing formula card element container
-        const activeCard = wrapper.closest('.workspace-component-card');
+        const activeCard = wrapper.closest('.workspace-component-card') || wrapper.closest('.workspace-block-card');
         if (activeCard) {
             const cardId = activeCard.querySelector('.btn-delete-workspace-component')
                                      ?.getAttribute('data-indexed-token');
             
             if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
-                // console.log(`🔗 Token dependency linkage created on [${cardId}]. Syncing network compilation tree...`);
-                // Force a network validation step for this specific component card and its dependencies
                 dispatchWorkspaceBatchSync(cardId);
             } else {
                 updateWorkspaceSimulationPreview();
@@ -2876,6 +3390,93 @@ document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.linkable-tokens-dropdown').forEach(d => d.style.display = 'none');
     });
 
+    // -------------------------------------------------------------
+    // GLOBAL CONTROLLER: MATRIX VARIABLE SUBSTITUTION GENERATOR
+    // -------------------------------------------------------------
+    document.body.addEventListener('change', function(e) {
+        const picker = e.target.closest('.picker-unused-variables');
+        if (!picker) return;
+
+        // Isolate this execution loop strictly to matrix component cards
+        const card = picker.closest('.workspace-block-card, .workspace-component-card');
+        const deleteBtn = card?.querySelector('.btn-delete-workspace-component');
+        const isMatrixCard = deleteBtn?.getAttribute('data-token') === 'matrix';
+        
+        if (!isMatrixCard) return; // 🚀 Let formula's local listener handle formula cards safely!
+
+        const pickedVar = picker.value;
+        if (!pickedVar || pickedVar === '-- N/A --') return;
+
+        const substitutionsContainer = card.querySelector('.substitutions-list-container');
+        if (!substitutionsContainer) return;
+
+        // Prevent adding duplicates
+        if (substitutionsContainer.querySelector(`[data-input-key="sub_${pickedVar}"]`)) {
+            picker.value = "";
+            return;
+        }
+
+        // Construct a matrix-isolated, pipeline-compliant input row item
+        const row = document.createElement('div');
+        row.className = 'substitution-row-item linked-input-wrapper';
+        row.setAttribute('data-var-name', pickedVar);
+        row.setAttribute('data-input-key', `sub_${pickedVar}`);
+        row.setAttribute('data-input-type', 'text');
+        row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-bottom: 6px; background: #ffffff; padding: 4px 6px; border-radius: 4px; border: 1px solid #cbd5e1; box-sizing: border-box;';
+
+        row.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 6px; flex-grow: 1; min-width: 0;">
+                <span style="font-size: 0.8rem; font-family: monospace; font-weight: bold; background: #e2e8f0; padding: 2px 6px; border-radius: 3px; color: #0f172a; flex-shrink: 0;">${pickedVar}</span>
+                <span style="color: #94a3b8; font-size: 0.75rem; flex-shrink: 0;">=</span>
+                <input type="text" class="val-substitution-input" value="" placeholder="Value or expression" style="flex-grow: 1; border: none; outline: none; font-size: 0.8rem; padding: 2px 4px; min-width: 0;">
+            </div>
+            
+            <div style="position: relative; display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+                <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.7rem; height: 24px; width: 24px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
+                    <i class="fas fa-link"></i>
+                </button>
+                <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: auto; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 4px; box-sizing: border-box;"></div>
+                
+                <button type="button" class="btn-delete-substitution-row" title="Remove assignment" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.85rem; padding: 2px; display: flex; align-items: center; justify-content: center; transition: color 0.15s;">
+                    <i class="fas fa-times-circle"></i>
+                </button>
+            </div>
+        `;
+
+        // Local cleanup script logic for the removal asset button
+        const delBtn = row.querySelector('.btn-delete-substitution-row');
+        delBtn.addEventListener('click', function(event) {
+            event.stopPropagation();
+            row.remove();
+            
+            // Put choice back into selection dropdown array immediately
+            const opt = document.createElement('option');
+            opt.value = pickedVar;
+            opt.textContent = pickedVar;
+            picker.appendChild(opt);
+            
+            // Reveal container if it was previously auto-hidden
+            picker.parentElement.style.display = 'flex';
+            
+            card.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+
+        substitutionsContainer.appendChild(row);
+        
+        // Remove option item selection from dropdown cleanly
+        const selectedOption = picker.querySelector(`option[value="${pickedVar}"]`);
+        if (selectedOption) selectedOption.remove();
+        picker.value = "";
+
+        // If no values remain, hide parent row out of sight
+        if (picker.options.length <= 1) {
+            picker.parentElement.style.display = 'none';
+        }
+
+        // Force dispatch change to alert the layout index compile pipeline (dispatchWorkspaceBatchSync)
+        card.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
     // =============================================================================
     // REAL-TIME COMPONENT LIVE-SYNC DISPATCHER
     // =============================================================================
@@ -2887,6 +3488,12 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (!target.matches('input, select, textarea')) return;
 
+            // 🎯 FIX: Ignore 'change' events on text and number inputs. 
+            // The 'input' event catches these changes in real-time, making 'change' redundant.
+            if (e.type === 'change' && (target.type === 'text' || target.type === 'number' || target.tagName === 'TEXTAREA')) {
+                return;
+            }
+
             const card = target.closest('.workspace-component-card') || target.closest('.workspace-block-card');
             if (!card) return;
 
@@ -2894,11 +3501,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!cardId) return;
 
             console.group(`%c⚡ Input Activity Hooked [Event Type: '${e.type}'] on Token identifier [${cardId}]`, "color: #eab308; font-weight: bold;");
-            // console.log(`DOM Trigger Intercepted input element node reference:`, target);
-            // console.log(`Active field input field payload name value: '${target.name || target.className}' ➔ String Content value inputted: '${target.value}'`);
 
             if (debouncedNetworkDispatches[cardId]) {
-                // console.log(`⏳ Debounce intercept: Overriding pending network countdown reference matching index context for [${cardId}]. Resetting timeout interval limits.`);
                 clearTimeout(debouncedNetworkDispatches[cardId]);
             }
 
@@ -2906,7 +3510,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 delete debouncedNetworkDispatches[cardId];
 
                 console.group(`%c🚀 Debounce Interval Trigger Window Closed ➔ Dispatching [${cardId}]`, "background: #10b981; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;");
-                // console.log("Current targeting element select dropdown value node tracking before network handshake:", card.querySelector('.val-input-simplify-target')?.value);
                 console.groupEnd();
 
                 if (typeof dispatchWorkspaceBatchSync === 'function') {

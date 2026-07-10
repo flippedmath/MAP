@@ -63,7 +63,7 @@
         <script src="https://cdn.jsdelivr.net/npm/function-plot@1.25.4/dist/function-plot.js"></script>
         
         <!-- Core Application Management Ledger (Always place this last so it can read global libraries above) -->
-        <script src="{% static 'assessment_tool/js/problem_overlay_global.js' %}"></script>
+        <script type="module" src="{% static 'assessment_tool/js/problem_overlay_global.js' %}"></script>
     {% endif %}
 
     {% block extra_js %}
