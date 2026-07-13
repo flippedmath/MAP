@@ -96,7 +96,6 @@ function toggleIntroEditor(showEditor) {
             let cleanHtml = "";
             let rawValue = payloadInput.value ? payloadInput.value.trim() : "";
 
-            // console.log("Raw Payload Value being loaded:", rawValue);
 
             // Handle parsing strategies
             if (rawValue) {
@@ -105,7 +104,7 @@ function toggleIntroEditor(showEditor) {
                         const parsedData = JSON.parse(rawValue);
                         cleanHtml = parsedData.html_content || "";
                     } catch (e) {
-                        console.warn("Strategy 1 parse failed. Trying regex extraction...");
+                        console.warn("Course intro HTML parse strategy 1 failed; trying regex extraction.");
                     }
                 }
 
@@ -128,7 +127,7 @@ function toggleIntroEditor(showEditor) {
                         const parsedData = JSON.parse(decodedJson);
                         cleanHtml = parsedData.html_content || "";
                     } catch (err) {
-                        console.warn("Strategy 3 double-unescape failed.");
+                        console.warn("Course intro HTML double-unescape parse failed.");
                     }
                 }
 
@@ -173,8 +172,6 @@ function toggleIntroEditor(showEditor) {
                 // Export our pristine normalized string layout
                 cleanHtml = doc.body.innerHTML;
             }
-
-            console.log("Sanitized HTML string passing to Quill clipboard:", cleanHtml);
 
             // Clear editor before pasting to ensure canvas state is clean
             quillInstance.setText('');

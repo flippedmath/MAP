@@ -28,7 +28,7 @@ function getEntityInformation(token, contextData) {
 
     if (!processor) {
         if (contextData?.action === 'fieldsHtml') {
-            console.warn(`Token "${token}" is not registered or supported.`);
+            console.warn(`Entity token "${token}" is not registered.`);
         }
         return null;
     }
@@ -36,7 +36,7 @@ function getEntityInformation(token, contextData) {
     try {
         return processor(contextData);
     } catch (error) {
-        console.error(`Failed to execute entity processor for token: ${token}`, error);
+        console.error(`Entity processor failed for "${token}":`, error);
         return null;
     }
 }
@@ -85,11 +85,10 @@ document.addEventListener('DOMContentLoaded', function() {
      * Toggles layout option menus dynamically based on your database rows
      */
     function setupDropdownMenu(triggerId, menuId, tokens) {
-        // console.log(`⚙️ [Dropdown Router Setup] Configuring trigger handler for ID: '#${triggerId}'`);
         const trigger = document.getElementById(triggerId);
         const menu = document.getElementById(menuId);
         if (!trigger || !menu) {
-            console.warn(`⚠️ Interface binding canceled: Element mismatch on selector tracking tokens. Trigger exists=${!!trigger}, Menu exists=${!!menu}`);
+            console.warn('Dropdown binding skipped: trigger or menu element missing.');
             return;
         }
 
@@ -111,7 +110,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         trigger.onclick = function(e) {
-            // console.log(`🖱️ Dropdown Menu Click Intercepted: Toggling panel visibility context for: '#${menuId}'`);
             e.stopPropagation();
             document.querySelectorAll('.entity-menu-dropdown').forEach(m => {
                 if (m !== menu) m.style.display = 'none';
@@ -125,13 +123,11 @@ document.addEventListener('DOMContentLoaded', function() {
             
             e.stopPropagation();
             const tokenSelected = btn.getAttribute('data-token');
-            console.group(`%c➕ [User Action] Sidebar Option Selection Triggered: <${tokenSelected}>`, "background: #16a34a; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;");
             
             const isVariable = dynamicVarsTokens.some(item => item.token === tokenSelected);
             const targetContainer = isVariable ? variablesContainer : inputsContainer;
 
             if (targetContainer) {
-                // console.log(`Target placement layout panel resolved. Appending new block instance component.`);
                 removePlaceholders(targetContainer);
                 createTokenBadge(tokenSelected);
                 createNewBlockInstanceUI(tokenSelected, targetContainer, {});
@@ -139,20 +135,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
                 const newestCard = builtCards[builtCards.length - 1];
                 const cardTokenId = newestCard?.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
-                // console.log(`Extracted identifying component sequence tracking token label: "${cardTokenId}"`);
 
                 if (typeof dispatchWorkspaceBatchSync === 'function' && cardTokenId) {
-                    // console.log(`Forwarding new component tracking parameters directly to network evaluation pipeline...`);
                     dispatchWorkspaceBatchSync(cardTokenId);
                 } else {
                     updateWorkspaceSimulationPreview();
                 }
             } else {
-                console.error("❌ Missing layout container references wrapper. Block instantiation aborted.");
+                console.error('Cannot add entity card: sidebar container missing.');
             }
             
             menu.style.display = 'none';
-            console.groupEnd();
         };
     }
 
@@ -166,7 +159,6 @@ document.addEventListener('DOMContentLoaded', function() {
      * Loops through saved entity segments extracted from database layers on load
      */
     function rehydrateWorkspaceSegments(segments) {
-        console.group(`%c🔄 [Workspace Rehydration] Initializing Layout Hydration Loop`, "background: #7c3aed; color: white; padding: 3px 6px; border-radius: 4px; font-weight: bold;");
 
         isWorkspaceInitializing = true; 
         window.isHydratingWorkspace = true; // Set both flags at the top
@@ -174,13 +166,12 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             // Differentiate missing data from an empty new workspace
             if (!segments) {
-                console.warn("⚠️ Database segment array payload is missing from network packet.");
+                console.warn('Workspace load response missing segments array.');
                 clearAndShowPlaceholders();
                 return;
             }
 
             if (segments.length === 0) {
-                console.log("ℹ️ Workspace payload is empty. Preparing pristine workspace layout states.");
                 clearAndShowPlaceholders();
                 return; // 🌟 Safe early exit! The 'finally' block will still unlock the state.
             }
@@ -190,13 +181,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (tokensLedger) tokensLedger.innerHTML = '';
 
             segments.forEach((segment, idx) => {
-                console.group(`Segment Iterator Node [Index: ${idx}] ➔ Processing: <${segment.token}>`);
                 try {
                     const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
                     const targetContainer = isVariable ? variablesContainer : inputsContainer;
 
                     if (!targetContainer) {
-                        console.error("❌ Panel target DOM node reference lookup returned undefined. Skipping rehydration pass.");
+                        console.error('Cannot rehydrate entity card: target sidebar panel missing.');
                         return;
                     }
 
@@ -222,9 +212,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                 } catch (segmentErr) {
-                    console.error(`💥 Failed rehydrating segment <${segment?.sequence_token || segment?.token || idx}>:`, segmentErr);
+                    console.error(`Failed rehydrating entity <${segment?.sequence_token || segment?.token || idx}>:`, segmentErr);
                 } finally {
-                    console.groupEnd();
                 }
             });
 
@@ -238,14 +227,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
         } catch (error) {
-            console.error("💥 Critical error during workspace rehydration:", error);
+            console.error('Workspace rehydration failed:', error);
         } finally {
             // 🔓 This block ALWAYS executes, saving the application state from lockouts
             isWorkspaceInitializing = false; 
             window.isHydratingWorkspace = false;
             // Paint preview from seeded latex_output / simulated values before async batch returns
             updateWorkspaceSimulationPreview();
-            console.groupEnd();
         }
     }
 
@@ -254,8 +242,6 @@ document.addEventListener('DOMContentLoaded', function() {
      * Unified Form Element Interface Constructor Factory
      */
     function createNewBlockInstanceUI(token, containerElement, savedValues = {}, points = 0.0, overrideSequenceToken = undefined) {
-        console.group(`%c🔨 [UI Builder] Instantiating Component Card: <${token}>`, "background: #0ea5e9; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;");
-        // console.log("Input Configuration Arguments:", { savedValues, points, overrideSequenceToken });
 
         const card = document.createElement('div');
         card.className = 'workspace-component-card workspace-block-card';
@@ -270,9 +256,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (overrideSequenceToken) {
             indexedTokenString = overrideSequenceToken;
-            // console.log(`🏷️ Sequence token explicitly overridden by parameters: "${indexedTokenString}"`);
         } else {
-            // console.log("🔍 No explicit sequence token supplied. Calculating look-ahead array position indices...");
             const matchingCardsOnPage = document.querySelectorAll(`.workspace-block-card[data-token="${token}"]`);
             let maxIndex = 0;
 
@@ -289,7 +273,6 @@ document.addEventListener('DOMContentLoaded', function() {
             });
             const nextSequenceIndex = maxIndex + 1;
             indexedTokenString = `${token}${nextSequenceIndex}`;
-            // console.log(`🔢 Incremental matching layout index determined. Next generated sequence ID signature: "${indexedTokenString}"`);
         }
 
         const tokenSourceArray = isVariable ? dynamicVarsTokens : answerFieldsTokens;
@@ -299,7 +282,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // Helper function to prevent inserting literal token strings into type="number" inputs
         const safeNumValue = (val, fallback) => {
             if (typeof val === 'string' && val.trim().match(/^<([^>]+)>$/)) {
-                // console.log(`🔗 Defensive Intercept: Value '${val}' is an upstream link token shortcut. Masking input with fallback standard default: ${fallback}`);
                 return fallback; 
             }
             return val ?? fallback;
@@ -371,12 +353,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         containerElement.appendChild(card);
-        // console.log(`✅ Appended card [${indexedTokenString}] to sidebar layout wrapper tree node.`);
 
         if (!card.hasAttribute('data-shuffle-seed') || card.getAttribute('data-shuffle-seed') === '') {
             const freshSeed = Math.random().toString();
             card.setAttribute('data-shuffle-seed', freshSeed);
-            // console.log(`🎲 Generated persistent math randomization seed for [${indexedTokenString}]:`, freshSeed);
         }
 
         getEntityInformation(token, {
@@ -386,7 +366,6 @@ document.addEventListener('DOMContentLoaded', function() {
             updateWorkspaceSimulationPreview
         });
 
-        // console.log("🛠️ Scanning nested layout wrapper wrappers for pre-existing macro links...");
         const newlyCreatedWrappers = card.querySelectorAll(
             '.linked-input-wrapper:not(.substitutions-list-container .linked-input-wrapper)'
         );
@@ -397,7 +376,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 if (savedValue && typeof savedValue === 'string' && savedValue.trim().match(/^<([^>]+)>$/)) {
                     const cleanTokenString = savedValue.trim();
-                    // console.log(`  📍 Found active dependency link row [${inputKey}] targeting: "${cleanTokenString}"`);
                     const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
 
                     const labelEl = wrapper.querySelector('label');
@@ -434,7 +412,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             } catch (linkRestoreErr) {
-                console.warn('Failed restoring linked-token UI for wrapper; continuing card build.', linkRestoreErr);
+                console.warn("Failed restoring linked-token UI; continuing card build.", linkRestoreErr);
             }
         });
 
@@ -448,7 +426,6 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         updateWorkspaceSimulationPreview();
-        console.groupEnd();
 
         return card;
     }
@@ -490,11 +467,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (linkedTokenName) {
             // 🛑 INFINITE LOOP PROTECTION: Short-circuit if a dependency loops back onto itself
             if (visitedTokens.includes(linkedTokenName)) {
-                console.error(`🛑 [Circular Dependency Blocked] Token loop detected targeting: "${linkedTokenName}". Defensively utilizing fallback fallback: "${defaultFallback}"`);
+                console.error(`Circular dependency blocked for token "${linkedTokenName}"; using fallback "${defaultFallback}".`);
                 return defaultFallback;
             }
 
-            // console.log(`🔗 [Link Trace] "${inputKey}" field resolves to upstream variable macro: "${linkedTokenName}"`);
             
             const upstreamCard = Array.from(document.querySelectorAll('.workspace-component-card')).find(c => {
                 const delBtn = c.querySelector('.btn-delete-workspace-component');
@@ -505,7 +481,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Pass downstream state references recursively up the execution trace line
                 return evaluateSingleCardOutput(upstreamCard, linkedTokenName, [...visitedTokens]);
             } else {
-                console.warn(`⚠️ Upstream component card reference targeting token "${linkedTokenName}" is missing from DOM.`);
+                console.warn(`Linked upstream card "<${linkedTokenName}>" not found in the workspace DOM.`);
             }
         }
 
@@ -517,7 +493,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // -------------------------------------------------------------------------
     function evaluateSingleCardOutput(card, tokenIdentifier, visitedTokens = []) {
         if (!card) {
-            console.warn(`[🔍 EVAL TRACE] evaluateSingleCardOutput called without a valid card element for token: "${tokenIdentifier}"`);
+            console.warn(`evaluateSingleCardOutput called without a card for token "${tokenIdentifier}".`);
             return tokenIdentifier;
         }
         
@@ -529,13 +505,10 @@ document.addEventListener('DOMContentLoaded', function() {
             visitedTokens.push(tokenIdentifier);
         }
 
-        console.group(`%c⚙️ Local Math Calc: <${tokenIdentifier}> [Archetype: ${baseArchetype}]`, "background: #1e1e2e; color: #cdd6f4; padding: 3px 6px; border-radius: 4px; font-weight: bold;");
 
         // 🎯 PRIORITY A: Check if the server has stored a verified calculated value directly on the card markup
         const calculatedValueFallback = card.getAttribute('data-simulated-value');
         if (calculatedValueFallback !== null && calculatedValueFallback !== undefined && calculatedValueFallback !== '' && calculatedValueFallback !== 'None' && calculatedValueFallback !== 'null') {
-            console.log(`%c✓ ${baseArchetype} reading directly from synchronized server state: "${calculatedValueFallback}"`, "color: #89b4fa; font-weight: bold;");
-            console.groupEnd();
             return calculatedValueFallback;
         }
 
@@ -551,7 +524,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (evaluated !== null && evaluated !== undefined) {
             // Formula evaluate may return early via cache/string — short-circuit like original
             if (baseArchetype === 'formula') {
-                console.groupEnd();
                 return evaluated;
             }
             val = evaluated;
@@ -560,7 +532,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Final Output Summary Resolution (Fallback check if local engine rules fell through)
         const finalReturnedValue = (val !== null && val !== undefined && val !== '') ? val : tokenIdentifier;
-        console.groupEnd();
 
         return finalReturnedValue;
     }
@@ -570,36 +541,28 @@ document.addEventListener('DOMContentLoaded', function() {
     // -------------------------------------------------------------
     function updateWorkspaceSimulationPreview() {
         if (window.isHydratingWorkspace) return; // 🛑 Halt execution during hydration loop
-        console.group("%c🖥️ [Canvas Preview] Triggering Markdown Render Pass", "color: #a855f7; font-weight: bold;");
         const renderTarget = document.getElementById('simulation-render-target');
         if (!renderTarget) {
-            console.warn("❌ Aborting Canvas update: '#simulation-render-target' element is missing from the layout DOM.");
-            console.groupEnd();
+            console.warn("Simulation preview aborted: #simulation-render-target is missing.");
             return;
         }
 
         let canvasContent = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
-        console.log("Raw Rich-Text content collected from Quill instance:", canvasContent);
 
         if (!canvasContent || canvasContent === '<p><br></p>') {
-            console.log("Empty or unpopulated canvas content detected. Injecting layout placeholder message.");
             renderTarget.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Interactive layout testing view builds dynamically here...</p>';
-            console.groupEnd();
             return;
         }
 
         if (typeof renderPreviewCanvasMarkup === 'function') {
-            console.log("🎯 Dispatched canvas content to downstream static macro replacement layout compiler.");
             renderPreviewCanvasMarkup(canvasContent, renderTarget);
         } else {
-            console.warn("❌ Downstream utility token parser 'renderPreviewCanvasMarkup' is not declared on global window namespace.");
+            console.warn("Simulation preview aborted: renderPreviewCanvasMarkup is not available.");
         }
-        console.groupEnd();
     }
 
     // 🎯 HELPER SUB-ROUTINE: HANDLES REGEX STRING REPLACEMENT & KATEX PARSING
     function renderPreviewCanvasMarkup(canvasContent, renderTarget) {
-        console.group("%c🎨 [MARKUP ENGINE] Executing Patched Regex Text Substitution", "background: #7c3aed; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold;");
         
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = canvasContent;
@@ -625,7 +588,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // This stops the engine from intercepting core layout blocks like <p> or </div>
         const tokenRegex = /&lt;([a-zA-Z0-9_]+)&gt;/g;
 
-        console.log("Processing replacements over working HTML layout strings...");
 
         let simulatedHtml = workingHtml.replace(tokenRegex, function(match, tokenText) {
             try {
@@ -634,10 +596,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let baseArchetypeToken = cleanToken.replace(/\d+$/, ''); 
 
                 // 🔍 DIAGNOSTIC LOG 1: Track what the layout parser is trying to match
-                console.group(`🔍 [Canvas Trace] Processing Token Tag: "${match}"`);
-                console.log(`Targeting Clean Token Reference: "${cleanToken}"`);
 
-                console.group(`🔍 [Canvas Match Attempt] Token Found in Text: "${match}" (Cleaned: "${cleanToken}")`);
                 // 🔍 Print out all component cards currently residing in the DOM to inspect their names
                 const availableCards = Array.from(document.querySelectorAll('.workspace-component-card')).map(c => {
                     return {
@@ -645,7 +604,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         indexedTokenAttr: c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token')
                     };
                 });
-                console.log("Current layout cards present in DOM tree:", availableCards);
 
                 // Locate the active interactive workspace card row using case-insensitive matching logic
                 const card = Array.from(document.querySelectorAll('.workspace-component-card')).find(c => {
@@ -653,7 +611,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     return delBtn && delBtn.getAttribute('data-indexed-token') === cleanToken;
                 });
 
-                console.log(`Card resolved matching clean token "${cleanToken}":`, card);
 
                 if (card && card.getAttribute('data-token')) {
                     baseArchetypeToken = card.getAttribute('data-token');
@@ -681,17 +638,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else {
                         // FORCE math generators (rand, randInt, primeFactors) to compute purely client-side
                         if (card) {
-                            console.log(`Bypassing server cache value ("${displayVal}") for math generator variable type. Firing live local client evaluation pass.`);
                             
-                            console.log(`📊 [Canvas Render Check] Checking Card state before evaluation:`, {
-                                token: cleanToken,
-                                dataToken: card.getAttribute('data-token'),
-                                shuffleSeed: card.getAttribute('data-shuffle-seed'),
-                                currentMinInput: card.querySelector('.val-input-min')?.value,
-                                currentMaxInput: card.querySelector('.val-input-max')?.value,
-                                currentNumberInput: card.querySelector('.val-input-number')?.value,
-                                wrapperBoundToken: card.querySelector('.linked-input-wrapper')?.getAttribute('data-bound-token')
-                            });
                             // Prefer loaded latex when present; otherwise live-evaluate
                             const loadedLatex = card.getAttribute('data-latex-output') || formulaLiveLatexCache[cleanToken];
                             if (loadedLatex && loadedLatex !== '???' && loadedLatex !== '') {
@@ -701,7 +648,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                         } else {
                             // 🔍 ADD THIS WARNING HERE:
-                            console.warn(`⚠️ [Canvas Render Warning] Token "${cleanToken}" matched a known archetype list, but its workspace card DOM node could not be found on the page.`);
+                            console.warn(`Preview token "<${cleanToken}>" has no matching entity card in the DOM.`);
                         }
                     }
 
@@ -710,8 +657,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         displayVal = cleanToken;
                     }
 
-                    console.log(`%c✔ Render Success -> Target Replacement: "${match}" -> Computed Result Value: "${displayVal}"`, "color: #16a34a; font-weight: bold;");
-                    console.groupEnd();
 
                     // Delegate entity-specific preview rendering (formula, graph, etc.)
                     const previewHtml = getEntityInformation(baseArchetypeToken, {
@@ -729,7 +674,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
                 
                 } else if (answerFieldsTokens.some(i => i.token === baseArchetypeToken)) {
-                    console.groupEnd();
                     return `
                         <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px;">
                             <input type="text" placeholder="Input slot..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 140px;">
@@ -737,11 +681,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     `;
                 }
                 
-                console.groupEnd();
                 return match;
             } catch (err) {
-                console.error(`Token regex processing failed for element token chunk ${match}:`, err);
-                console.groupEnd();
+                console.error(`Failed processing preview token ${match}:`, err);
                 return `<span style="color: red; font-family: monospace;">[Token Error]</span>`;
             }
         });
@@ -753,7 +695,7 @@ document.addEventListener('DOMContentLoaded', function() {
             renderTarget.querySelectorAll('.preview-static-latex').forEach(span => {
                 try {
                     katex.render(span.textContent.trim(), span, { displayMode: false, throwOnError: false });
-                } catch (err) { console.error(err); }
+                } catch (err) { console.error("KaTeX failed rendering static preview latex:", err); }
             });
 
             renderTarget.querySelectorAll('.simulated-math-formula-render').forEach(span => {
@@ -763,11 +705,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         katex.render(expression, span, { displayMode: false, throwOnError: false });
                     }
                 } catch (err) { 
-                    console.error("Dynamic formula preview compilation failure:", err); 
+                    console.error("KaTeX failed rendering formula preview:", err); 
                 }
             });
         }
-        console.groupEnd();
     }
 
     // Serializes active layout properties into structural object dictionaries matching database specifications
@@ -778,7 +719,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const token = delBtn ? delBtn.getAttribute('data-indexed-token') : null;
             if (!token) return;
 
-            console.log(`Payload Pack -> Token: ${token}, Value: ${card.getAttribute('data-simulated-value')}`);
 
             // 🎯 Determine base archetype and correct case-matching for database key lookups
             let baseArchetypeToken = token.replace(/[0-9]/g, '');
@@ -845,7 +785,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const isCardBeingEdited = activeElement && card.contains(activeElement);
 
             if (isCardBeingEdited) {
-                console.log(`🧼 [Serializer] Active input edit caught on [${token}]. Clearing simulated_value payload to force backend re-roll.`);
                 finalSimulatedValue = null;
             }
 
@@ -986,39 +925,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
     function dispatchWorkspaceBatchSync(triggeringToken = null, options = {}) {
-        console.group(`%c🛰️ [Network Batch Dispatch] Initiating Dependency Evaluation Request`, "background: #2563eb; color: white; padding: 3px 6px; border-radius: 4px; font-weight: bold;");
         
         if (isWorkspaceInitializing && triggeringToken !== 'initial_load') {
-            console.warn(`🛑 Sync Blocked: Workspace initialization latch is active. Suppressed single card refresh for token: [${triggeringToken}]`);
-            console.groupEnd();
             return;
         }
         
-        console.log(`Step 1: Parsing workspace layout tree components...`);
         const allEntities = serializeAllWorkspaceEntities();
-        console.log("Total active workspace elements found:", allEntities);
 
         // 🎯 FIX: Destructure the new object format returned by the updated DAG engine
         const dependencyData = getDownstreamDependencies(allEntities, triggeringToken);
         const affectedEntities = dependencyData.familyGroup; // Contains full tree context (Ancestors + Descendants)
         const mutationTargets = dependencyData.mutationTargets; // Contains ONLY trigger + Descendants
         
-        console.log(`Post refresh token name: ${triggeringToken}`);
-        console.log(`Step 2: Tracking dependencies affected by event driver [${triggeringToken || 'initial_load'}]:`, affectedEntities);
-        console.log(`Execution path (Mutation Targets):`, mutationTargets);
 
         // Check against the familyGroup array length to see if anything was matched
         if (affectedEntities.length === 0 && !options.forceRefresh) {
-            console.log(`triggeringToken: ${triggeringToken}`);
-            console.warn("⚠️ No relevant components matched tree criteria. Network communication suppressed.");
-            console.groupEnd();
             return;
         }
-        console.log("🚀 Syncing components:", affectedEntities);
 
         const currentTimestamp = Date.now();
         activeBatchSyncTimestamp = currentTimestamp;
-        console.log(`Step 3: Stamping outgoing request token signature timestamp: ${currentTimestamp}`);
 
         fetch('/assessment/api/validate-component-preview/', {
             method: 'POST',
@@ -1033,12 +959,9 @@ document.addEventListener('DOMContentLoaded', function() {
             })
         })
         .then(res => {
-            console.log(`📡 Server Connection Made! HTTP Response Code status returned: ${res.status}`);
             return res.json();
         })
         .then(data => {
-            console.group(`%c📥 [Network Sync Response Received]`, "background: #059669; color: white; padding: 2px 6px; border-radius: 4px;");
-            console.log("Server payload returned object data:", data);
 
             const errorBanner = document.getElementById('workspace-validation-error-banner');
             const errorsList = document.getElementById('workspace-validation-errors-list');
@@ -1067,23 +990,18 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             if (currentTimestamp !== activeBatchSyncTimestamp) {
-                console.groupEnd(); console.groupEnd();
                 return;
             }
 
             // 🎯 ADJUSTED GUARD: Only throw a terminal platform error if there are no validation errors to review
             if (!data.success && (!data.errors || Object.keys(data.errors).length === 0)) {
-                console.error("❌ Math Validation Engine reported system operational failures:", data.error);
-                console.groupEnd(); console.groupEnd();
+                console.error("Workspace validation failed:", data.error);
                 return;
             }
 
-            console.group("🔄 Applying Engine Values to DOM Component Nodes");
             Object.keys(data.updated_cache).forEach(token => {
                 const result = data.updated_cache[token];
                 
-                console.group(`📝 Mutating Layout States For Element Card Reference Key: [${token}]`);
-                console.log(`Assigned values received: Evaluated String='${result.evaluated_output}', LaTeX Output='${result.latex_output}', Free Variables='${result.extracted_variables}'`);
 
                 formulaLiveLatexCache[token] = result.latex_output;
                 
@@ -1092,8 +1010,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 );
                 
                 if (!card) {
-                    console.warn(`❌ DOM Mismatch: Unable to locate any visible block card with custom query token ID selector: [${token}]`);
-                    console.groupEnd();
                     return;
                 }
 
@@ -1101,11 +1017,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (result.latex_output !== undefined && result.latex_output !== null) {
                     card.setAttribute('data-latex-output', result.latex_output);
                 }
-                console.log(`Updated wrapper tracking parameter attribute 'data-simulated-value' ➔ '${result.evaluated_output}'`);
 
                 const baseArchetype = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-token');
                 let targetDisplay = card.querySelector('.latex-render-box');
-                console.log(`Determined operational asset token archetype model: '${baseArchetype}'`);
 
                 if (getEntityInformation(baseArchetype, { action: 'needsLatexRenderBox' })) {
                     targetDisplay = ensureLatexRenderBox(card) || targetDisplay;
@@ -1128,7 +1042,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // 🔍 DEBUG LOG: Look for select elements inside the card to verify their class names
                 const allSelectsOnCard = Array.from(card.querySelectorAll('select')).map(s => ({ className: s.className, name: s.name, value: s.value }));
-                console.log("🔍 [DEBUG] Dropdowns currently existing on this component card:", allSelectsOnCard);
 
                 const varsInput = card.querySelector('.val-input-variables');
                 if (varsInput && result.extracted_variables !== undefined) {
@@ -1188,7 +1101,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             !varArray.every((v, i) => v === existingDropdownOptions[i]);
 
                         if (dropdownOptionsStructurallyChanged) {
-                            console.log(`🔄 Variable list updates match structural changes. Rebuilding options list...`);
                             
                             solveForSelect.options.length = 0;
                             
@@ -1215,19 +1127,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
                 
-                console.groupEnd();
             });
 
-            console.groupEnd(); // End variable parsing loop
 
-            console.log("⚡ View components re-indexed. Re-triggering canvas preview compilation pipeline update passes.");
             updateWorkspaceSimulationPreview();
-            console.groupEnd(); // End Main success trace block
-            console.groupEnd(); // End Fetch top-level engine block
         })
         .catch(err => {
-            console.error("❌ Consolidated batch synchronization network connection dispatch crashed entirely:", err);
-            console.groupEnd();
+            console.error("Batch preview sync request failed:", err);
         });
     }
 
@@ -1409,11 +1315,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     };
                 }
             });
-            // console.log("🛠️ [WORKSPACE] Database entity type blueprints successfully hydrated:", window.DATABASE_BLUEPRINTS);
 
             // 🎯 CORRECTED FIX: Explicitly target your actual wrapper line element ID
             if (tokensLedger) {
-                // console.log("🧼 Flushing stale visual tokens from the ledger wrapper...");
                 tokensLedger.innerHTML = ''; 
             }
 
@@ -1457,7 +1361,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
         } catch (err) {
-            console.error("Failed cold-loading problem metrics payload:", err);
+            console.error("Failed loading problem workspace:", err);
             if (saveStatusSpan) {
                 saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Loading Failed`;
             }
@@ -1686,9 +1590,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (saveStatusSpan) {
                 saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Save Failed`;
             }
-            console.error('Workspace save failed:', result.error || response.status);
+            console.error("Workspace save failed:", result.error || response.status);
         } catch (error) {
-            console.error("AJAX Communication failure:", error);
+            console.error("Workspace save network error:", error);
             if (saveStatusSpan) {
                 saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Connection Error`;
             }
@@ -2249,7 +2153,6 @@ document.addEventListener('DOMContentLoaded', function() {
             const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
             if (!cardId) return;
 
-            console.group(`%c⚡ Input Activity Hooked [Event Type: '${e.type}'] on Token identifier [${cardId}]`, "color: #eab308; font-weight: bold;");
 
             if (debouncedNetworkDispatches[cardId]) {
                 clearTimeout(debouncedNetworkDispatches[cardId]);
@@ -2258,8 +2161,6 @@ document.addEventListener('DOMContentLoaded', function() {
             debouncedNetworkDispatches[cardId] = setTimeout(() => {
                 delete debouncedNetworkDispatches[cardId];
 
-                console.group(`%c🚀 Debounce Interval Trigger Window Closed ➔ Dispatching [${cardId}]`, "background: #10b981; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold;");
-                console.groupEnd();
 
                 if (typeof dispatchWorkspaceBatchSync === 'function') {
                     dispatchWorkspaceBatchSync(cardId);
@@ -2267,13 +2168,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     updateWorkspaceSimulationPreview();
                 }
             }, 400);
-            console.groupEnd();
         }
 
         document.addEventListener('input', triggerLiveSync);
         document.addEventListener('change', triggerLiveSync);
     })();
-
 
 
     /**

@@ -41,7 +41,10 @@ from django.utils import timezone
 import re
 from django.template.loader import render_to_string
 import traceback
+import logging
 from django.views.decorators.csrf import csrf_protect
+
+logger = logging.getLogger(__name__)
 
 import sympy as sp
 from sympy.parsing.latex import parse_latex
@@ -676,8 +679,6 @@ def delete_item(request, item_type=None, item_id=None):
             return JsonResponse({'error': f'Unsupported item type: {item_type}'}, status=400)
             
     except Exception as e:
-        print(f"The item id being queried is = {item_id}")
-        print(traceback.format_exc()) 
         return JsonResponse({
             'error': f"Python Exception: {str(e)}",
             'item_id_received': item_id,
@@ -761,7 +762,6 @@ def rename_item(request):
         else:
             # 🚀 UPDATED: Fetch independent items and defer to your global clearance engine
             # The 'obj' is a BranchGroup item, not the 'problem' item
-            print(f"model_class: {model_class}")
             obj = get_object_or_404(model_class, id=item_id)
             
             if item_type == 'problem':
@@ -1487,7 +1487,6 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
         }, status=201)
 
     except Exception as e:
-        print(traceback.format_exc())
         return JsonResponse({'error': f"Operation failed: {str(e)}"}, status=400)
 
 
@@ -1600,8 +1599,11 @@ def update_cqd_count_ajax(request):
 @require_POST
 def reorder_nested_item_ajax(request):
     """
-    Persist midpoint-order for a problem / CQD branch node after drag-and-drop
-    inside an assessment question group section.
+    Persist order for a problem / CQD branch node after drag-and-drop inside an
+    assessment question group section.
+
+    Rebuilds lexicographic order keys for all siblings so duplicate/inverted
+    keys (common after repeated reorders) cannot block the write.
     """
     try:
         data = json.loads(request.body)
@@ -1612,12 +1614,19 @@ def reorder_nested_item_ajax(request):
         if not branch_id:
             return JsonResponse({'success': False, 'error': 'Missing targets.'}, status=400)
 
+        try:
+            branch_id = int(branch_id)
+            prev_branch_id = int(prev_branch_id) if prev_branch_id not in (None, '', 'null') else None
+            next_branch_id = int(next_branch_id) if next_branch_id not in (None, '', 'null') else None
+        except (TypeError, ValueError):
+            return JsonResponse({'success': False, 'error': 'Invalid branch identifiers.'}, status=400)
+
         target_node = get_object_or_404(BranchGroup, id=branch_id)
 
         # Authorize: staff/IT, branch owner, or teacher on the parent assessment's course
         user_type = getattr(request.user, 'user_type', 'Student')
         is_privileged = user_type == 'IT_Support' or request.user.is_staff
-        is_owner = target_node.owner_id == request.user.id
+        is_owner = target_node.owner_id == request.user.pk
 
         is_course_teacher = False
         if not is_privileged and not is_owner:
@@ -1634,26 +1643,52 @@ def reorder_nested_item_ajax(request):
         if not (is_privileged or is_owner or is_course_teacher):
             return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
 
-        # Adjacent siblings must share the same parent folder
-        prev_order = ""
-        next_order = ""
-        if prev_branch_id:
-            prev_node = get_object_or_404(BranchGroup, id=prev_branch_id, parent_id=target_node.parent_id)
-            prev_order = prev_node.order or ""
-        if next_branch_id:
-            next_node = get_object_or_404(BranchGroup, id=next_branch_id, parent_id=target_node.parent_id)
-            next_order = next_node.order or ""
+        parent_id = target_node.parent_id
+        siblings = list(
+            BranchGroup.objects.filter(parent_id=parent_id).order_by('order', 'id')
+        )
+        sibling_ids = [node.id for node in siblings if node.id != target_node.id]
 
-        new_order = calculate_midpoint_order(prev_order, next_order)
+        if prev_branch_id is not None and prev_branch_id not in sibling_ids:
+            return JsonResponse(
+                {'success': False, 'error': 'Previous sibling is not in the same section.'},
+                status=400,
+            )
+        if next_branch_id is not None and next_branch_id not in sibling_ids:
+            return JsonResponse(
+                {'success': False, 'error': 'Next sibling is not in the same section.'},
+                status=400,
+            )
 
+        # Rebuild the visual sibling sequence from the drop neighbors
+        ordered_ids = list(sibling_ids)
+        if prev_branch_id is None and next_branch_id is None:
+            ordered_ids = [target_node.id]
+        elif prev_branch_id is None:
+            insert_at = ordered_ids.index(next_branch_id)
+            ordered_ids.insert(insert_at, target_node.id)
+        else:
+            insert_at = ordered_ids.index(prev_branch_id) + 1
+            ordered_ids.insert(insert_at, target_node.id)
+
+        now = timezone.now()
+        new_order_for_target = None
         with transaction.atomic():
-            target_node.order = new_order
-            target_node.save(update_fields=['order', 'modification_date'])
+            running_order = ""
+            for node_id in ordered_ids:
+                running_order = calculate_midpoint_order(running_order, "")
+                BranchGroup.objects.filter(id=node_id).update(
+                    order=running_order,
+                    modification_date=now,
+                )
+                if node_id == target_node.id:
+                    new_order_for_target = running_order
 
-        return JsonResponse({'success': True, 'new_order': new_order})
+        return JsonResponse({'success': True, 'new_order': new_order_for_target})
 
     except Exception as e:
-        return JsonResponse({'success': False, 'error': f"Sorting Matrix Runtime Failure: {str(e)}"}, status=400)
+        logger.exception("Nested item reorder failed: %s", e)
+        return JsonResponse({'success': False, 'error': f"Sorting failed: {str(e)}"}, status=400)
     
 
 
@@ -2072,6 +2107,20 @@ def save_problem_workspace(request, problem_id):
         )
 
         is_valid = validator.is_valid()
+
+        # Schema/syntax checks replace linked tokens with placeholders, so an
+        # entity can pass is_valid() and still blow up when the resolved sympy
+        # form is evaluated (e.g. formula referencing another Integral result).
+        if is_valid and token_id in ('formula', 'matrix', 'graph'):
+            try:
+                validator.evaluate_output()
+            except Exception as eval_err:
+                is_valid = False
+                validator.errors["evaluation"] = (
+                    f"Expression could not be evaluated after resolving linked "
+                    f"entities: {eval_err}"
+                )
+
         if not is_valid:
             error_details = "; ".join([f"{k}: {v}" for k, v in validator.errors.items()])
             unfinished_reasons.append(f"[{label}] {error_details}")
@@ -2317,11 +2366,6 @@ def validate_component_preview(request):
         payload = json.loads(request.body)
         entities_list = payload.get('entities', [])
         
-        print("\n" + "="*60)
-        print("📥 [PREVIEW VIEW] INCOMING REQUEST PAYLOAD")
-        print(f"Total Entities Received: {len(entities_list)}")
-        print(json.dumps(payload, indent=2))
-        print("="*60)
         
         if not entities_list:
             return JsonResponse({'success': True, 'updated_cache': {}, 'errors': {}})
@@ -2391,8 +2435,6 @@ def validate_component_preview(request):
         for target in mutation_targets:
             dfs_topological_sort(target)
 
-        print(f"🔀 [DAG SORT] Original Execution Order: {mutation_targets}")
-        print(f"🎯 [DAG SORT] Resolved Topological Order: {ordered_targets}")
 
         # 3. Iterate sequentially through our safely ordered DAG pipeline
         for sequence_token_id in ordered_targets:
@@ -2428,12 +2470,6 @@ def validate_component_preview(request):
                 'extracted_variables': render_results['extracted_variables']
             }
 
-        print("\n📤 [PREVIEW VIEW] FINAL UPDATED CACHE RESPONSE OUT")
-        print(json.dumps(updated_cache, indent=2))
-        if global_errors_ledger:
-            print(f"🚨 ACTIVE STRUCTURAL ERRORS PASSING DOWNSTREAM: {global_errors_ledger}")
-        print("="*60 + "\n")
-
         return JsonResponse({
             'success': len(global_errors_ledger) == 0,
             'updated_cache': updated_cache,
@@ -2442,9 +2478,7 @@ def validate_component_preview(request):
         })
 
     except Exception as e:
-        import traceback
-        print("\n💥 [CRITICAL VIEW EXCEPTION] 💥")
-        traceback.print_exc()
+        logger.exception("Component preview evaluation crashed: %s", e)
         return JsonResponse({
             'success': False,
             'updated_cache': {},

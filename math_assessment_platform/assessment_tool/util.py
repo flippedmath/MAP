@@ -4,6 +4,7 @@ from django.apps import apps
 from django.http import JsonResponse
 import copy
 import os
+import logging
 from django.core.files.base import ContentFile
 import uuid
 from django.db import transaction
@@ -18,6 +19,7 @@ from sympy.parsing.sympy_parser import parse_expr
 from sympy.parsing.latex import parse_latex
 from django.core.exceptions import ValidationError
 
+logger = logging.getLogger(__name__)
 
 
 def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
@@ -153,9 +155,7 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
         if '(' in t_name:
             split_name = t_name.split()
             t_name = " ".join(split_name[:len(split_name) - 1])
-        print(f"Before name: {t_name}")
         t_name, error = get_valid_unique_name(BranchGroup, new_parent, t_name)
-        print(f"After name: {t_name}")
         if error:
             return JsonResponse({'error': error}, status=400)
 
@@ -345,7 +345,6 @@ def assign_user_to_course(user, course_obj, authenticate=True):
 
     except IntegrityError:
         # Triggers if the unique_together constraint checks out (User + Course already exists)
-        print("Notice: This user is already assigned to this course.")
         # Optional fallback: Fetch and return the existing record instead
         return UsersInCourse.objects.get(user=user, course=course_obj)
 
@@ -764,14 +763,18 @@ class BaseEntity:
         # Convert standard caret power notation to SymPy Python exponents
         s = s.replace('^', '**')
 
-        # Complete list of standard SymPy functions (longer names FIRST to prevent partial matching)
+        # SymPy callables (longer names first). Include unevaluated class names
+        # (Integral/Derivative/Limit) so linking '<formulaN>' whose simulated
+        # value is str(Integral(...)) is not mangled into Integral*(...).
         funcs = (
             r'(?:'
             r'asin|acos|atan|acot|acsc|asec|'
             r'sinh|cosh|tanh|coth|csch|sech|'
             r'asinh|acosh|atanh|acoth|acsch|asech|'
             r'sin|cos|tan|cot|csc|sec|'
-            r'exp|log|ln|sqrt|diff|integrate|limit'
+            r'exp|log|ln|sqrt|'
+            r'Integral|Derivative|Limit|Sum|Product|'
+            r'diff|integrate|limit'
             r')'
         )
 
@@ -892,8 +895,6 @@ class BaseEntity:
         """
         clean_sequence_token = token_string.replace("<", "").replace(">", "").strip()
         
-        print(f"    🔗 [DEPENDENCY RESOLVER] Linking asset detected: {token_string}")
-        print(f"        Searching active workspace ledger for signature: '{clean_sequence_token}'")
 
         target_payload = next(
             (item for item in self.all_entities_payload if (item.get("sequence_token") or item.get("indexed_token") or "") == clean_sequence_token),
@@ -901,25 +902,21 @@ class BaseEntity:
         )
         
         if not target_payload:
-            print(f"        ❌ [DEPENDENCY ERROR] Reference tracker could not locate '{clean_sequence_token}' inside structural map.")
             raise ValidationError(f"Linked reference token <{clean_sequence_token}> could not be found in active workspace components.")
         
         token_archetype = target_payload.get("token")
         token_inputs = target_payload.get("inputs", {})
         token_blueprint = get_blueprint_for_token(token_archetype)
         
-        print(f"        📍 Located Parent Entity: Archetype='{token_archetype}', Inputs={token_inputs}")
         
         # 🎯 SHORT-CIRCUIT FOR RANDOM ARCHETYPES
         # If the target is an upstream random entity, reuse its client-side generated value
         # 🎯 CACHE HIT: Check if we already have a locked-in client string or a freshly computed value
         cached_val = target_payload.get('simulated_value', '')
         if token_archetype in ['rand', 'randInt'] and cached_val != "":
-            print(f"        🎲 [CACHE HIT] Reusing active simulation value for '{clean_sequence_token}' ➔ '{cached_val}'")
             return cached_val
 
         # 🎯 CACHE MISS: If cached_val is "", evaluate via sub-engine sub-pipeline
-        print(f"        🔄 [CACHE MISS / EVALUATION] Instantiating sub-engine validator for: {clean_sequence_token}")
         dependency_validator = get_entity_validator(
             token_archetype, 
             token_inputs, 
@@ -934,10 +931,8 @@ class BaseEntity:
         
         # 🎯 WRITE-BACK LOCK: Save the freshly rolled number directly back into the payload entry list
         if token_archetype in ['rand', 'randInt']:
-            print(f"        💾 [CACHE WRITE-BACK] Saving rolled value '{resolved_value}' to state payload for token record: {clean_sequence_token}")
             target_payload['simulated_value'] = resolved_value  # This updates it in all_entities_payload by reference!
 
-        print(f"        💎 [DEPENDENCY SUCCESS] Inter-component pipeline resolved {token_string} ➔ '{resolved_value}'")
         return resolved_value
 
     def validate_field_type(self, key, value, field_type):
@@ -1110,7 +1105,6 @@ class RandomIntegerEntity(BaseEntity):
             if target_payload:
                 cached_val = target_payload.get('simulated_value', '')
                 if cached_val not in ["", "None", "null"]:
-                    print(f"        🎲 [RAND ENGINE LOCK] Found existing cached state '{cached_val}' for self. Keeping it.")
                     return cached_val
                 
         min_val = int(self.resolve_numeric_value("min", default_fallback=1))
@@ -1118,13 +1112,7 @@ class RandomIntegerEntity(BaseEntity):
         step_val = int(self.resolve_numeric_value("step", default_fallback=1))
         exclude_set = set(self.runtime_values.get("exclude_array", []))
 
-        print(f"    🎲 [RandomIntegerEntity] Processing pool calculations (O(1) Optimized):")
-        print(f"        Bounds Range: {min_val} to {max_val} (Using Step Intervals: {step_val})")
-        if exclude_set:
-            print(f"        Exclusion Filter active elements: {exclude_set}")
-
         if min_val > max_val:
-            print(f"        ⚠️ Boundary guard triggered (min > max) ➔ Output fallback: '{min_val}'")
             return str(min_val)
 
         # Calculate the absolute max step indices possible within this integer span
@@ -1133,7 +1121,6 @@ class RandomIntegerEntity(BaseEntity):
 
         # If range or steps result in no legal spaces, fallback cleanly
         if max_steps < 0:
-            print(f"        ⚠️ Legal step size context evaluated to empty ➔ Output fallback: '{min_val}'")
             return str(min_val)
 
         # 🎯 EXCLUSION LOOP GUARD: Direct sampling to guarantee O(1) space integrity
@@ -1146,21 +1133,17 @@ class RandomIntegerEntity(BaseEntity):
             
             if candidate_value not in exclude_set:
                 selected_choice = str(candidate_value)
-                print(f"        ⚡ Calculated Random Step Index: {random_step_multiplier}/{max_steps}")
-                print(f"        ➔ Computed Safe Integer Value Outcome: '{selected_choice}'")
                 return selected_choice
             
             attempts += 1
 
         # Fallback Strategy: If random sampling kept hitting exclusions, loop once to find the absolute first unexcluded slot
-        print(f"        ⚠️ High density exclusion collision detected. Reverting to linear first-match fallback.")
         current = min_val
         while current <= max_val:
             if current not in exclude_set:
                 return str(current)
             current += step_val
 
-        print(f"        ⚠️ No legal entries matched requirements! Falling back to min_val boundary default.")
         return str(min_val)
 
 
@@ -1267,19 +1250,15 @@ class RandomDoubleEntity(BaseEntity):
             if target_payload:
                 cached_val = target_payload.get('simulated_value', '')
                 if cached_val not in ["", "None", "null"]:
-                    print(f"        🎲 [RAND ENGINE LOCK] Found existing cached state '{cached_val}' for self. Keeping it.")
                     return cached_val
                 
         min_val = self.resolve_numeric_value("min", default_fallback=0.0)
         max_val = self.resolve_numeric_value("max", default_fallback=1.0)
         step_val = self.resolve_numeric_value("step", default_fallback=0.01)
 
-        print(f"    🎲 [RandomDoubleEntity] Computing dynamic float configurations:")
-        print(f"        Resolved Bounds Range: {min_val} to {max_val} (Step decimal interval: {step_val})")
 
         if min_val >= max_val:
             val_out = str(round(min_val, 4))
-            print(f"        ⚠️ Boundary logic guard triggered (min >= max) ➔ Output fallback: '{val_out}'")
             return val_out
 
         total_range = max_val - min_val
@@ -1287,7 +1266,6 @@ class RandomDoubleEntity(BaseEntity):
 
         if max_steps <= 0:
             val_out = str(round(min_val, 4))
-            print(f"        ⚠️ Steps interval range calculated as zero or empty ➔ Output fallback: '{val_out}'")
             return val_out
 
         random_step_multiplier = random.randint(0, max_steps)
@@ -1300,8 +1278,6 @@ class RandomDoubleEntity(BaseEntity):
         decimal_places = len(step_str.split('.')[1]) if '.' in step_str else 4
         final_double_out = str(round(result_value, decimal_places))
         
-        print(f"        ⚡ Calculated Random Multiplier Step Index: {random_step_multiplier}/{max_steps}")
-        print(f"        ➔ Computed Continuous Decimal Value Outcome: '{final_double_out}'")
         return final_double_out
     
 
@@ -1326,11 +1302,8 @@ class PrimeFactorsEntity(BaseEntity):
         🎯 COMPUTES PRIME FACTORS MATHEMATICALLY
         """
         n = self.resolve_numeric_value("number to factor", default_fallback=12)
-        print(f"    🔢 [PrimeFactorsEntity] Initiating factorization calculation workflow:")
-        print(f"        Target input digit to decompose: {n}")
 
         if n <= 1:
-            print(f"        ⚠️ Input number {n} is <= 1. No factorable matrix available.")
             return ""
 
         factors = []
@@ -1353,8 +1326,6 @@ class PrimeFactorsEntity(BaseEntity):
             factors.append(n)
 
         factors_result_str = ", ".join(str(f) for f in factors)
-        print(f"        ⚡ Factorization chain decomposition completed successfully:")
-        print(f"            {original_n} ➔ [{factors_result_str}]")
         return factors_result_str
 
 class FormulaEntity(BaseEntity):
@@ -1379,10 +1350,6 @@ class FormulaEntity(BaseEntity):
         self.runtime_values["variable substitution"] = solve_for_target
         self.runtime_values["variable to solve for"] = solve_for_target
 
-        print(f"    [FormulaEntity.is_valid] Runtime Values:")
-        print(f"        formula_expr: {repr(formula_expr)}")
-        print(f"        solve_method: {repr(solve_method)}")
-        print(f"        solve_for_target: {repr(solve_for_target)}")
 
         if not formula_expr:
             if solve_method in ['variable substitution', 'simplify']:
@@ -1398,10 +1365,8 @@ class FormulaEntity(BaseEntity):
             
             # Temporarily substitute macro tokens with an arbitrary integer for raw syntax evaluation
             clean_syntax_check = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', '1', implicit_clean_expr)
-            print(f"        Formula string before SymPy validation check: {repr(clean_syntax_check)}")
             is_valid_syntax, syntax_error_msg = SymPyAssessmentEngine.check_syntax_validity(clean_syntax_check)
             if not is_valid_syntax:
-                print(f"        ❌ SymPy Syntax Check Error found: {syntax_error_msg}")
                 self.errors["formula"] = syntax_error_msg
 
         parsed_variables = []
@@ -1470,14 +1435,8 @@ class FormulaEntity(BaseEntity):
         if solve_for_target in ["-- N/A --", "-- choose variable --"]:
             solve_for_target = ""
 
-        print(f"\n🚀 [FormulaEntity.evaluate_output] START ENGINE")
-        print(f"   ↳ Raw Formula input:   {repr(formula_str)}")
-        print(f"   ↳ Selected Method:     {repr(solve_method)}")
-        print(f"   ↳ Declared Variables:  {var_list}")
-        print(f"   ↳ Solve/Simplify Target: {repr(solve_for_target)}")
 
         if not formula_str:
-            print("   ⚠️ Empty formula string detected. Bailing early with '0'.")
             return "0"
 
         # Build local substitutions structures
@@ -1508,11 +1467,9 @@ class FormulaEntity(BaseEntity):
             return resolved
 
         processed_formula = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, formula_str)
-        print(f"   ↳ Post-Macro substitution string: {repr(processed_formula)}")
 
         # Inbound implicit math expansion immediately following macro expansion
         processed_formula = self.insert_implicit_multiplication(processed_formula)
-        print(f"   ↳ Post-Implicit multiplication expansion: {repr(processed_formula)}")
 
         local_dict = {var: sp.Symbol(var) for var in var_list}
         if 'pi' not in local_dict: local_dict['pi'] = sp.pi
@@ -1526,36 +1483,28 @@ class FormulaEntity(BaseEntity):
         # Helper method to parse single standalone chunk strings via SymPy safely
         def parse_segment(expr_str):
             s = str(expr_str).strip()
-            print(f"      🔬 [parse_segment] Input token segment string: {repr(s)}")
             
             if "\\" in s:
-                print("         ↳ Detected LaTeX patterns. Forwarding to parse_latex()")
                 return parse_latex(s)
             
             if is_fully_wrapped_tuple(s):
                 s = s[1:-1].strip()
-                print(f"         ↳ Stripped genuine external wrapper brackets: {repr(s)}")
                 
                 if '=' not in s:
                     # 🎯 FIXED: Use bracket-aware top-level comma splitting here too
                     comma_split = split_top_level_comma(s)
                     if comma_split:
                         s = f"{comma_split[0]} = {comma_split[1]}"
-                        print(f"         ↳ Re-aligned unassigned root-level comma tuple: {repr(s)}")
                 
             if '=' in s:
                 parts = re.split(r'(<=|>=|==|<|>|=)', s, 1)
                 if len(parts) >= 3:
                     s = parts[2].strip()
-                    print(f"         ↳ Assignment strip detected. Isolating right-hand side text: {repr(s)}")
                     
             try:
                 parsed_obj = sp.parse_expr(s, local_dict=local_dict, evaluate=False)
-                print(f"         ✅ [parse_segment] Success: {repr(parsed_obj)} (Type: {type(parsed_obj).__name__})")
                 return parsed_obj
             except Exception as segment_err:
-                print(f"         ❌ [parse_segment] CRASH compiling segment string: {repr(s)}")
-                print(f"            Details: {segment_err}")
                 raise segment_err
 
         # Helper to verify if the first '(' matches the final ')'
@@ -1604,12 +1553,9 @@ class FormulaEntity(BaseEntity):
         rel_op = rel_match.group(1) if has_relation else ""
         display_op = "=" if rel_op == "==" else rel_op
 
-        print(f"   ↳ Cleaned tracking string: {repr(processed_formula_clean)}")
-        print(f"   ↳ Relationship detection -> has_relation: {has_relation}, rel_op: {repr(rel_op)}")
 
         # 🎯 PROCESS SIMPLIFY STRATEGIES
         if solve_method == 'simplify':
-            print("   ⚙️ Route chosen: [simplify]")
             try:
                 if not solve_for_target:
                     if not has_relation:
@@ -1645,7 +1591,6 @@ class FormulaEntity(BaseEntity):
                             self.last_computed_sympy_result = solved_rel
                             return str(solved_rel)
                         except Exception as e:
-                            print(f"        ⚠️ Inequality solver fallback triggered: {e}")
                             solutions = sp.solve(equation, target_symbol)
                     else:
                         solutions = sp.solve(equation, target_symbol)
@@ -1665,22 +1610,17 @@ class FormulaEntity(BaseEntity):
                     return f"{solve_for_target} = {resolved_right_side}"
                     
             except Exception as eval_err:
-                print(f"   ❌ [CRITICAL simplify CRASH] Exception block caught: {eval_err}")
                 return processed_formula_clean
 
         # 🎯 RETAIN OTHER NATIVE SOLVE METHODS AS IS
         else:
-            print(f"   ⚙️ Route chosen: [{solve_method}] (Default Fallback Pipeline)")
             
             # This is the exact block that ran during your leave as formula execution!
             if has_relation and solve_method in ['leave as formula', 'variable substitution']:
-                print("      ↳ Block trigger: has_relation & (leave as formula / substitution)")
                 left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
-                print(f"        Executing split -> left_raw: {repr(left_raw)} || right_raw: {repr(right_raw)}")
                 parsed_expr = (parse_segment(left_raw), parse_segment(right_raw))
             
             elif has_relation and solve_method == 'leave as formula':
-                print("      ↳ Block trigger: has_relation & leave as formula exclusive split")
                 left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
                 left_parsed = parse_segment(left_raw)
                 right_parsed = parse_segment(right_raw)
@@ -1688,10 +1628,8 @@ class FormulaEntity(BaseEntity):
                 return f"{left_parsed} {display_op} {right_parsed}"
             
             else:
-                print("      ↳ Block trigger: Standard un-split single segment parse execution")
                 parsed_expr = parse_segment(processed_formula_clean)
 
-            print(f"   ↳ Pre-evaluation parsed expression object context: {repr(parsed_expr)}")
 
             if solve_method == 'expand polynomial':
                 result = sp.expand(parsed_expr.doit())
@@ -1724,10 +1662,8 @@ class FormulaEntity(BaseEntity):
                         return f"{parsed_expr[0]} {display_op} {parsed_expr[1]}"
                     result = parsed_expr
             else:
-                print("      ↳ Running base parsed_expr calculation assignment")
                 result = parsed_expr
 
-        print(f"   🎯 [SUCCESS] SymPy Final Computed Object: {repr(result)}")
         self.last_computed_sympy_result = result
         return str(result)
 
@@ -2364,7 +2300,11 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                             sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
 
                     except Exception as e:
-                        print(f"⚠️ Shared helper SymPy LaTeX conversion error: {str(e)}")
+                        logger.exception(
+                            "Failed converting formula result to LaTeX for token <%s>: %s",
+                            sequence_token,
+                            e,
+                        )
 
             # --- Unified Variable Extraction Pass (Formulas & Matrices) ---
             if sym_set:
@@ -2384,9 +2324,27 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                         extracted_vars.append(sym_str)
 
         except Exception as eval_err:
-            print(f"❌ Evaluation crash on <{sequence_token}>: {str(eval_err)}")
+            logger.exception(
+                "Entity evaluation failed for <%s> (%s): %s",
+                sequence_token,
+                archetype_name,
+                eval_err,
+            )
             evaluated_output = "⚠️ Error"
             latex_output = "⚠️ Error"
+            is_valid = False
+            # Field-scoped so the workspace banner and save draft path can surface it
+            error_field = "formula"
+            if archetype_name.lower().startswith("matrix"):
+                error_field = "matrix_data"
+            elif archetype_name == "graph":
+                error_field = "formulas"
+            errors = {
+                error_field: (
+                    f"Expression could not be evaluated after resolving linked "
+                    f"entities: {eval_err}"
+                )
+            }
     else:
         # Fallback parsing for invalid states
         try:

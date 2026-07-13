@@ -332,7 +332,8 @@ document.addEventListener("DOMContentLoaded", function() {
 
                     const data = await response.json();
                     if (!response.ok || !data.success) {
-                        alert(data.error || "Failed to persist nested structural positioning modification layouts.");
+                        console.error("Nested reorder failed:", data.error || response.status);
+                        alert(data.error || "Failed to save problem order.");
                     }
                 } catch (err) {
                     console.error("Nested sorting channel transaction linkage error:", err);
@@ -474,7 +475,7 @@ document.addEventListener("DOMContentLoaded", function() {
                         alert(`Failed to add problem: ${data.error}`);
                     }
                 } catch (err) {
-                    console.error(err);
+                    console.error("Assessment setup request failed:", err);
                     alert("A critical networking transmission failure occurred.");
                 } finally {
                     addBtn.disabled = false;
@@ -596,7 +597,7 @@ document.addEventListener("DOMContentLoaded", function() {
                         alert(`Failed to add problem group collection: ${data.error}`);
                     }
                 } catch (err) {
-                    console.error(err);
+                    console.error("Assessment setup request failed:", err);
                     alert("A critical networking transmission failure occurred while trying to append the item distribution row.");
                 }
                 return;
@@ -628,7 +629,7 @@ document.addEventListener("DOMContentLoaded", function() {
                             alert(`Error: ${data.error}`);
                         }
                     } catch (err) {
-                        console.error(err);
+                        console.error("Assessment setup request failed:", err);
                         alert("A network transmission error occurred during deletion.");
                     }
                 }
@@ -681,7 +682,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     alert(`Failed to save configuration: ${data.error}`);
                 }
             } catch (err) {
-                console.error(err);
+                console.error("Assessment setup request failed:", err);
                 alert("A transmission exception blocked saving the updated question selection parameters.");
             }
         });

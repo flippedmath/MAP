@@ -144,30 +144,25 @@ function bindEvents({ card, updateWorkspaceSimulationPreview }) {
     container.addEventListener('click', function(e) {
         const removeBtn = e.target.closest('.btn-remove-graph-formula');
         if (removeBtn) {
-            console.group("%c🗑️ [Graph UI Deletion] Remove Button Clicked", "background: #ef4444; color: white; padding: 2px 6px; border-radius: 4px;");
 
             const row = removeBtn.closest('.graph-formula-row');
             row.remove();
 
             const remainingRows = container.querySelectorAll('.val-graph-formula-expr');
-            console.log(`Remaining '.val-graph-formula-expr' inputs in DOM count: ${remainingRows.length}`);
 
             if (typeof updateWorkspaceSimulationPreview === 'function') {
                 updateWorkspaceSimulationPreview();
             }
 
             if (remainingRows.length > 0) {
-                console.log("Dispatching input event through remaining active input field control node...");
                 remainingRows[0].dispatchEvent(new Event('input', { bubbles: true }));
             } else {
                 const neighboringInput = card.querySelector('.val-graph-x-min');
                 if (neighboringInput) {
-                    console.log("No formulas left. Dispatching change through bounds element...");
                     neighboringInput.dispatchEvent(new Event('input', { bubbles: true }));
                 }
             }
 
-            console.groupEnd();
         }
     });
 
@@ -181,7 +176,6 @@ function evaluate({ card, visitedTokens = [], getLiveComponentValue }) {
     const graphEdges = getLiveComponentValue(card, 'edges', '[]', visitedTokens);
     const graphData = getLiveComponentValue(card, 'data', '', visitedTokens);
 
-    console.log(`%c📊 Graph entity parsed: Nodes: "${graphNodes}", Edges: "${graphEdges}"`, "color: #a6e3a1;");
 
     if (graphData && graphData !== '') {
         return graphData;
@@ -192,7 +186,6 @@ function evaluate({ card, visitedTokens = [], getLiveComponentValue }) {
 function serialize({ card, inputsCollected }) {
     if (!card || !inputsCollected) return inputsCollected;
 
-    console.group("%c💾 [Serializer] Packaging Graph Payload", "background: #3b82f6; color: white; padding: 2px 6px; border-radius: 4px;");
 
     const xMinVal = parseFloat(card.querySelector('.val-graph-x-min')?.value) || -5;
     const xMaxVal = parseFloat(card.querySelector('.val-graph-x-max')?.value) || 5;
@@ -240,8 +233,6 @@ function serialize({ card, inputsCollected }) {
     });
 
     inputsCollected["formulas"] = activeFormulas;
-    console.log("Final compiled fields payload object structure:", JSON.parse(JSON.stringify(inputsCollected)));
-    console.groupEnd();
 
     return inputsCollected;
 }
@@ -266,13 +257,10 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
         let rawOutput = result.evaluated_output;
         const tokenId = token || card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || 'graph';
 
-        console.group(`%c🔄 [Batch Sync] Redrawing Graph Component Card (${tokenId})`, "background: #10b981; color: white; padding: 2px 6px; border-radius: 4px;");
-        console.log("Raw evaluation response packet payload returned from processing pipeline:", rawOutput);
 
         if (typeof rawOutput === 'string' && rawOutput.startsWith('[Invalid')) {
             targetDisplay.style.textAlign = 'center';
             targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ ${rawOutput.replace(/[\[\]]/g, '')}</span>`;
-            console.groupEnd();
             return true;
         }
 
@@ -281,8 +269,6 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
             graphConfig = JSON.parse(graphConfig);
         }
 
-        console.log("Parsed Configuration targeting drawing engines:", graphConfig);
-        console.log("Formulas array length to process:", graphConfig?.formulas?.length, graphConfig?.formulas);
 
         targetDisplay.textContent = '';
         targetDisplay.style.textAlign = 'left';
@@ -299,11 +285,9 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
 
         const formulasArray = graphConfig.formulas || [];
         if (formulasArray.length === 0) {
-            console.log("Formulas list array is totally empty! Hiding canvas view.");
             canvasContainer.style.display = 'none';
             targetDisplay.style.textAlign = 'center';
             targetDisplay.innerHTML = `<span style="color: #64748b; font-size: 0.85rem; font-style: italic;">Enter a function formula above to render graph...</span>`;
-            console.groupEnd();
             return true;
         } else {
             canvasContainer.style.display = 'block';
@@ -311,15 +295,12 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
 
         graphConfig = sanitizeFormulas(graphConfig);
         if (typeof renderGraphComponentCanvas === 'function') {
-            console.log("Invoking canvas plotting coordinator with clean strings...");
             renderGraphComponentCanvas(canvasId, graphConfig);
         } else {
             throw new Error("The global abstraction engine 'renderGraphComponentCanvas' is missing.");
         }
-        console.groupEnd();
     } catch (err) {
-        console.error("Failed executing canvas plotter lifecycle:", err);
-        console.groupEnd();
+        console.error("Graph canvas render failed:", err);
         targetDisplay.style.textAlign = 'center';
         targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ System error compiling graph visualization structure.</span>`;
     }
@@ -346,7 +327,7 @@ function renderPreviewToken({ displayVal, cleanToken, renderGraphComponentCanvas
             </div>
         `;
     } catch (jsonErr) {
-        console.error("Malformed graph entity JSON stream block encountered during rendering pass:", jsonErr);
+        console.error("Malformed graph JSON; cannot render preview:", jsonErr);
         return `<span style="color: #ef4444; font-family: monospace;">[Malformed Graph State Data]</span>`;
     }
 }

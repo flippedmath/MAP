@@ -166,7 +166,7 @@ function parseSavedSubstitutions(savedValues = {}) {
                 });
             }
         } catch (err) {
-            console.warn('Matrix: failed to parse saved variables JSON', err);
+            console.warn("Failed parsing saved matrix variables JSON:", err);
         }
     }
 
@@ -404,7 +404,6 @@ function serialize({ card, inputsCollected }) {
     if (!card || !inputsCollected) return inputsCollected;
 
     const token = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || 'matrix';
-    console.group(`%c💾 [Serializer] Packaging Matrix Payload for [${token}]`, "background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px;");
 
     const rowsInput = card.querySelector('.val-matrix-rows');
     const colsInput = card.querySelector('.val-matrix-columns');
@@ -481,9 +480,6 @@ function serialize({ card, inputsCollected }) {
         delete inputsCollected["entries"];
     }
 
-    console.log("Compiled 2D grid matrix configuration:", structureGrid);
-    console.log("Compiled Matrix Variables payload dictionary:", inputsCollected["variables"]);
-    console.groupEnd();
 
     return inputsCollected;
 }
@@ -495,14 +491,12 @@ function applyBatchSync({ card, result, token }) {
     if (!targetDisplay) return null;
 
     const tokenId = token || card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') || 'matrix';
-    console.group(`%c🔄 [Batch Sync] Redrawing Matrix Component Card (${tokenId})`, "background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px;");
 
     let rawOutput = result.evaluated_output;
 
     if (typeof rawOutput === 'string' && rawOutput.startsWith('[Invalid')) {
         targetDisplay.style.textAlign = 'center';
         targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ ${rawOutput.replace(/[\[\]]/g, '')}</span>`;
-        console.groupEnd();
         return true;
     }
 
@@ -526,7 +520,6 @@ function applyBatchSync({ card, result, token }) {
         refreshMatrixUnusedVariablesPicker(card, [...new Set([...fromServer, ...fromCells])].sort());
     }
 
-    console.groupEnd();
     return true;
 }
 

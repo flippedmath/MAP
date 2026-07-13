@@ -437,7 +437,6 @@ function serialize({ card, inputsCollected }) {
     }
     inputsCollected["substitutions"] = substitutions;
 
-    console.log("Cleaned substitutions mapping payload: ", inputsCollected["substitutions"]);
     return inputsCollected;
 }
 
@@ -449,7 +448,7 @@ function applyBatchSync({ card, result }) {
         targetDisplay.style.textAlign = 'center';
         katex.render(result.latex_output, targetDisplay, { throwOnError: false });
     } else if (typeof katex === 'undefined') {
-        console.error("❌ KaTeX script dependencies are not present on page framework view layout.");
+        console.error("KaTeX is not loaded; formula preview/render will be unavailable.");
     }
     return true;
 }
