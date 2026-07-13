@@ -1,0 +1,29 @@
+---
+description: Postgres schema ownership and design guidance for unmanaged Django models
+alwaysApply: true
+---
+
+# Database schema (Django + Postgres)
+
+## Source of truth
+- Treat `math_assessment_platform/assessment_tool/models.py` as the current Postgres structure (tables via `db_table`, columns, FKs, uniqueness).
+- Do not invent row/content assumptions; reason about structure only.
+- Models were produced/maintained in an inspectdb style. Many use `Meta.managed = False`.
+
+## What `managed = False` means here
+- Django must **not** create/alter/drop these tables via migrations.
+- It does **not** mean the schema is frozen or off-limits.
+- The developer **owns** the Postgres database and can apply DDL outside Django when a better design is warranted.
+
+## When recommending work
+1. Prefer solutions that fit the existing schema when they are adequate.
+2. If a cleaner or more efficient design needs schema changes, **propose those changes**—do not avoid them because of `managed = False`.
+3. When proposing schema changes, include:
+   - Why the change is better (performance, integrity, simpler queries, clearer domain model)
+   - Concrete DDL (or equivalent migration steps applied outside Django’s auto-managed tables)
+   - Matching updates to `models.py` (fields, `Meta`, relationships), keeping `managed = False` unless explicitly asked to switch a table to Django-managed
+4. Never assume Django `makemigrations` / `migrate` will alter unmanaged tables.
+
+## Examples
+- Adequate existing design → implement with current models/queries only.
+- Better with a new index, column, or normalized table → recommend DDL + model sync, then application code.
