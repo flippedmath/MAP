@@ -985,10 +985,12 @@ class RandomIntegerEntity(BaseEntity):
         raw_max = str(self.data.get("max", ""))
 
         # These methods automatically trace and resolve dynamic dependencies like '<randInt1>'
-        min_val = self.resolve_numeric_value("min", default_fallback=-9)
+        min_val = self.resolve_numeric_value("min", default_fallback=1)
         max_val = self.resolve_numeric_value("max", default_fallback=9)
         step_val = self.resolve_numeric_value("step", default_fallback=1)
         exclude_raw = self.runtime_values.get("exclude", "")
+        if exclude_raw in (None,):
+            exclude_raw = self.data.get("exclude", "")
 
         # ---------------------------------------------------------------------
         # 🛡️ STATIC STRUCTURAL BLUEPRINT GUARDS (Before Evaluation)
@@ -1028,7 +1030,7 @@ class RandomIntegerEntity(BaseEntity):
                 upstream_inputs = target_payload.get("inputs", {})
                 try:
                     # 🎯 FIX 2: Double-cast float to int to prevent crashing on decimal strings
-                    upstream_min_bound = int(float(upstream_inputs.get("min", -9)))
+                    upstream_min_bound = int(float(upstream_inputs.get("min", 1)))
                     
                     # If upstream min plunges lower than our absolute local min floor, block the transaction
                     if upstream_min_bound < min_val:
@@ -1053,8 +1055,12 @@ class RandomIntegerEntity(BaseEntity):
         # ---------------------------------------------------------------------
         # EXCLUSION LEDGER PARSING LOGIC
         # ---------------------------------------------------------------------
-        if exclude_raw:
-            elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
+        if exclude_raw not in (None, ""):
+            if isinstance(exclude_raw, (list, tuple)):
+                elements = [str(item).strip() for item in exclude_raw if str(item).strip() != ""]
+            else:
+                elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
+
             parsed_integers = []
             for item in elements:
                 if re.match(r"^<([^>]+)>$", item):
@@ -1063,15 +1069,28 @@ class RandomIntegerEntity(BaseEntity):
                         parsed_integers.append(int(float(resolved_item)))
                         continue
                     except Exception:
-                        pass
-                        
+                        self.errors["exclude"] = (
+                            f"Linked exclude token '{item}' could not be resolved to an integer."
+                        )
+                        break
+
+                # Integers only (reject decimals / non-numeric text)
                 if not re.match(r"^-?\d+$", item):
-                    self.errors["exclude"] = f"Value '{item}' inside exclude filter is not a valid integer."
+                    self.errors["exclude"] = (
+                        f"Value '{item}' inside exclude filter is not a valid integer."
+                    )
                     break
                 parsed_integers.append(int(item))
-            
+
             if "exclude" not in self.errors:
                 self.runtime_values["exclude_array"] = parsed_integers
+                # Persist a normalized comma-separated form for EntitySegment content
+                self.cleaned_data["exclude"] = ", ".join(str(n) for n in parsed_integers)
+                self.runtime_values["exclude"] = self.cleaned_data["exclude"]
+        else:
+            self.runtime_values["exclude_array"] = []
+            self.cleaned_data["exclude"] = ""
+            self.runtime_values["exclude"] = ""
 
         return len(self.errors) == 0
 
@@ -1094,7 +1113,7 @@ class RandomIntegerEntity(BaseEntity):
                     print(f"        🎲 [RAND ENGINE LOCK] Found existing cached state '{cached_val}' for self. Keeping it.")
                     return cached_val
                 
-        min_val = int(self.resolve_numeric_value("min", default_fallback=-9))
+        min_val = int(self.resolve_numeric_value("min", default_fallback=1))
         max_val = int(self.resolve_numeric_value("max", default_fallback=9))
         step_val = int(self.resolve_numeric_value("step", default_fallback=1))
         exclude_set = set(self.runtime_values.get("exclude_array", []))

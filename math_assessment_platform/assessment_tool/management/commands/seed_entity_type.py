@@ -23,7 +23,7 @@ class Command(BaseCommand):
             "output": ["integer", "double"],
             "entity_name_list": "Dynamic Variables",
             "disabled": False,
-            "note": "Produces a random integer within the range {min} to {max} (inclusive) ignoring all comma-separated {exclude} values. {step} represents the interval between possible results."
+            "note": "Produces a random integer within the range {min} to {max} (inclusive). Use 'Add number to exclude' to omit specific integers from the result pool. {step} is the interval between possible results."
         },
         {
             "name": "Random Double",
