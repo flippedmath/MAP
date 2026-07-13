@@ -1,44 +1,43 @@
 import { processEntity as randIntProcessor } from './entities/randInt.js';
-// import { processEntity as randProcessor } from './entities/rand.js';
-// import { processEntity as primeFactorsProcessor } from './entities/primeFactors.js';
-// import { processEntity as formulaProcessor } from './entities/formula.js';
-// import { processEntity as matrixProcessor } from './entities/matrix.js';
-// import { processEntity as graphProcessor } from './entities/graph.js';
+import { processEntity as randProcessor } from './entities/rand.js';
+import { processEntity as primeFactorsProcessor } from './entities/primeFactors.js';
+import { processEntity as formulaProcessor } from './entities/formula.js';
+import { processEntity as matrixProcessor } from './entities/matrix.js';
+import { processEntity as graphProcessor } from './entities/graph.js';
+import { ensureLatexRenderBox } from './entities/helpers.js';
 
-
-
-// 1. Map tokens directly to their synchronous functions
+// Map tokens directly to their synchronous entity processors
 const ENTITY_REGISTRY = {
     'randInt': randIntProcessor,
-    // 'rand': randProcessor,
-    // 'primeFactors': primeFactorsProcessor,
-    // 'formula': formulaProcessor,
-    // 'matrix': matrixProcessor,
-    // 'graph': graphProcessor,
+    'rand': randProcessor,
+    'primeFactors': primeFactorsProcessor,
+    'formula': formulaProcessor,
+    'matrix': matrixProcessor,
+    'graph': graphProcessor,
 };
 
 
 /**
  * Processes a token synchronously using the pre-loaded registry.
- * 
+ *
  * @param {string} token - The token string (e.g., 'randInt')
  * @param {Object} contextData - Any data the entity file needs to do its job
  */
 function getEntityInformation(token, contextData) {
-    // 2. Check if the token processor exists in our registry
     const processor = ENTITY_REGISTRY[token];
-    
+
     if (!processor) {
-        console.warn(`Token "${token}" is not registered or supported.`);
-        return '';
+        if (contextData?.action === 'fieldsHtml') {
+            console.warn(`Token "${token}" is not registered or supported.`);
+        }
+        return null;
     }
 
     try {
-        // 3. Directly execute the synchronous function and return its string
         return processor(contextData);
     } catch (error) {
         console.error(`Failed to execute entity processor for token: ${token}`, error);
-        return '';
+        return null;
     }
 }
 
@@ -48,6 +47,11 @@ function getEntityInformation(token, contextData) {
 document.addEventListener('DOMContentLoaded', function() {
     const workspaceOverlay = document.getElementById('problem-workspace-overlay');
     if (!workspaceOverlay) return;
+
+    // One-time entity global listeners (e.g. matrix substitution picker)
+    Object.keys(ENTITY_REGISTRY).forEach(token => {
+        getEntityInformation(token, { action: 'initGlobalListeners' });
+    });
 
     const overlayTitleField = document.getElementById('overlay-problem-title-field');
     const closeOverlayBtn = document.getElementById('close-workspace-overlay');
@@ -187,30 +191,41 @@ document.addEventListener('DOMContentLoaded', function() {
 
             segments.forEach((segment, idx) => {
                 console.group(`Segment Iterator Node [Index: ${idx}] ➔ Processing: <${segment.token}>`);
-                const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
-                const targetContainer = isVariable ? variablesContainer : inputsContainer;
+                try {
+                    const isVariable = dynamicVarsTokens.some(item => item.token === segment.token);
+                    const targetContainer = isVariable ? variablesContainer : inputsContainer;
 
-                if (!targetContainer) {
-                    console.error("❌ Panel target DOM node reference lookup returned undefined. Skipping rehydration pass.");
+                    if (!targetContainer) {
+                        console.error("❌ Panel target DOM node reference lookup returned undefined. Skipping rehydration pass.");
+                        return;
+                    }
+
+                    removePlaceholders(targetContainer);
+
+                    const savedSequenceToken = segment.sequence_token;
+                    createTokenBadge(segment.token, savedSequenceToken);
+                    const latestCard = createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
+
+                    if (latestCard) {
+                        if (segment.simulated_value !== undefined && segment.simulated_value !== null) {
+                            latestCard.setAttribute('data-simulated-value', segment.simulated_value);
+                        }
+                        // Seed preview LaTeX immediately so the canvas does not wait on async batch sync
+                        if (segment.latex_output !== undefined && segment.latex_output !== null && segment.latex_output !== '') {
+                            latestCard.setAttribute('data-latex-output', segment.latex_output);
+                            if (savedSequenceToken) {
+                                formulaLiveLatexCache[savedSequenceToken] = segment.latex_output;
+                            }
+                        }
+                        if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
+                            latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
+                        }
+                    }
+                } catch (segmentErr) {
+                    console.error(`💥 Failed rehydrating segment <${segment?.sequence_token || segment?.token || idx}>:`, segmentErr);
+                } finally {
                     console.groupEnd();
-                    return;
                 }
-
-                removePlaceholders(targetContainer);
-                
-                const savedSequenceToken = segment.sequence_token; 
-                createTokenBadge(segment.token, savedSequenceToken);
-                const latestCard =createNewBlockInstanceUI(segment.token, targetContainer, segment.inputs, segment.points, savedSequenceToken);
-            
-                if (latestCard) {
-                    if (segment.simulated_value !== undefined) {
-                        latestCard.setAttribute('data-simulated-value', segment.simulated_value);
-                    }
-                    if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
-                        latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
-                    }
-                }
-                console.groupEnd();
             });
 
             // Run structural cleanups
@@ -219,9 +234,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Run calculation triggers
             if (typeof dispatchWorkspaceBatchSync === 'function') {
                 // Pass 'initial_load' instead of null to bypass the initialization block
-                dispatchWorkspaceBatchSync('initial_load');
-            } else {
-                updateWorkspaceSimulationPreview();
+                dispatchWorkspaceBatchSync('initial_load', { forceRefresh: true });
             }
 
         } catch (error) {
@@ -230,6 +243,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // 🔓 This block ALWAYS executes, saving the application state from lockouts
             isWorkspaceInitializing = false; 
             window.isHydratingWorkspace = false;
+            // Paint preview from seeded latex_output / simulated values before async batch returns
+            updateWorkspaceSimulationPreview();
             console.groupEnd();
         }
     }
@@ -290,310 +305,11 @@ document.addEventListener('DOMContentLoaded', function() {
             return val ?? fallback;
         };
 
-        let fieldsHtml = '';
-        // Add new entity Step 1: if new fields exist, then add the html here for the new entity
-        if (token === 'randInt') {
-            fieldsHtml = getEntityInformation(token, {
-                "action": "fieldsHtml",
-                "savedValues": savedValues 
-            });
-        } else if (token === 'rand') {
-            fieldsHtml = `
-                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
-                    <div class="linked-input-wrapper" data-input-key="min" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Min: <input type="number" step="any" class="val-input-min" value="${safeNumValue(savedValues.min, 0.0)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                        <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-                    <div class="linked-input-wrapper" data-input-key="max" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Max: <input type="number" step="any" class="val-input-max" value="${safeNumValue(savedValues.max, 1.0)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                        <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-                    <div class="linked-input-wrapper" data-input-key="step" data-input-type="double" style="position: relative; display: flex; align-items: flex-end; gap: 4px;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Step: <input type="number" step="any" class="val-input-step" value="${safeNumValue(savedValues.step, 0.01)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;"></label>
-                        <button type="button" class="btn-input-link-trigger" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-                </div>
-            `;
-        } else if (token === 'primeFactors') {
-            fieldsHtml = `
-                <div class="linked-input-wrapper" data-input-key="number to factor" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
-                    <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Number to Factor: 
-                        <input type="number" class="val-input-number" value="${safeNumValue(savedValues['number to factor'], 12)}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                    </label>
-                    <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                    <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                </div>
-            `;
-        }
-        else if (token === 'formula') {
-            fieldsHtml = `
-                <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
-                    
-                    <div class="linked-input-wrapper" data-input-key="formula" data-input-type="formula" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Formula expression string: 
-                            <input type="text" class="val-input-formula" value="${savedValues.formula || ''}" placeholder="e.g. 3*x + 5" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        </label>
-                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                        <div class="linked-input-wrapper" data-input-key="solve method" data-input-type="text" style="display: flex; flex-direction: column; gap: 4px;">
-                            <label style="font-size: 0.75rem; color: #475569;">Solve Method:</label>
-                            <select class="val-input-solve-method" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <option value="leave as formula" ${(savedValues['solve method'] || 'leave as formula') === 'leave as formula' ? 'selected' : ''}>leave as formula</option>
-                                <option value="simplify" ${savedValues['solve method'] === 'simplify' ? 'selected' : ''}>simplify</option>
-                                <option value="expand polynomial" ${savedValues['solve method'] === 'expand polynomial' ? 'selected' : ''}>expand polynomial</option>
-                                <option value="factor polynomial" ${savedValues['solve method'] === 'factor polynomial' ? 'selected' : ''}>factor polynomial</option>
-                                <option value="variable substitution" ${savedValues['solve method'] === 'variable substitution' ? 'selected' : ''}>variable substitution</option>
-                            </select>
-                        </div>
-
-                        <div class="linked-input-wrapper" data-input-key="variables" data-input-type="text">
-                            <label style="font-size: 0.75rem; color: #475569; display: block; width: 100%;">Variables (automatically extracted): 
-                                <input type="text" class="val-input-variables" value="${savedValues.variables || ''}" placeholder="e.g. x, y" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;" disabled readonly>
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="row-simplify-target linked-input-wrapper" data-input-key="variable to simplify" data-input-type="text" style="display: none; flex-direction: column; gap: 4px; width: 100%;">
-                        <label style="font-size: 0.75rem; color: #475569; width: 100%;">Target Variable to Simplify: 
-                            <select class="val-input-simplify-target" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                            </select>
-                        </label>
-                    </div>
-
-                    <div class="row-substitution-target linked-input-wrapper" data-input-key="variable to substitute" data-input-type="text" style="display: none; flex-direction: column; gap: 4px; width: 100%;">
-                        <label style="font-size: 0.75rem; color: #475569; width: 100%;">Target Variable to Replace: 
-                            <select class="val-input-substitution-target" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                            </select>
-                        </label>
-                    </div>
-
-                    <div class="row-variable-substitutions" style="display: none; flex-direction: column; gap: 6px; width: 100%; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
-                        <span style="font-size: 0.72rem; font-weight: 600; color: #475569;">Variable Substitutions / Evaluations:</span>
-                        <div class="substitutions-list-container" style="display: flex; flex-direction: column; gap: 6px;"></div>
-                        <div class="substitution-picker-wrapper" style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
-                            <span style="font-size: 0.75rem; color: #64748b;">Assign value to:</span>
-                            <select class="picker-unused-variables" style="flex-grow: 1; font-size: 0.75rem; padding: 3px; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569;">
-                            </select>
-                        </div>
-                    </div>
-
-                </div>
-            `;
-        } else if (token === 'graph') {
-            // Read saved formulas list array or structure a default element list array
-            const initialFormulas = Array.isArray(savedValues.formulas) ? savedValues.formulas : (savedValues.formulas ? [savedValues.formulas] : ['']);
-            const showGridChecked = savedValues.show_grid !== false;
-
-            // 🎯 BOUNDS RECOVERY FIX: Look for flat key values first, fall back to historical positional arrays if needed
-            const legacyX = savedValues['x-axis range'] || [];
-            const xMinVal = savedValues['x_min'] !== undefined ? savedValues['x_min'] : (legacyX[0] !== undefined ? legacyX[0] : '');
-            const xMaxVal = savedValues['x_max'] !== undefined ? savedValues['x_max'] : (legacyX[1] !== undefined ? legacyX[1] : '');
-            const xStepVal = savedValues['x_step'] !== undefined ? savedValues['x_step'] : (legacyX[2] !== undefined ? legacyX[2] : '');
-
-            const legacyY = savedValues['y-axis range'] || [];
-            const yMinVal = savedValues['y_min'] !== undefined ? savedValues['y_min'] : (legacyY[0] !== undefined ? legacyY[0] : '');
-            const yMaxVal = savedValues['y_max'] !== undefined ? savedValues['y_max'] : (legacyY[1] !== undefined ? legacyY[1] : '');
-            const yStepVal = savedValues['y_step'] !== undefined ? savedValues['y_step'] : (legacyY[2] !== undefined ? legacyY[2] : '');
-
-            fieldsHtml = `
-                <div style="display: flex; flex-direction: column; gap: 8px; width: 100%;">
-                    <!-- Dynamic List of Formula Inputs -->
-                    <div class="graph-formulas-container" style="display: flex; flex-direction: column; gap: 6px; width: 100%;">
-                        <span style="font-size: 0.75rem; font-weight: 600; color: #475569;">Formulas List:</span>
-                        ${initialFormulas.map((f, i) => `
-                            <div class="graph-formula-row" style="display: flex; align-items: center; gap: 4px; width: 100%;">
-                                <div class="linked-input-wrapper" data-input-key="formula_${i}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
-                                    <input type="text" class="val-graph-formula-expr" value="${f}" placeholder="e.g. y = x^2 or 3*x" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                                    <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                                    <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                                </div>
-                                ${i > 0 ? `<button type="button" class="btn-remove-graph-formula" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem;"><i class="fas fa-minus-circle"></i></button>` : ''}
-                            </div>
-                        `).join('')}
-                    </div>
-                    <button type="button" class="btn-add-graph-formula" style="align-self: flex-start; background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569; font-size: 0.72rem; padding: 3px 8px; cursor: pointer;"><i class="fas fa-plus"></i> Add Plot Line Formula</button>
-
-                    <div style="display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; margin-bottom: 4px;">
-                        <!-- Hidden variable input ensures serialization script keeps working out of view -->
-                        <input type="hidden" class="val-graph-variables" value="${savedValues.variables || 'x,y'}">
-                        
-                        <div style="display: flex; align-items: center; padding: 6px 0;">
-                            <label style="font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                                <input type="checkbox" class="val-graph-show-grid" ${showGridChecked ? 'checked' : ''} style="cursor: pointer;"> Visualize Grid Layout
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- Configurable Bounds Ranges -->
-                    <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed #cbd5e1; padding-top: 6px; margin-top: 4px;">
-                        <span style="font-size: 0.72rem; font-weight: 600; color: #64748b;">Axis Limits Configuration (Leave empty to Auto-Calculate):</span>
-                        
-                        <!-- X Axis Bounds -->
-                        <div style="display: grid; grid-template-columns: 45px repeat(3, 1fr); gap: 6px; align-items: center;">
-                            <span style="font-size: 0.75rem; color: #475569; font-weight: 500;">X-Axis:</span>
-                            <div class="linked-input-wrapper" data-input-key="x_min" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
-                                <input type="number" step="any" class="val-graph-x-min" value="${safeNumValue(xMinVal, '')}" placeholder="Min" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
-                            </div>
-                            <div class="linked-input-wrapper" data-input-key="x_max" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
-                                <input type="number" step="any" class="val-graph-x-max" value="${safeNumValue(xMaxVal, '')}" placeholder="Max" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
-                            </div>
-                            <div class="linked-input-wrapper" data-input-key="x_step" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
-                                <input type="number" step="any" class="val-graph-x-step" value="${safeNumValue(xStepVal, '')}" placeholder="Step" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
-                            </div>
-                        </div>
-
-                        <!-- Y Axis Bounds -->
-                        <div style="display: grid; grid-template-columns: 45px repeat(3, 1fr); gap: 6px; align-items: center;">
-                            <span style="font-size: 0.75rem; color: #475569; font-weight: 500;">Y-Axis:</span>
-                            <div class="linked-input-wrapper" data-input-key="y_min" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
-                                <input type="number" step="any" class="val-graph-y-min" value="${safeNumValue(yMinVal, '')}" placeholder="Min" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
-                            </div>
-                            <div class="linked-input-wrapper" data-input-key="y_max" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
-                                <input type="number" step="any" class="val-graph-y-max" value="${safeNumValue(yMaxVal, '')}" placeholder="Max" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
-                            </div>
-                            <div class="linked-input-wrapper" data-input-key="y_step" data-input-type="double" style="position: relative; display: flex; align-items: center; gap: 2px;">
-                                <input type="number" step="any" class="val-graph-y-step" value="${safeNumValue(yStepVal, '')}" placeholder="Step" style="width:100%; font-size:0.75rem; padding:3px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <button type="button" class="btn-input-link-trigger" style="background:#fff; border:1px solid #cbd5e1; border-radius:4px; color:#94a3b8; font-size:0.65rem; height:22px; width:22px; display:flex; align-items:center; justify-content:center; flex-shrink:0;"><i class="fas fa-link"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        } else if (token === 'matrix') {
-            const rowCount = parseInt(savedValues.rows) || 3;
-            const colCount = parseInt(savedValues.columns) || 3;
-            const currentCalcMode = savedValues.calculate || 'leave as matrix';
-            
-            const linkedMatrixToken = savedValues.linked_matrix || '';
-            const isLinked = !!linkedMatrixToken;
-            const linkedMatrixBToken = savedValues['matrix B'] || '';
-
-            let rawGrid = savedValues.matrix_data;
-            if (!Array.isArray(rawGrid)) {
-                rawGrid = Array.from({ length: rowCount }, (_, r) => 
-                    Array.from({ length: colCount }, (_, c) => (r === c ? "1" : "0"))
-                );
-            }
-
-            fieldsHtml = `
-                <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box;">
-                    
-                    <!-- Matrix Source Override Selector -->
-                    <div class="linked-input-wrapper" data-input-key="linked_matrix" data-input-type="matrix" style="position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; box-sizing: border-box; background: #f1f5f9; padding: 6px 8px; border-radius: 4px; border: 1px dashed #cbd5e1;">
-                        <div style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1;">
-                            <span style="font-size: 0.75rem; font-weight: 600; color: #334155;">Link Source Matrix Override</span>
-                            <span class="link-status-text" style="font-size: 0.75rem; color: ${isLinked ? '#0284c7' : '#64748b'}; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                ${isLinked ? `Linked to: ${linkedMatrixToken}` : 'Local Grid Active (Unlinked)'}
-                            </span>
-                        </div>
-                        <input type="hidden" class="val-matrix-linked" value="${linkedMatrixToken}">
-                        <div style="position: relative; display: flex; align-items: center; flex-shrink: 0;">
-                            <!-- 🎯 FIX: Added dynamic class, color, and icon mutations based on link state -->
-                            <button type="button" class="btn-input-link-trigger ${isLinked ? 'is-linked' : ''}" title="Link matrix token" style="background: #ffffff; border: 1px solid ${isLinked ? '#fca5a5' : '#cbd5e1'}; border-radius: 4px; color: ${isLinked ? '#ef4444' : '#94a3b8'}; cursor: pointer; font-size: 0.75rem; height: 28px; width: 28px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                                <i class="fas ${isLinked ? 'fa-times' : 'fa-link'}"></i>
-                            </button>
-                            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: auto; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 150px; padding: 4px 0; margin-top: 4px; box-sizing: border-box;"></div>
-                        </div>
-                    </div>
-
-                    <!-- Structured Variable Substitutions (Always Visible) -->
-                    <div class="row-variable-substitutions" style="display: flex; flex-direction: column; gap: 6px; width: 100%; border-bottom: 1px dashed #cbd5e1; padding-bottom: 8px; box-sizing: border-box;">
-                        <span style="font-size: 0.72rem; font-weight: 600; color: #475569;">Matrix Variable Substitutions:</span>
-                        <div class="substitutions-list-container" style="display: flex; flex-direction: column; gap: 6px;">
-                            <!-- Dynamic evaluation input rows go here -->
-                        </div>
-                        <div class="substitution-picker-wrapper" style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
-                            <span style="font-size: 0.75rem; color: #64748b;">Assign value to:</span>
-                            <select class="picker-unused-variables" style="flex-grow: 1; font-size: 0.75rem; padding: 3px; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569; background: white;">
-                                <!-- Populate dynamically using your variables extraction loop -->
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Local Grid Configuration Layout Block (Hidden when linked) -->
-                    <div class="matrix-local-grid-config-group" style="display: ${isLinked ? 'none' : 'flex'}; flex-direction: column; gap: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; box-sizing: border-box; width: 100%;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; box-sizing: border-box;">
-                            <div class="linked-input-wrapper" data-input-key="rows" data-input-type="integer" style="box-sizing: border-box;">
-                                <label style="font-size: 0.75rem; color: #475569; display: block; width: 100%;">Grid Rows:
-                                    <input type="number" min="1" max="10" class="val-matrix-rows" value="${rowCount}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                                </label>
-                            </div>
-                            <div class="linked-input-wrapper" data-input-key="columns" data-input-type="integer" style="box-sizing: border-box;">
-                                <label style="font-size: 0.75rem; color: #475569; display: block; width: 100%;">Grid Columns:
-                                    <input type="number" min="1" max="10" class="val-matrix-columns" value="${colCount}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="linked-input-wrapper" data-input-key="matrix_data" data-input-type="grid" style="display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box;">
-                            <span style="font-size: 0.75rem; font-weight: 500; color: #475569;">Matrix Indices Values:</span>
-                            <div class="matrix-grid-cells-container" style="display: grid; grid-template-columns: repeat(${colCount}, 1fr); gap: 4px; width: 100%; max-height: 180px; overflow-y: auto; padding: 2px; box-sizing: border-box;">
-                                ${Array.from({ length: rowCount }).map((_, r) => 
-                                    Array.from({ length: colCount }).map((_, c) => {
-                                        const val = (rawGrid[r] && rawGrid[r][c] !== undefined) ? rawGrid[r][c] : '0';
-                                        return `<input type="text" class="val-matrix-cell" data-row="${r}" data-col="${c}" value="${val}" style="width:100%; box-sizing:border-box; text-align:center; font-size:0.77rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px; font-family:monospace;">`;
-                                    }).join('')
-                                ).join('')}
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Operation Configuration Block -->
-                    <div style="display: grid; grid-template-columns: 1fr; gap: 8px; border-top: 1px dashed #cbd5e1; padding-top: 8px; box-sizing: border-box; width: 100%;">
-                        <div class="linked-input-wrapper" data-input-key="calculate" data-input-type="text" style="display: flex; flex-direction: column; gap: 4px; box-sizing: border-box; width: 100%;">
-                            <label style="font-size: 0.75rem; color: #475569; font-weight: 500;">Transformation Operation:</label>
-                            <select class="val-matrix-calculate" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                                <option value="leave as matrix" ${currentCalcMode === 'leave as matrix' ? 'selected' : ''}>leave as matrix</option>
-                                <option value="multiply" ${currentCalcMode === 'multiply' ? 'selected' : ''}>multiply (AxB)</option>
-                                <option value="add" ${currentCalcMode === 'add' ? 'selected' : ''}>add</option>
-                                <option value="subtract" ${currentCalcMode === 'subtract' ? 'selected' : ''}>subtract</option>
-                                <option value="inversion" ${currentCalcMode === 'inversion' ? 'selected' : ''}>inversion (A^-1)</option>
-                                <option value="transpose" ${currentCalcMode === 'transpose' ? 'selected' : ''}>transpose</option>
-                                <option value="scalar" ${currentCalcMode === 'scalar' ? 'selected' : ''}>scalar (A*c)</option>
-                                <option value="determinate" ${currentCalcMode === 'determinate' ? 'selected' : ''}>determinate</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Secondary Matrix Target Selection Box -->
-                    <div class="row-matrix-b-dependency linked-input-wrapper" data-input-key="matrix B" data-input-type="matrix" style="display: ${['multiply', 'add', 'subtract'].includes(currentCalcMode) ? 'flex' : 'none'}; position: relative; align-items: center; justify-content: space-between; gap: 8px; width: 100%; box-sizing: border-box; background: #f8fafc; padding: 6px 8px; border-radius: 4px; border: 1px solid #e2e8f0;">
-                        <div style="display: flex; flex-direction: column; min-width: 0; flex-grow: 1;">
-                            <span style="font-size: 0.75rem; font-weight: 600; color: #475569;">Secondary Matrix B Target</span>
-                            <span class="matrix-b-status-text" style="font-size: 0.75rem; color: ${linkedMatrixBToken ? '#16a34a' : '#ef4444'}; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                ${linkedMatrixBToken ? `Linked to: ${linkedMatrixBToken}` : 'Required: Select a matrix (e.g. matrix2)'}
-                            </span>
-                        </div>
-                        <input type="hidden" class="val-matrix-b-target" value="${linkedMatrixBToken}">
-                        <div style="position: relative; display: flex; align-items: center; flex-shrink: 0;">
-                            <!-- 🎯 FIXED: Replaced 'isLinked' with '!!linkedMatrixBToken' to correctly trigger class mutations and change the icon layout to fa-times -->
-                            <button type="button" class="btn-input-link-trigger ${linkedMatrixBToken ? 'is-linked' : ''}" title="Link matrix token" style="background: #ffffff; border: 1px solid ${linkedMatrixBToken ? '#fca5a5' : '#cbd5e1'}; border-radius: 4px; color: ${linkedMatrixBToken ? '#ef4444' : '#94a3b8'}; cursor: pointer; font-size: 0.75rem; height: 28px; width: 28px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                                <i class="fas ${linkedMatrixBToken ? 'fa-times' : 'fa-link'}"></i>
-                            </button>
-                            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: auto; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 150px; padding: 4px 0; margin-top: 4px; box-sizing: border-box;"></div>
-                        </div>
-                    </div>
-
-                    <!-- Scalar Multiplier Input Field -->
-                    <div class="row-matrix-scalar-dependency linked-input-wrapper" data-input-key="scalar" data-input-type="double" style="display: ${currentCalcMode === 'scalar' ? 'flex' : 'none'}; position: relative; align-items: flex-end; gap: 4px; width: 100%; box-sizing: border-box;">
-                        <label style="font-size: 0.75rem; color: #475569; flex-grow: 1; display: block; width: 100%;">Scalar Factor Multiplier (c): 
-                            <input type="number" step="any" class="val-matrix-scalar-factor" value="${savedValues.scalar !== undefined ? savedValues.scalar : 1.0}" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        </label>
-                    </div>
-
-                </div>
-            `;
-        } else {
+        let fieldsHtml = getEntityInformation(token, {
+            action: 'fieldsHtml',
+            savedValues
+        });
+        if (fieldsHtml === null || fieldsHtml === undefined || fieldsHtml === '') {
             fieldsHtml = `<p style="font-size:0.8rem; color:#64748b; margin:0;">Standard attributes container template wrapper.</p>`;
         }
 
@@ -602,7 +318,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <span style="font-weight: 600; font-size: 0.85rem; color: ${headerColor};"><i class="fas fa-cube"></i> &lt;${indexedTokenString}&gt;</span>
                 <div style="display: flex; align-items: center; gap: 8px;">
                     
-                    ${token !== 'primeFactors' ? `
+                    ${!getEntityInformation(token, { action: 'hideRefreshButton' }) ? `
                         <button type="button" class="btn-refresh-workspace-component-value" title="Shuffle simulation instance sample value" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, transform 0.15s;">
                             <i class="fas fa-redo-alt"></i>
                         </button>
@@ -642,145 +358,6 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="component-fields-wrapper">${fieldsHtml}</div>
         `;
 
-        if (token === 'formula') {
-            card.addEventListener('input', function() {
-                // console.log(`📝 Keystroke detected inside Formula expression container [${indexedTokenString}]. Triggering fast canvas preview re-render.`);
-                updateWorkspaceSimulationPreview();
-            });
-        }
-
-        // --- NEW BINDING LOGIC: Handle multi-formula arrays inside Graphs dynamically ---
-        if (token === 'graph') {
-            const container = card.querySelector('.graph-formulas-container');
-            const addBtn = card.querySelector('.btn-add-graph-formula');
-
-            addBtn.addEventListener('click', function() {
-                const rowIndex = container.querySelectorAll('.graph-formula-row').length;
-                const row = document.createElement('div');
-                row.className = 'graph-formula-row';
-                row.style.cssText = 'display: flex; align-items: center; gap: 4px; width: 100%; margin-top: 4px;';
-                row.innerHTML = `
-                    <div class="linked-input-wrapper" data-input-key="formula_${rowIndex}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
-                        <input type="text" class="val-graph-formula-expr" value="" placeholder="e.g. y = x^2 or 3*x" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
-                        <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                        <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                    </div>
-                    <button type="button" class="btn-remove-graph-formula" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem;"><i class="fas fa-minus-circle"></i></button>
-                `;
-                container.appendChild(row);
-                
-                // 🔄 Force structural recalculation for the new input row hook
-                updateWorkspaceSimulationPreview();
-            });
-
-            container.addEventListener('click', function(e) {
-                const removeBtn = e.target.closest('.btn-remove-graph-formula');
-                if (removeBtn) {
-                    console.group("%c🗑️ [Graph UI Deletion] Remove Button Clicked", "background: #ef4444; color: white; padding: 2px 6px; border-radius: 4px;");
-                    
-                    const row = removeBtn.closest('.graph-formula-row');
-                    row.remove();
-                    
-                    const remainingRows = container.querySelectorAll('.val-graph-formula-expr');
-                    console.log(`Remaining '.val-graph-formula-expr' inputs in DOM count: ${remainingRows.length}`);
-                    
-                    // 1. Instantly update the static rich-text workspace preview
-                    updateWorkspaceSimulationPreview();
-
-                    // 2. 🎯 THE ARCHITECTURAL CORRECTION:
-                    // Dispatch the event from a native input control so your global 
-                    // listener catches a valid e.target form element!
-                    if (remainingRows.length > 0) {
-                        console.log("Dispatching input event through remaining active input field control node...");
-                        remainingRows[0].dispatchEvent(new Event('input', { bubbles: true }));
-                    } else {
-                        // Fallback: If they deleted the last formula row, dispatch from a 
-                        // neighboring bounds numeric input element on the same card.
-                        const neighboringInput = card.querySelector('.val-graph-x-min');
-                        if (neighboringInput) {
-                            console.log("No formulas left. Dispatching change through bounds element...");
-                            neighboringInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        }
-                    }
-                    
-                    console.groupEnd();
-                }
-            });
-        }
-
-        // --- MATRIX ENGINE BINDING LOGIC: Handle runtime layout & visibility shifts ---
-        if (token === 'matrix') {
-            const rowsInput = card.querySelector('.val-matrix-rows');
-            const colsInput = card.querySelector('.val-matrix-columns');
-            const cellsContainer = card.querySelector('.matrix-grid-cells-container');
-            const linkedMatrixInput = card.querySelector('.val-matrix-linked');
-            const localGridGroup = card.querySelector('.matrix-local-grid-config-group');
-            const calcSelect = card.querySelector('.val-matrix-calculate');
-            
-            const matrixBRow = card.querySelector('.row-matrix-b-dependency');
-            const scalarRow = card.querySelector('.row-matrix-scalar-dependency');
-
-            // 1. Live Structural Layout Modifiers (Row / Column adjustment engine)
-            const reconstructGrid = () => {
-                if (!rowsInput || !colsInput || !cellsContainer) return;
-                
-                const rCount = Math.max(1, Math.min(10, parseInt(rowsInput.value) || 3));
-                const cCount = Math.max(1, Math.min(10, parseInt(colsInput.value) || 3));
-                
-                // Cache any currently typed out user values to preserve state during grid rebuild
-                const valueCache = {};
-                card.querySelectorAll('.val-matrix-cell').forEach(cell => {
-                    const r = cell.getAttribute('data-row');
-                    const c = cell.getAttribute('data-col');
-                    valueCache[`${r}_${c}`] = cell.value;
-                });
-
-                // Apply updated layout grid configurations
-                cellsContainer.style.gridTemplateColumns = `repeat(${cCount}, 1fr)`;
-                
-                let newCellsHtml = '';
-                for (let r = 0; r < rCount; r++) {
-                    for (let c = 0; c < cCount; c++) {
-                        // Recover existing value, fallback to standard identity calculation matrix value
-                        const cachedVal = valueCache[`${r}_${c}`];
-                        const defaultVal = cachedVal !== undefined ? cachedVal : (r === c ? "1" : "0");
-                        
-                        newCellsHtml += `
-                            <input type="text" class="val-matrix-cell" data-row="${r}" data-col="${c}" value="${defaultVal}" placeholder="0" title="Row ${r + 1}, Col ${c + 1}" style="width:100%; box-sizing:border-box; text-align:center; font-size:0.77rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px; font-family:monospace;">
-                        `;
-                    }
-                }
-                cellsContainer.innerHTML = newCellsHtml;
-                
-                // 🎯 FIX: Let the DOM events bubble naturally to the sync architecture instead of manually invoking an un-debounced sync step here!
-            };
-
-            // 🎯 FIX: Listen to 'input' so changes process instantly via your debouncer container shell frame
-            if (rowsInput) rowsInput.addEventListener('input', reconstructGrid);
-            if (colsInput) colsInput.addEventListener('input', reconstructGrid);
-
-            // 2. Conditional Form Visibility Evaluation Engine
-            card.addEventListener('input', function(e) {
-                // If a source matrix is linked, hide the local grid configuration context completely
-                if (e.target === linkedMatrixInput) {
-                    const hasLink = !!linkedMatrixInput.value.trim();
-                    localGridGroup.style.display = hasLink ? 'none' : 'flex';
-                }
-
-                // Contextually toggle dependency input groups based on the calculation transformation picked
-                if (e.target === calcSelect) {
-                    const mode = calcSelect.value;
-                    
-                    if (matrixBRow) {
-                        matrixBRow.style.display = ['multiply', 'add', 'subtract'].includes(mode) ? 'flex' : 'none';
-                    }
-                    if (scalarRow) {
-                        scalarRow.style.display = (mode === 'scalar') ? 'flex' : 'none';
-                    }
-                }
-            });
-        }
-
         const refreshIconBtn = card.querySelector('.btn-refresh-workspace-component-value');
         if (refreshIconBtn) {
             refreshIconBtn.onmouseenter = () => refreshIconBtn.style.color = '#0284c7';
@@ -802,46 +379,62 @@ document.addEventListener('DOMContentLoaded', function() {
             // console.log(`🎲 Generated persistent math randomization seed for [${indexedTokenString}]:`, freshSeed);
         }
 
-        if (token === 'formula') {
-            // console.log(`🔗 Executing deep sub-binding logic 'bindLiveFormulaEvaluation' for expression card.`);
-            bindLiveFormulaEvaluation(card, savedValues || {});
-        }
+        getEntityInformation(token, {
+            action: 'bindEvents',
+            card,
+            savedValues: savedValues || {},
+            updateWorkspaceSimulationPreview
+        });
 
         // console.log("🛠️ Scanning nested layout wrapper wrappers for pre-existing macro links...");
         const newlyCreatedWrappers = card.querySelectorAll(
             '.linked-input-wrapper:not(.substitutions-list-container .linked-input-wrapper)'
         );
         newlyCreatedWrappers.forEach(wrapper => {
-            const inputKey = wrapper.getAttribute('data-input-key');
-            const savedValue = savedValues[inputKey];
+            try {
+                const inputKey = wrapper.getAttribute('data-input-key');
+                const savedValue = savedValues[inputKey];
 
-            if (savedValue && typeof savedValue === 'string' && savedValue.trim().match(/^<([^>]+)>$/)) {
-                const cleanTokenString = savedValue.trim();
-                // console.log(`  📍 Found active dependency link row [${inputKey}] targeting: "${cleanTokenString}"`);
-                const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
-                
-                const labelEl = wrapper.querySelector('label');
-                if (labelEl) {
-                    labelEl.style.display = 'none';
-                } else {
-                    const inputEl = wrapper.querySelector('input, select');
-                    if (inputEl) inputEl.style.display = 'none';
+                if (savedValue && typeof savedValue === 'string' && savedValue.trim().match(/^<([^>]+)>$/)) {
+                    const cleanTokenString = savedValue.trim();
+                    // console.log(`  📍 Found active dependency link row [${inputKey}] targeting: "${cleanTokenString}"`);
+                    const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
+
+                    const labelEl = wrapper.querySelector('label');
+                    if (labelEl) {
+                        labelEl.style.display = 'none';
+                    } else {
+                        const inputEl = wrapper.querySelector('input:not([type="hidden"]), select');
+                        if (inputEl) inputEl.style.display = 'none';
+                    }
+
+                    wrapper.setAttribute('data-bound-token', cleanTokenString);
+
+                    // Avoid duplicate pills when matrix templates already render a linked state
+                    if (!wrapper.querySelector('.linked-token-pill')) {
+                        const pill = document.createElement('span');
+                        pill.className = 'linked-token-pill';
+                        pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
+                        pill.innerText = cleanTokenString;
+                        // linkBtn may live inside a nested relative wrapper (matrix B / linked_matrix)
+                        if (linkBtn && typeof linkBtn.before === 'function') {
+                            linkBtn.before(pill);
+                        } else if (linkBtn && linkBtn.parentNode) {
+                            linkBtn.parentNode.insertBefore(pill, linkBtn);
+                        } else {
+                            wrapper.appendChild(pill);
+                        }
+                    }
+
+                    if (linkBtn) {
+                        linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+                        linkBtn.className = 'btn-input-link-trigger is-linked';
+                        linkBtn.style.color = '#ef4444';
+                        linkBtn.style.borderColor = '#fca5a5';
+                    }
                 }
-                
-                wrapper.setAttribute('data-bound-token', cleanTokenString);
-
-                const pill = document.createElement('span');
-                pill.className = 'linked-token-pill';
-                pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
-                pill.innerText = cleanTokenString;
-                wrapper.insertBefore(pill, linkBtn);
-
-                if (linkBtn) {
-                    linkBtn.innerHTML = '<i class="fas fa-times"></i>';
-                    linkBtn.className = 'btn-input-link-trigger is-linked';
-                    linkBtn.style.color = '#ef4444';
-                    linkBtn.style.borderColor = '#fca5a5';
-                }
+            } catch (linkRestoreErr) {
+                console.warn('Failed restoring linked-token UI for wrapper; continuing card build.', linkRestoreErr);
             }
         });
 
@@ -947,456 +540,29 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         // 🎯 PRIORITY B: Local Calculation engines serve purely as a cold bootstrap backup if server state isn't injected yet
-        if (baseArchetype === 'randInt') {
-            const minStr = getLiveComponentValue(card, 'min', '-9', visitedTokens);
-            const maxStr = getLiveComponentValue(card, 'max', '9', visitedTokens);
-            const stepStr = getLiveComponentValue(card, 'step', '1', visitedTokens);
-
-            const minVal = parseInt(minStr, 10);
-            const maxVal = parseInt(maxStr, 10);
-            const stepVal = parseInt(stepStr, 10);
-            
-            if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-                const pool = [];
-                let current = minVal;
-                while (current <= maxVal) { pool.push(current); current += stepVal; }
-                
-                if (pool.length > 0) {
-                    const seedAttr = card.getAttribute('data-shuffle-seed');
-                    let targetIndex = 0;
-                    if (seedAttr) {
-                        targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
-                    } else {
-                        const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                        targetIndex = baseTextSeed % pool.length;
-                    }
-                    if (targetIndex >= pool.length) targetIndex = pool.length - 1;
-                    val = pool[targetIndex].toString();
-                }
-            }
-        } 
-        else if (baseArchetype === 'rand') {
-            const minStr = getLiveComponentValue(card, 'min', '0.0', visitedTokens);
-            const maxStr = getLiveComponentValue(card, 'max', '1.0', visitedTokens);
-            const stepStr = getLiveComponentValue(card, 'step', '0.01', visitedTokens);
-
-            const minVal = parseFloat(minStr);
-            const maxVal = parseFloat(maxStr);
-            const stepVal = parseFloat(stepStr);
-
-            if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-                const totalRange = maxVal - minVal;
-                const maxSteps = Math.floor((totalRange + 1e-9) / stepVal);
-
-                if (maxSteps >= 0) {
-                    const seedAttr = card.getAttribute('data-shuffle-seed');
-                    let targetStepMultiplier = 0;
-
-                    if (seedAttr) {
-                        targetStepMultiplier = Math.floor(parseFloat(seedAttr) * (maxSteps + 1));
-                    } else {
-                        const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                        targetStepMultiplier = baseTextSeed % (maxSteps + 1);
-                        if (isNaN(targetStepMultiplier)) targetStepMultiplier = 0;
-                    }
-
-                    if (targetStepMultiplier > maxSteps) targetStepMultiplier = maxSteps;
-                    if (targetStepMultiplier < 0) targetStepMultiplier = 0;
-
-                    let finalValue = minVal + (targetStepMultiplier * stepVal);
-                    if (finalValue > maxVal) finalValue = maxVal;
-
-                    const precisionStr = stepVal.toString();
-                    let decimalPlaces = 4;
-                    if (precisionStr.includes('.')) {
-                        decimalPlaces = precisionStr.split('.')[1].length;
-                    }
-                    val = finalValue.toFixed(decimalPlaces);
-                }
-            }
-        } 
-        else if (baseArchetype === 'primeFactors') {
-            const numStr = getLiveComponentValue(card, 'number to factor', '12', visitedTokens);
-            let targetNum = parseInt(numStr, 10);
-            
-            if (!isNaN(targetNum) && targetNum > 1) {
-                const factors = [];
-                while (targetNum % 2 === 0) {
-                    factors.push(2);
-                    targetNum = Math.floor(targetNum / 2);
-                }
-                let factor = 3;
-                while (factor * factor <= targetNum) {
-                    while (targetNum % factor === 0) {
-                        factors.push(factor);
-                        targetNum = Math.floor(targetNum / factor);
-                    }
-                    factor += 2;
-                }
-                if (targetNum > 1) {
-                    factors.push(targetNum);
-                }
-                val = factors.join(', ');
-            } else {
-                val = "";
-            }
-        }
-        else if (baseArchetype === 'formula') {
-            if (window.formulaLiveLatexCache && window.formulaLiveLatexCache[tokenIdentifier]) {
+        const evaluated = getEntityInformation(baseArchetype, {
+            action: 'evaluate',
+            card,
+            tokenIdentifier,
+            visitedTokens,
+            getLiveComponentValue,
+            formulaLiveLatexCache
+        });
+        if (evaluated !== null && evaluated !== undefined) {
+            // Formula evaluate may return early via cache/string — short-circuit like original
+            if (baseArchetype === 'formula') {
                 console.groupEnd();
-                return window.formulaLiveLatexCache[tokenIdentifier];
+                return evaluated;
             }
-            
-            // Formulas accept dynamic variable evaluations safely via input keys
-            const formulaStr = getLiveComponentValue(card, 'formula', tokenIdentifier, visitedTokens);
-            console.groupEnd();
-            return formulaStr;
+            val = evaluated;
         }
-        // 🛠️ ADDED: Graph Archetype Entity Evaluation Engine
-        else if (baseArchetype === 'graph') {
-            // Fetch live data metrics via the graph component keys
-            const graphNodes = getLiveComponentValue(card, 'nodes', '[]', visitedTokens);
-            const graphEdges = getLiveComponentValue(card, 'edges', '[]', visitedTokens);
-            const graphData  = getLiveComponentValue(card, 'data', '', visitedTokens);
 
-            console.log(`%c📊 Graph entity parsed: Nodes: "${graphNodes}", Edges: "${graphEdges}"`, "color: #a6e3a1;");
-
-            // Format a clean trace summary for the engine's text layer resolution
-            if (graphData && graphData !== '') {
-                val = graphData;
-            } else {
-                val = `Graph(${graphNodes || 'empty'}, ${graphEdges || 'empty'})`;
-            }
-        }
 
         // Final Output Summary Resolution (Fallback check if local engine rules fell through)
         const finalReturnedValue = (val !== null && val !== undefined && val !== '') ? val : tokenIdentifier;
         console.groupEnd();
 
         return finalReturnedValue;
-    }
-
-    function bindLiveFormulaEvaluation(card, savedValues = {}) {
-        if (card.getAttribute('data-formula-listener-bound') === 'true') {
-            return;
-        }
-        card.setAttribute('data-formula-listener-bound', 'true');
-
-        const variablesField = card.querySelector('.val-input-variables');
-        const solveMethodSelect = card.querySelector('.val-input-solve-method');
-        
-        // 🎯 Modern UI Rows and Dropdown Selectors
-        const simplifyWrapper = card.querySelector('.row-simplify-target');
-        const simplifySelect = card.querySelector('.val-input-simplify-target');
-        
-        const substitutionsWrapper = card.querySelector('.row-variable-substitutions');
-        const substitutionWrapper = card.querySelector('.row-substitution-target');
-        const substitutionSelect = card.querySelector('.val-input-substitution-target');
-        
-        const substitutionsContainer = card.querySelector('.substitutions-list-container');
-        const unusedVariablesPicker = card.querySelector('.picker-unused-variables');
-
-        const initialMethod = solveMethodSelect?.value || "leave as formula";
-        card.setAttribute('data-last-method', initialMethod);
-
-        if (variablesField) {
-            variablesField.disabled = true;
-            variablesField.readOnly = true;
-            variablesField.style.backgroundColor = '#f1f5f9';
-            variablesField.style.cursor = 'not-allowed';
-        }
-
-        // 🎯 NEW HELPER: Extract variables recursively if pointing to a linked token
-        function extractVariablesFromFormulaString(formulaStr) {
-            if (!formulaStr) return [];
-            
-            const cleanStr = formulaStr.trim();
-            const tokenMatch = cleanStr.match(/^<([^>]+)>$/);
-            
-            if (tokenMatch) {
-                const targetTokenIndexName = tokenMatch[1].strip ? tokenMatch[1].strip() : tokenMatch[1];
-                const sourceCard = document.querySelector(`[data-indexed-token="${targetTokenIndexName}"], [data-token="${targetTokenIndexName}"]`);
-                if (sourceCard) {
-                    const sourceVarsInput = sourceCard.querySelector('.val-input-variables');
-                    if (sourceVarsInput && sourceVarsInput.value) {
-                        return sourceVarsInput.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
-                    }
-                }
-                return [];
-            }
-
-            // 1. Regex pattern for lowercase Greek letters
-            const greekRegexStr = '^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)';
-            
-            // 2. Grab all alphanumeric/underscore word blocks to inspect
-            const allWordMatches = formulaStr.match(/\b[a-zA-Z][a-zA-Z0-9_]*\b/g) || [];
-            
-            // 3. Filter using the updated structural rules
-            const variableMatches = allWordMatches.filter(word => {
-                const lowerWord = word.toLowerCase();
-
-                // 🎯 FIX: Reject standalone uppercase E and I constants
-                if (word === 'E' || word === 'I') return false;
-
-                // Condition A: Single character patterns (x, x3, x_3)
-                if (/^[a-zA-Z][0-9]*$/.test(word)) return true;
-                if (/^[a-zA-Z]_[0-9]+$/.test(word)) return true;
-                
-                // Condition B: Greek letter patterns (alpha, alpha3, alpha_3)
-                if (new RegExp(greekRegexStr + '$').test(lowerWord)) return true;
-                if (new RegExp(greekRegexStr + '_[0-9]+$').test(lowerWord)) return true;
-                if (new RegExp(greekRegexStr + '[0-9]+$').test(lowerWord)) return true;
-                
-                return false;
-            });
-            
-            return [...new Set(variableMatches)];
-        }
-
-        // 🎯 NEW HELPER: Core calculation sequence to sync and update dropdown structures
-        function updateVariablesIndexAndSyncUI(preserveExistingVars = false) {
-            const formulaInput = card.querySelector('.val-input-formula');
-            if (!formulaInput || !variablesField) return;
-
-            // Only run the dynamic DOM extractor if we aren't loading from the database
-            if (!preserveExistingVars) {
-                const extractedVars = extractVariablesFromFormulaString(formulaInput.value);
-                variablesField.value = extractedVars.join(', ');
-            }
-
-            syncSolveForDropdown();
-            refreshUnusedVariablesPicker();
-        }
-
-        // Alternates visibility matching your active layout contexts
-        function syncSolveForDropdown() {
-            const selectedMethod = solveMethodSelect?.value || "leave as formula";
-            const previousMethod = card.getAttribute('data-last-method') || "";
-
-            // If switching away from variable substitution, clear out evaluation entries list
-            if (previousMethod === 'variable substitution' && selectedMethod !== 'variable substitution') {
-                if (substitutionsContainer) substitutionsContainer.innerHTML = '';
-                refreshUnusedVariablesPicker();
-            }
-            card.setAttribute('data-last-method', selectedMethod);
-
-            // Hide everything by default first
-            if (simplifyWrapper) simplifyWrapper.style.display = 'none';
-            if (substitutionWrapper) substitutionWrapper.style.display = 'none';
-            if (substitutionsWrapper) substitutionsWrapper.style.display = 'none';
-
-            // Enable matching nodes conditionally
-            if (selectedMethod === 'simplify') {
-                if (simplifyWrapper) simplifyWrapper.style.display = 'flex';
-                if (substitutionSelect) substitutionSelect.value = ""; 
-
-                // 🎯 FIX: Clear selection memory on the card & reset the select element's value 
-                // to break the automatic fallback matching loop.
-                card.removeAttribute('data-selected-variable');
-                if (simplifySelect) simplifySelect.value = "";
-
-                populateVariablesDropdown(simplifySelect);
-            } 
-            else if (selectedMethod === 'variable substitution') {
-                if (substitutionsWrapper) substitutionsWrapper.style.display = 'flex';
-                
-                // Clear out values on the unneeded selects
-                if (simplifySelect) simplifySelect.value = ""; 
-                if (substitutionSelect) substitutionSelect.value = "";
-                
-                refreshUnusedVariablesPicker();
-            }
-            else {
-                if (simplifySelect) simplifySelect.value = "";
-                if (substitutionSelect) substitutionSelect.value = "";
-            }
-        }
-
-        // ✅ REFACTORED TO ONE FUNCTION: Accepts a target element to update seamlessly
-        function populateVariablesDropdown(targetSelectElement) {
-            if (!targetSelectElement || !variablesField) return;
-            
-            const currentVars = variablesField.value.split(',')
-                .map(v => v.trim())
-                .filter(v => v.length > 0);
-
-            const savedTarget = savedValues['variable to solve for'] || "";
-            
-            targetSelectElement.innerHTML = '<option value="">-- N/A --</option>';
-            currentVars.forEach(v => {
-                const opt = document.createElement('option');
-                opt.value = v;
-                opt.textContent = v;
-                if (v === savedTarget) {
-                    opt.selected = true;
-                }
-                targetSelectElement.appendChild(opt);
-            });
-        }
-
-        function refreshUnusedVariablesPicker() {
-            if (!variablesField || !unusedVariablesPicker) return;
-
-            const allVars = variablesField.value.split(',')
-                .map(v => v.trim())
-                .filter(v => v.length > 0);
-
-            const currentlyAssignedVars = Array.from(substitutionsContainer.querySelectorAll('.substitution-row-item'))
-                .map(row => row.getAttribute('data-var-name'));
-
-            const unusedVars = allVars.filter(v => !currentlyAssignedVars.includes(v));
-
-            if (unusedVars.length === 0) {
-                unusedVariablesPicker.parentElement.style.display = 'none'; 
-            } else {
-                unusedVariablesPicker.parentElement.style.display = 'flex';
-                unusedVariablesPicker.innerHTML = '<option value="">-- N/A --</option>';
-                unusedVars.forEach(v => {
-                    const opt = document.createElement('option');
-                    opt.value = v;
-                    opt.textContent = v;
-                    unusedVariablesPicker.appendChild(opt);
-                });
-            }
-        }
-
-        function createSubstitutionRow(varName, initialValue = "", silent = false) {
-            if (substitutionsContainer.querySelector(`[data-var-name="${varName}"]`)) {
-                return;
-            }
-
-            const row = document.createElement('div');
-            row.className = 'substitution-row-item';
-            row.setAttribute('data-var-name', varName);
-            row.style.cssText = 'display: flex; align-items: center; gap: 6px; width: 100%; margin-bottom: 4px;';
-
-            row.innerHTML = `
-                <span style="font-size: 0.8rem; font-family: monospace; font-weight: bold; min-width: 24px; text-align: right; color: #334155;">${varName} =</span>
-                
-                <div class="linked-input-wrapper" data-input-key="sub_${varName}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
-                    <input type="text" class="val-substitution-input" value="${initialValue}" placeholder="Value or expression" style="flex-grow: 1; font-size: 0.8rem; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px;">
-                    <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.7rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
-                    <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
-                </div>
-
-                <button type="button" class="btn-delete-substitution-row" title="Remove assignment" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 4px; transition: color 0.15s;"><i class="fas fa-times-circle"></i></button>
-            `;
-
-            const delBtn = row.querySelector('.btn-delete-substitution-row');
-            delBtn.addEventListener('click', () => {
-                row.remove();
-                refreshUnusedVariablesPicker();
-                card.dispatchEvent(new Event('change', { bubbles: true }));
-            });
-
-            substitutionsContainer.appendChild(row);
-            refreshUnusedVariablesPicker();
-            // Only dispatch if we aren't performing a silent hydration pass
-            if (!silent) {
-                card.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-        }
-
-        if (unusedVariablesPicker) {
-            unusedVariablesPicker.addEventListener('change', function() {
-                const pickedVar = this.value;
-                if (!pickedVar) return;
-                createSubstitutionRow(pickedVar);
-                this.value = ""; 
-            });
-        }
-
-        // Load sequence
-        if (savedValues && Object.keys(savedValues).length > 0) {
-            if (solveMethodSelect && savedValues['solve method']) {
-                solveMethodSelect.value = savedValues['solve method'];
-                card.setAttribute('data-last-method', savedValues['solve method']);
-            }
-
-            // 🎯 FIX: Hydrate the variables field directly from the database payload BEFORE syncing
-            if (variablesField && savedValues['variables']) {
-                variablesField.value = savedValues['variables'];
-            }
-
-            const incomingVal = savedValues['variable to solve for'] || "";
-            if (incomingVal) {
-                if (simplifySelect) simplifySelect.setAttribute('data-saved-value', incomingVal);
-                if (substitutionSelect) substitutionSelect.setAttribute('data-saved-value', incomingVal);
-            }
-
-            // 🎯 FIX: Force-refresh UI, but TELL it to keep the loaded variables we just injected
-            updateVariablesIndexAndSyncUI(true);
-
-            Object.entries(savedValues).forEach(([key, vVal]) => {
-                if (key.startsWith('sub_')) {
-                    createSubstitutionRow(key.replace('sub_', ''), vVal, true);
-                }
-            });
-            // 🎯 OMNIBUS UPDATE: Fire exactly ONE update event now that the card is fully built
-            card.dispatchEvent(new Event('change', { bubbles: true }));
-        } else {
-            // Only do a raw dynamic DOM extraction if there are no saved values (brand new card)
-            updateVariablesIndexAndSyncUI();
-        }
-
-        // CAPTURE CARD INPUT MUTATIONS AND BUBBLE FRESH EVENTS UPSTREAM
-        card.addEventListener('input', (e) => {
-            const target = e.target;
-
-            if (!target.matches('.val-input-formula, .val-input-solve-method, .val-input-simplify-target, .val-input-substitution-target, .val-substitution-input')) {
-                return;
-            }
-
-            if (target.matches('.val-input-simplify-target')) {
-                card.setAttribute('data-selected-variable', target.value);
-                refreshUnusedVariablesPicker();
-                card.dispatchEvent(new Event('change', { bubbles: true }));
-                return;
-            }
-
-            if (target.matches('.val-substitution-input')) {
-                target.setAttribute('value', target.value);
-            }
-
-            if (target.matches('.val-input-solve-method')) {
-                const solveMethod = target.value;
-                const simplifyDropdownContainer = card.querySelector('.val-input-simplify-target')?.closest('.form-group, .input-row, div');
-                
-                if (simplifyDropdownContainer) {
-                    if (solveMethod === 'variable substitution') {
-                        simplifyDropdownContainer.style.display = 'none';
-                        card.removeAttribute('data-selected-variable'); 
-                    } else {
-                        simplifyDropdownContainer.style.display = ''; 
-                    }
-                }
-            }
-
-            // 🎯 FIX: Route changes to formula inputs through our look-up resolver 
-            if (target.matches('.val-input-formula')) {
-                updateVariablesIndexAndSyncUI();
-            } else {
-                syncSolveForDropdown();
-                refreshUnusedVariablesPicker();
-            }
-
-            card.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-
-        if (solveMethodSelect) {
-            solveMethodSelect.addEventListener('change', () => {
-                syncSolveForDropdown();
-                card.dispatchEvent(new Event('change', { bubbles: true }));
-            });
-        }
-
-        [simplifySelect, substitutionSelect].forEach(selectEl => {
-            if (selectEl) {
-                selectEl.addEventListener('change', () => {
-                    card.dispatchEvent(new Event('change', { bubbles: true }));
-                });
-            }
-        });
     }
 
     // -------------------------------------------------------------
@@ -1503,12 +669,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (isVar) {
                     let displayVal = formulaLiveLatexCache[cleanToken];
 
-                    // 🎯 FIX 2: Defend against server stomping mathematical values into "0" or "???"
-                    const isServerValueValid = displayVal !== undefined && displayVal !== null && displayVal !== '' && displayVal !== '0' && displayVal !== '???';
+                    // Prefer server/cached LaTeX; never treat valid latex "0" as missing
+                    const isServerValueValid = displayVal !== undefined && displayVal !== null && displayVal !== '' && displayVal !== '???';
 
-                    if (baseArchetypeToken === 'formula') {
+                    if (baseArchetypeToken === 'formula' || baseArchetypeToken === 'matrix') {
                         if (!isServerValueValid && card) {
-                            displayVal = card.getAttribute('data-simulated-value') || cleanToken;
+                            displayVal = card.getAttribute('data-latex-output')
+                                || card.getAttribute('data-simulated-value')
+                                || cleanToken;
                         }
                     } else {
                         // FORCE math generators (rand, randInt, primeFactors) to compute purely client-side
@@ -1524,7 +692,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                 currentNumberInput: card.querySelector('.val-input-number')?.value,
                                 wrapperBoundToken: card.querySelector('.linked-input-wrapper')?.getAttribute('data-bound-token')
                             });
-                            displayVal = evaluateSingleCardOutput(card, cleanToken);
+                            // Prefer loaded latex when present; otherwise live-evaluate
+                            const loadedLatex = card.getAttribute('data-latex-output') || formulaLiveLatexCache[cleanToken];
+                            if (loadedLatex && loadedLatex !== '???' && loadedLatex !== '') {
+                                displayVal = loadedLatex;
+                            } else {
+                                displayVal = evaluateSingleCardOutput(card, cleanToken);
+                            }
                         } else {
                             // 🔍 ADD THIS WARNING HERE:
                             console.warn(`⚠️ [Canvas Render Warning] Token "${cleanToken}" matched a known archetype list, but its workspace card DOM node could not be found on the page.`);
@@ -1539,39 +713,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.log(`%c✔ Render Success -> Target Replacement: "${match}" -> Computed Result Value: "${displayVal}"`, "color: #16a34a; font-weight: bold;");
                     console.groupEnd();
 
-                    // 🎯 STEP 1: Handle Formula Math text rendering
-                    if (baseArchetypeToken === 'formula') {
-                        return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
-                    }
-                    // 🎯 STEP 2: Handle Live Dynamic Graph Rendering
-                    else if (baseArchetypeToken === 'graph') {
-                        try {
-                            const graphConfig = typeof displayVal === 'string' ? JSON.parse(displayVal) : displayVal;
-                            const previewCanvasId = `live-preview-canvas-${cleanToken}`;
-                            
-                            // 👇 SANITIZE FORMULAS: Convert ** to ^ so the preview engine can read them
-                            if (graphConfig && graphConfig.formulas) {
-                                graphConfig.formulas = graphConfig.formulas.map(fStr => {
-                                    let rhs = fStr.split('=')[1] || fStr;
-                                    return rhs.replace(/\*\*/g, '^').trim();
-                                });
-                            }
-
-                            setTimeout(() => {
-                                if (typeof renderGraphComponentCanvas === 'function') {
-                                    renderGraphComponentCanvas(previewCanvasId, graphConfig);
-                                }
-                            }, 0);
-
-                            return `
-                                <div class="simulated-live-graph-preview-container" style="display: block; margin: 12px auto; max-width: 360px; padding: 8px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
-                                    <div id="${previewCanvasId}" style="display: flex; justify-content: center; width: 100%;"></div>
-                                </div>
-                            `;
-                        } catch (jsonErr) {
-                            console.error("Malformed graph entity JSON stream block encountered during rendering pass:", jsonErr);
-                            return `<span style="color: #ef4444; font-family: monospace;">[Malformed Graph State Data]</span>`;
-                        }
+                    // Delegate entity-specific preview rendering (formula, graph, etc.)
+                    const previewHtml = getEntityInformation(baseArchetypeToken, {
+                        action: 'renderPreviewToken',
+                        displayVal,
+                        cleanToken,
+                        card,
+                        renderGraphComponentCanvas
+                    });
+                    if (previewHtml) {
+                        return previewHtml;
                     }
 
                     // 🎯 STEP 3: Fallback for all other standard variable badges (rand, randInt, etc)
@@ -1678,231 +829,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
 
-            // 3. ARCHETYPE SPECIFIC OVERRIDES: Apply specialized structure extensions ONLY to formula types
-            if (baseArchetypeToken === 'formula') {
-                const solveMethod = card.querySelector('.val-input-solve-method')?.value || "leave as formula";
-                inputsCollected["solve method"] = solveMethod;
-                
-                // 🎯 FORCE LIVE VALUE EVALUATION VIA COMBINED SELECTORS
-                const simplifySelect = card.querySelector('.val-input-simplify-target');
-                const substitutionSelect = card.querySelector('.val-input-substitution-target');
-
-                // Read values directly using indexed selections to bypass timing delays
-                const simplifyVal = simplifySelect && simplifySelect.selectedIndex >= 0 ? 
-                                    simplifySelect.options[simplifySelect.selectedIndex].value : "";
-                                    
-                const substitutionVal = substitutionSelect && substitutionSelect.selectedIndex >= 0 ? 
-                                        substitutionSelect.options[substitutionSelect.selectedIndex].value : "";
-
-                // 🎯 Explicitly save these back to the payload keys
-                inputsCollected["variable to simplify"] = simplifyVal;
-                inputsCollected["variable to substitute"] = substitutionVal;
-
-                // 🎯 Unify the active value under a single backend variable namespace for Python processing
-                const chosenTarget = (solveMethod === 'simplify') ? simplifyVal : ((solveMethod === 'variable substitution') ? substitutionVal : "");
-                inputsCollected["variable substitution"] = chosenTarget;
-                inputsCollected["variable to solve for"] = chosenTarget;
-
-                // Build sub-entries list for assignments mapping
-                const substitutions = {};
-                const subsContainer = card.querySelector('.substitutions-list-container');
-                if (subsContainer && solveMethod === 'variable substitution') {
-                    subsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
-                        const vName = row.getAttribute('data-var-name');
-                        if (!vName) return;
-
-                        // Locate the wrapper element holding the states
-                        const inputWrapper = row.querySelector('.linked-input-wrapper');
-                        const tokenPill = inputWrapper ? inputWrapper.querySelector('.linked-token-pill') : null;
-                        const nativeInput = inputWrapper ? inputWrapper.querySelector('input') : null;
-
-                        let rawTokenValue = "";
-                        let isLinkedToken = false; // 🎯 TRACK ORIGIN
-
-                        if (inputWrapper && inputWrapper.hasAttribute('data-bound-token')) {
-                            rawTokenValue = inputWrapper.getAttribute('data-bound-token');
-                            isLinkedToken = true;
-                        } else if (tokenPill) {
-                            rawTokenValue = tokenPill.getAttribute('data-indexed-token') || tokenPill.textContent;
-                            isLinkedToken = true;
-                        } else if (nativeInput) {
-                            rawTokenValue = nativeInput.value;
-                            isLinkedToken = false; // Value came from manual user typing
-                        }
-
-                        // Clean up formatting
-                        if (rawTokenValue && rawTokenValue.trim() !== "") {
-                            let cleanString = rawTokenValue.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                            cleanString = cleanString.replace(/[<>]/g, ''); 
-                            
-                            // 🎯 FIX: Only wrap if it's a known structural link, OR if the raw text matches a token format (e.g. formula1, rand3)
-                            const looksLikeToken = /^[a-zA-Z]+\d+$/.test(cleanString);
-                            
-                            if (isLinkedToken || looksLikeToken) {
-                                substitutions[vName] = `<${cleanString}>`;
-                            } else {
-                                substitutions[vName] = cleanString; // ✅ Keeps raw inputs like "6" or "5*y" clean!
-                            }
-                        } else {
-                            substitutions[vName] = "";
-                        }
-                    });
-                }
-                inputsCollected["substitutions"] = substitutions;
-
-                console.log("Cleaned substitutions mapping payload: ", inputsCollected["substitutions"]);
-            } 
-            // 🎯 ARCHETYPE SPECIFIC OVERRIDES: Apply specialized array serialization for graph types
-            else if (baseArchetypeToken === 'graph') {
-                console.group("%c💾 [Serializer] Packaging Graph Payload", "background: #3b82f6; color: white; padding: 2px 6px; border-radius: 4px;");
-                // 1. Extract the numerical bounds securely from your custom class elements
-                const xMinVal = parseFloat(card.querySelector('.val-graph-x-min')?.value) || -5;
-                const xMaxVal = parseFloat(card.querySelector('.val-graph-x-max')?.value) || 5;
-                const xStepVal = parseFloat(card.querySelector('.val-graph-x-step')?.value) || 0.5;
-
-                const yMinVal = parseFloat(card.querySelector('.val-graph-y-min')?.value) || -5;
-                const yMaxVal = parseFloat(card.querySelector('.val-graph-y-max')?.value) || 5;
-                const yStepVal = parseFloat(card.querySelector('.val-graph-y-step')?.value) || 0.5;
-
-                // 2. Extract the grid checkbox state explicitly
-                const isGridChecked = card.querySelector('.val-graph-show-grid')?.checked ?? true;
-
-                // 3. Map values directly to the keys expected by the python processing system
-                inputsCollected["x-axis range"] = [xMinVal, xMaxVal, xStepVal];
-                inputsCollected["y-axis range"] = [yMinVal, yMaxVal, yStepVal];
-                inputsCollected["show_grid"] = isGridChecked;
-                inputsCollected["show_grid_overlay"] = isGridChecked;
-
-                // 🎯 FIX: Clear potential stale backward-compatibility keys first
-                let purgeIdx = 0;
-                while (inputsCollected[`formula_${purgeIdx}`] !== undefined) {
-                    delete inputsCollected[`formula_${purgeIdx}`];
-                    purgeIdx++;
-                }
-
-                // 🎯 4. Gather up all rows by reading the wrapper container structure
-                const activeFormulas = [];
-                const formulaWrappers = card.querySelectorAll('.graph-formulas-container .linked-input-wrapper');
-                
-                formulaWrappers.forEach((wrapper, index) => {
-                    let finalRowVal = "";
-                    const boundToken = wrapper.getAttribute('data-bound-token');
-                    const exprInput = wrapper.querySelector('.val-graph-formula-expr');
-
-                    if (boundToken) {
-                        // Priority A: Row has a linked macro token dependency
-                        let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                        if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
-                        if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
-                        finalRowVal = cleanToken;
-
-                        // 🔍 VISUAL HOTFIX: Dynamically hide the underlying text box since a token is active
-                        if (exprInput) {
-                            exprInput.style.display = 'none';
-                        }
-                    } else if (exprInput) {
-                        // Priority B: Standard manual string text box entry
-                        finalRowVal = exprInput.value.trim();
-                        
-                        // Ensure input visibility is restored if no token is bound
-                        exprInput.style.display = '';
-                    }
-
-                    if (finalRowVal) {
-                        activeFormulas.push(finalRowVal);
-                        inputsCollected[`formula_${index}`] = finalRowVal;
-                    }
-                });
-                
-                // Ensure the base formulas key mirrors the unified structural layout array
-                inputsCollected["formulas"] = activeFormulas;
-                console.log("Final compiled fields payload object structure:", JSON.parse(JSON.stringify(inputsCollected)));
-                console.groupEnd();
-            }
-            // 🎯 ARCHETYPE SPECIFIC OVERRIDES: Apply specialized 2D array parsing for matrix types
-            else if (baseArchetypeToken === 'matrix') {
-                console.group(`%c💾 [Serializer] Packaging Matrix Payload for [${token}]`, "background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px;");
-                
-                const rowsInput = card.querySelector('.val-matrix-rows');
-                const colsInput = card.querySelector('.val-matrix-columns');
-                
-                const rowCount = parseInt(rowsInput?.value) || 3;
-                const colCount = parseInt(colsInput?.value) || 3;
-
-                // Build a 2D grid matching your active layout dimensions
-                const structureGrid = Array.from({ length: rowCount }, () => 
-                    Array.from({ length: colCount }, () => "0")
-                );
-
-                // Collect values straight out of our interactive matrix cells
-                card.querySelectorAll('.val-matrix-cell').forEach(cell => {
-                    const r = parseInt(cell.getAttribute('data-row'));
-                    const c = parseInt(cell.getAttribute('data-col'));
-                    
-                    if (r < rowCount && c < colCount) {
-                        structureGrid[r][c] = cell.value.trim() || "0";
-                    }
-                });
-
-                // Explicitly bind the array object structures back to your parameters schema
-                inputsCollected["rows"] = rowCount;
-                inputsCollected["columns"] = colCount;
-                inputsCollected["matrix_data"] = structureGrid;
-
-                // Sanitize calculation inputs and dependency options to keep properties consistent
-                inputsCollected["calculate"] = card.querySelector('.val-matrix-calculate')?.value || "leave as matrix";
-                inputsCollected["matrix B"] = card.querySelector('.val-matrix-b-target')?.value || "";
-                inputsCollected["scalar"] = card.querySelector('.val-matrix-scalar-factor')?.value || "1.0";
-
-                // 🎯 ADDED: Dynamic Matrix Variable Substitution Collector
-                const substitutions = {};
-                const subsContainer = card.querySelector('.substitutions-list-container');
-                
-                if (subsContainer) {
-                    subsContainer.querySelectorAll('.substitution-row-item').forEach(row => {
-                        const vName = row.getAttribute('data-var-name');
-                        if (!vName) return;
-
-                        const boundToken = row.getAttribute('data-bound-token');
-                        const nativeInput = row.querySelector('.val-substitution-input');
-                        let rawValue = "";
-
-                        if (boundToken) {
-                            // Read from bound entity token linkage
-                            rawValue = boundToken;
-                        } else if (nativeInput) {
-                            // Fallback to custom typed string expression value
-                            rawValue = nativeInput.value;
-                        }
-
-                        if (rawValue && rawValue.trim() !== "") {
-                            let cleanString = rawValue.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                            
-                            // Keep token formatting uniform, or leave raw if it's text expressions/numbers
-                            const looksLikeToken = /^[a-zA-Z]+\d+$/.test(cleanString.replace(/[<>]/g, ''));
-                            if (boundToken || looksLikeToken) {
-                                cleanString = cleanString.replace(/[<>]/g, '');
-                                substitutions[vName] = `<${cleanString}>`;
-                            } else {
-                                substitutions[vName] = cleanString;
-                            }
-                        } else {
-                            substitutions[vName] = "";
-                        }
-                    });
-                }
-                
-                // Stringify dictionary structure for unified variable pipeline transport
-                inputsCollected["variables"] = Object.keys(substitutions).length > 0 ? JSON.stringify(substitutions) : "";
-                
-                // 🎯 OPTION A FIX: Explicitly drop the legacy flat entries array parameter if captured by fallback scraper loops
-                if ("entries" in inputsCollected) {
-                    delete inputsCollected["entries"];
-                }
-
-                console.log("Compiled 2D grid matrix configuration:", structureGrid);
-                console.log("Compiled Matrix Variables payload dictionary:", inputsCollected["variables"]);
-                console.groupEnd();
+            // 3. ARCHETYPE SPECIFIC OVERRIDES via entity modules
+            const serializedInputs = getEntityInformation(baseArchetypeToken, {
+                action: 'serialize',
+                card,
+                inputsCollected
+            });
+            if (serializedInputs && typeof serializedInputs === 'object') {
+                Object.assign(inputsCollected, serializedInputs);
             }
 
             // 🎯 NEW CACHE LOCK BREAKER: Check if the user is actively editing this card
@@ -2164,144 +1098,32 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 card.setAttribute('data-simulated-value', result.evaluated_output);
+                if (result.latex_output !== undefined && result.latex_output !== null) {
+                    card.setAttribute('data-latex-output', result.latex_output);
+                }
                 console.log(`Updated wrapper tracking parameter attribute 'data-simulated-value' ➔ '${result.evaluated_output}'`);
 
                 const baseArchetype = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-token');
                 let targetDisplay = card.querySelector('.latex-render-box');
                 console.log(`Determined operational asset token archetype model: '${baseArchetype}'`);
 
-                if (baseArchetype === 'primeFactors' || baseArchetype === 'formula' || baseArchetype === 'graph' || baseArchetype === 'matrix') {
-                    if (!targetDisplay) {
-                        const fieldsWrapper = card.querySelector('.component-fields-wrapper');
-                        if (fieldsWrapper) {
-                            targetDisplay = document.createElement('div');
-                            targetDisplay.className = 'latex-render-box';
-                            targetDisplay.style.cssText = 'margin-top: 8px; padding: 6px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; min-height: 24px; font-size: 0.9rem; text-align: center;';
-                            fieldsWrapper.appendChild(targetDisplay);
-                        }
-                    }
+                if (getEntityInformation(baseArchetype, { action: 'needsLatexRenderBox' })) {
+                    targetDisplay = ensureLatexRenderBox(card) || targetDisplay;
                 }
-                
-                if (baseArchetype === 'formula') {
-                    if (targetDisplay && typeof katex !== 'undefined') {
-                        targetDisplay.style.textAlign = 'center';
-                        katex.render(result.latex_output, targetDisplay, { throwOnError: false });
-                    } else if (typeof katex === 'undefined') {
-                        console.error("❌ KaTeX script dependencies are not present on page framework view layout.");
-                    }
-                } else if (baseArchetype === 'graph') {
-                    // 🎯 RENDER INTERACTIVE MATH CANVAS GRAPH
-                    if (targetDisplay) {
-                        try {
-                            let rawOutput = result.evaluated_output;
-                            
-                            console.group(`%c🔄 [Batch Sync] Redrawing Graph Component Card (${token})`, "background: #10b981; color: white; padding: 2px 6px; border-radius: 4px;");
-                            console.log("Raw evaluation response packet payload returned from processing pipeline:", rawOutput);
 
-                            // Check if the output is an explicit error string from the backend layout engine
-                            if (typeof rawOutput === 'string' && rawOutput.startsWith('[Invalid')) {
-                                targetDisplay.style.textAlign = 'center';
-                                targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ ${rawOutput.replace(/[\[\]]/g, '')}</span>`;
-                                return;
-                            }
+                const batchApplied = getEntityInformation(baseArchetype, {
+                    action: 'applyBatchSync',
+                    card,
+                    result,
+                    targetDisplay,
+                    formulaLiveLatexCache,
+                    renderGraphComponentCanvas,
+                    token
+                });
 
-                            // Dual-Pass Engine Safeguard: Unroll string-serialized JSON tokens cleanly
-                            let graphConfig = rawOutput;
-                            if (typeof graphConfig === 'string') {
-                                graphConfig = JSON.parse(graphConfig);
-                            }
-
-                            console.log("Parsed Configuration targeting drawing engines:", graphConfig);
-                            console.log("Formulas array length to process:", graphConfig?.formulas?.length, graphConfig?.formulas);
-                            
-                            targetDisplay.textContent = ''; // Flush layout text out cleanly
-                            targetDisplay.style.textAlign = 'left';
-                            
-                            const canvasId = `graph-plot-${token}`;
-                            let canvasContainer = document.getElementById(canvasId);
-                            if (!canvasContainer) {
-                                canvasContainer = document.createElement('div');
-                                canvasContainer.id = canvasId;
-                                canvasContainer.style.cssText = 'margin: 10px auto; width: 100%; max-width: 340px; height: 240px;';
-                                targetDisplay.appendChild(canvasContainer);
-                            }
-                            // Force-flush the canvas inner HTML vector space right before re-rendering
-                            // This cleanly evicts function-plot's state cache and guarantees a pristine drawing surface!
-                            canvasContainer.innerHTML = '';
-
-                            // Fallback array if formulas key is completely missing or empty on setup
-                            const formulasArray = graphConfig.formulas || [];
-                            if (formulasArray.length === 0) {
-                                console.log("Formulas list array is totally empty! Hiding canvas view.");
-                                canvasContainer.style.display = 'none';
-                                targetDisplay.style.textAlign = 'center';
-                                targetDisplay.innerHTML = `<span style="color: #64748b; font-size: 0.85rem; font-style: italic;">Enter a function formula above to render graph...</span>`;
-                                console.groupEnd();
-                                return;
-                            } else {
-                                canvasContainer.style.display = 'block';
-                            }
-
-                            // 🎯 SINGLE POINT OF TRUTH INVOCATION: 
-                            // Reuses the identical rendering pipeline, uniform polyline resolution, 
-                            // tick rules, and cache-eviction engines built earlier.
-                            if (typeof renderGraphComponentCanvas === 'function') {
-                                // Explicitly ensure formulas python powers syntax handles conversion properly
-                                if (graphConfig.formulas) {
-                                    graphConfig.formulas = graphConfig.formulas.map(fStr => {
-                                        let rhs = fStr.split('=')[1] || fStr;
-                                        return rhs.replace(/\*\*/g, '^').trim();
-                                    });
-                                }
-                                console.log("Invoking canvas plotting coordinator with clean strings...");
-                                renderGraphComponentCanvas(canvasId, graphConfig);
-                            } else {
-                                throw new Error("The global abstraction engine 'renderGraphComponentCanvas' is missing.");
-                            }
-                            console.groupEnd();
-                        } catch (err) {
-                            console.error("Failed executing canvas plotter lifecycle:", err);
-                            console.groupEnd();
-                            targetDisplay.style.textAlign = 'center';
-                            targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ System error compiling graph visualization structure.</span>`;
-                        }
-                    }
-                } else if (baseArchetype === 'matrix') {
-                    // 🎯 RENDER MATRIX MATH LAYOUT OUTPUT
-                    if (targetDisplay) {
-                        console.group(`%c🔄 [Batch Sync] Redrawing Matrix Component Card (${token})`, "background: #0284c7; color: white; padding: 2px 6px; border-radius: 4px;");
-                        
-                        let rawOutput = result.evaluated_output;
-                        
-                        // Handle server-side constraint errors explicitly inside the component frame
-                        if (typeof rawOutput === 'string' && rawOutput.startsWith('[Invalid')) {
-                            targetDisplay.style.textAlign = 'center';
-                            targetDisplay.innerHTML = `<span style="color: #dc2626; font-size: 0.85rem;">⚠️ ${rawOutput.replace(/[\[\]]/g, '')}</span>`;
-                            console.groupEnd();
-                            return;
-                        }
-
-                        // Route to LaTeX visualization if a valid LaTeX structure is supplied from backend math steps
-                        if (result.latex_output && typeof katex !== 'undefined') {
-                            targetDisplay.style.textAlign = 'center';
-                            targetDisplay.textContent = ''; // Clear prior elements
-                            katex.render(result.latex_output, targetDisplay, { throwOnError: false });
-                        } 
-                        // Fallback fallback: display standard text/JSON matrix arrays cleanly if KaTeX isn't needed
-                        else {
-                            targetDisplay.style.textAlign = 'center';
-                            targetDisplay.style.fontFamily = 'monospace';
-                            targetDisplay.style.fontSize = '0.85rem';
-                            targetDisplay.textContent = rawOutput;
-                        }
-                        
-                        console.groupEnd();
-                    }
-                } else {
-                    if (targetDisplay) {
-                        targetDisplay.style.textAlign = 'center';
-                        targetDisplay.textContent = result.evaluated_output;
-                    }
+                if (!batchApplied && targetDisplay) {
+                    targetDisplay.style.textAlign = 'center';
+                    targetDisplay.textContent = result.evaluated_output;
                 }
 
                 // 🔍 DEBUG LOG: Look for select elements inside the card to verify their class names
@@ -2629,7 +1451,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Restore active workspace variables configuration blocks columns rows items
             rehydrateWorkspaceSegments(data.loaded_segments || []);
-            updateWorkspaceSimulationPreview();
 
             if (saveStatusSpan) {
                 saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Synced`;
@@ -2672,239 +1493,239 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // 🎯 5. DRAFT PROGRESS SAVE ACTION HANDLER
-    if (saveDraftBtn) {
-        saveDraftBtn.addEventListener('click', async function() {
-            // console.log("Save button clicked. Building workspace configuration payload...");
-            
-            if (saveStatusSpan) {
-                saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Saving draft...`;
-            }
-            saveDraftBtn.disabled = true;
+    const draftConfirmModal = document.getElementById('draft-save-confirm-modal');
+    const draftConfirmReasonsList = document.getElementById('draft-save-confirm-reasons');
+    const draftConfirmBtn = document.getElementById('btn-confirm-draft-save');
+    const draftCancelBtn = document.getElementById('btn-cancel-draft-save');
+    let pendingDraftSavePayload = null;
 
-            const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
-            const titleValue = overlayTitleField ? overlayTitleField.value.trim() : '';
-            const canvasHtml = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
+    function collectWorkspaceSavePayload() {
+        const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
+        const titleValue = overlayTitleField ? overlayTitleField.value.trim() : '';
+        const canvasHtml = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
+        const inputsPayloadList = [];
+        const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
 
-            if (!problemId) {
-                alert("Error: Missing target problem identifier instance anchor.");
-                resetSaveButtonState();
-                return;
-            }
+        activeCards.forEach(card => {
+            const baseToken = card.getAttribute('data-token');
+            if (!baseToken) return;
 
-            const inputsPayloadList = [];
-            const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
+            const shuffleSeedValue = card.getAttribute('data-shuffle-seed') || '';
+            const deleteBtn = card.querySelector('.btn-delete-workspace-component');
+            const indexedTokenString = deleteBtn ? deleteBtn.getAttribute('data-indexed-token') : baseToken;
+            const inputValues = {};
 
-            activeCards.forEach(card => {
-                const baseToken = card.getAttribute('data-token');
-                if (!baseToken) return;
+            const inputWrappers = card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper):not(.substitutions-list-container .linked-input-wrapper)');
+            inputWrappers.forEach(wrapper => {
+                const inputKey = wrapper.getAttribute('data-input-key');
+                if (!inputKey) return;
 
-                const shuffleSeedValue = card.getAttribute('data-shuffle-seed') || '';
-                const deleteBtn = card.querySelector('.btn-delete-workspace-component');
-                const indexedTokenString = deleteBtn ? deleteBtn.getAttribute('data-indexed-token') : baseToken;
-
-                const inputValues = {};
-
-                // 1. EXTRACTION: Explicitly pull dropdowns first
-                const solveMethodSelect = card.querySelector('.val-input-solve-method');
-                if (solveMethodSelect) {
-                    inputValues['solve method'] = solveMethodSelect.value.trim();
-                }
-
-                if (baseToken === 'formula') {
-                    const solveForSelect = card.querySelector('.val-input-simplify-target');
-                    // Ensure the key exists even if empty to maintain database schema consistency
-                    inputValues['variable to solve for'] = solveForSelect ? solveForSelect.value.trim() : '';
-                }
-
-                // 2. EXTRACTION: Standard Wrapper-based inputs (with specialized array formatting for graph layouts)
-                if (baseToken === 'graph') {
-                    const activeFormulas = [];
-                    const formulaWrappers = card.querySelectorAll('.graph-formulas-container .linked-input-wrapper');
-                    
-                    formulaWrappers.forEach((wrapper, index) => {
-                        let finalRowVal = "";
-                        const boundToken = wrapper.getAttribute('data-bound-token');
-                        const exprInput = wrapper.querySelector('.val-graph-formula-expr');
-
-                        if (boundToken) {
-                            let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                            if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
-                            if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
-                            finalRowVal = cleanToken;
-                        } else if (exprInput) {
-                            finalRowVal = exprInput.value.trim();
-                        }
-
-                        if (finalRowVal) {
-                            activeFormulas.push(finalRowVal);
-                            inputValues[`formula_${index}`] = finalRowVal;
-                        }
-                    });
-
-                    // 🎯 CRITICAL FIX: Inject the missing master property required by Python validation schemas
-                    inputValues["formulas"] = activeFormulas;
-
-                    // Safely pull any regular structural settings (like axis variables or grid fields)
-                    const normalWrappers = card.querySelectorAll('.linked-input-wrapper:not(.graph-formula-row .linked-input-wrapper)');
-                    normalWrappers.forEach(wrapper => {
-                        const inputKey = wrapper.getAttribute('data-input-key');
-                        if (!inputKey) return;
-                        
-                        const boundToken = wrapper.getAttribute('data-bound-token');
-                        if (boundToken) {
-                            inputValues[inputKey] = boundToken;
-                        } else {
-                            const interactiveField = wrapper.querySelector('input, select');
-                            if (interactiveField) {
-                                inputValues[inputKey] = interactiveField.value.trim();
-                            }
-                        }
-                    });
-                } 
-                // 🎯 NEW BLOCK FOR MATRIX COMPONENT GRID PROCESSING
-                else if (baseToken === 'matrix') {
-                    const activeEntries = [];
-                    const matrixWrappers = card.querySelectorAll('.matrix-entries-container .linked-input-wrapper');
-                    
-                    matrixWrappers.forEach((wrapper, index) => {
-                        let finalCellVal = "";
-                        const boundToken = wrapper.getAttribute('data-bound-token');
-                        const entryInput = wrapper.querySelector('.val-matrix-entry-input');
-
-                        if (boundToken) {
-                            let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
-                            if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
-                            if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
-                            finalCellVal = cleanToken;
-                        } else if (entryInput) {
-                            finalCellVal = entryInput.value.trim();
-                        }
-
-                        inputValues[`entry_${index}`] = finalCellVal;
-                        activeEntries.push(finalCellVal);
-                    });
-
-                    // Pass the master layout array back up to the python schema verification layers
-                    inputValues["entries"] = activeEntries;
-
-                    // Pull general configuration inputs (such as dimensions or targeted operations)
-                    const matrixConfigWrappers = card.querySelectorAll('.linked-input-wrapper:not(.matrix-entries-container .linked-input-wrapper)');
-                    matrixConfigWrappers.forEach(wrapper => {
-                        const inputKey = wrapper.getAttribute('data-input-key');
-                        if (!inputKey) return;
-                        
-                        const interactiveField = wrapper.querySelector('input, select');
-                        if (interactiveField) {
-                            inputValues[inputKey] = interactiveField.value.trim();
-                        }
-                    });
-                } 
-                else {
-                    // Standard extraction routing for all other non-graph, non-matrix components
-                    const inputWrappers = card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper)');
-                    inputWrappers.forEach(wrapper => {
-                        const inputKey = wrapper.getAttribute('data-input-key');
-                        if (!inputKey) return;
-
-                        const boundToken = wrapper.getAttribute('data-bound-token');
-                        if (boundToken) {
-                            inputValues[inputKey] = boundToken;
-                        } else {
-                            const interactiveField = wrapper.querySelector('input, select');
-                            if (interactiveField && !interactiveField.classList.contains('val-input-simplify-target')) {
-                                inputValues[inputKey] = interactiveField.value.trim();
-                            }
-                        }
-                    });
-                }
-
-                // 3. EXTRACTION: Dynamic Substitution rows
-                if (baseToken === 'formula') {
-                    card.querySelectorAll('.substitutions-list-container .substitution-row-item').forEach(row => {
-                        const varName = row.getAttribute('data-var-name');
-                        const rowWrapper = row.querySelector('.linked-input-wrapper');
-                        const boundTokenValue = rowWrapper?.getAttribute('data-bound-token');
-                        
-                        if (boundTokenValue) {
-                            inputValues[`sub_${varName}`] = boundTokenValue;
-                        } else {
-                            const inputField = row.querySelector('.val-substitution-input');
-                            if (inputField) {
-                                inputValues[`sub_${varName}`] = inputField.value.trim();
-                            }
-                        }
-                    });
-
-                    // 🎯 FIX: Automatically reconcile missing variables from substitution allocations
-                    let variablesArray = inputValues['variables'] 
-                        ? inputValues['variables'].split(',').map(v => v.trim()).filter(Boolean)
-                        : [];
-
-                    // Scan the built inputs object for any active sub_ variables
-                    Object.keys(inputValues).forEach(key => {
-                        if (key.startsWith('sub_')) {
-                            const impliedVar = key.replace('sub_', '').trim();
-                            // If it's being substituted but isn't in the input variables text field, add it
-                            if (impliedVar && !variablesArray.includes(impliedVar)) {
-                                variablesArray.push(impliedVar);
-                            }
-                        }
-                    });
-
-                    // Update the clean comma-separated string that the python validation schema expects
-                    if (variablesArray.length > 0) {
-                        inputValues['variables'] = variablesArray.join(', ');
+                const boundToken = wrapper.getAttribute('data-bound-token');
+                if (boundToken) {
+                    inputValues[inputKey] = boundToken;
+                } else {
+                    const interactiveField = wrapper.querySelector('input, select');
+                    if (interactiveField && !interactiveField.classList.contains('val-input-simplify-target')) {
+                        inputValues[inputKey] = interactiveField.value.trim();
                     }
                 }
-
-                // Debug log to confirm what is actually getting pushed to the server
-                // console.log(`Final payload for [${indexedTokenString}]:`, inputValues);
-
-                inputsPayloadList.push({
-                    token: baseToken,
-                    sequence_token: indexedTokenString,
-                    shuffle_seed: shuffleSeedValue,
-                    inputs: inputValues
-                });
             });
-            
-            const payload = {
+
+            const serializedInputs = getEntityInformation(baseToken, {
+                action: 'serialize',
+                card,
+                inputsCollected: inputValues
+            });
+            if (serializedInputs && typeof serializedInputs === 'object') {
+                Object.assign(inputValues, serializedInputs);
+            }
+
+            if (baseToken === 'formula') {
+                card.querySelectorAll('.substitutions-list-container .substitution-row-item').forEach(row => {
+                    const varName = row.getAttribute('data-var-name');
+                    const rowWrapper = row.querySelector('.linked-input-wrapper');
+                    const boundTokenValue = rowWrapper?.getAttribute('data-bound-token');
+
+                    if (boundTokenValue) {
+                        inputValues[`sub_${varName}`] = boundTokenValue;
+                    } else {
+                        const inputField = row.querySelector('.val-substitution-input');
+                        if (inputField) {
+                            inputValues[`sub_${varName}`] = inputField.value.trim();
+                        }
+                    }
+                });
+
+                let variablesArray = inputValues['variables']
+                    ? String(inputValues['variables']).split(',').map(v => v.trim()).filter(Boolean)
+                    : [];
+
+                Object.keys(inputValues).forEach(key => {
+                    if (key.startsWith('sub_')) {
+                        const impliedVar = key.replace('sub_', '').trim();
+                        if (impliedVar && !variablesArray.includes(impliedVar)) {
+                            variablesArray.push(impliedVar);
+                        }
+                    }
+                });
+
+                if (variablesArray.length > 0) {
+                    inputValues['variables'] = variablesArray.join(', ');
+                }
+            }
+
+            inputsPayloadList.push({
+                token: baseToken,
+                sequence_token: indexedTokenString,
+                shuffle_seed: shuffleSeedValue,
+                inputs: inputValues
+            });
+        });
+
+        return {
+            problemId,
+            payload: {
                 title: titleValue,
                 body_html: canvasHtml,
                 inputs: inputsPayloadList
-            };
+            }
+        };
+    }
 
+    function hideDraftConfirmModal() {
+        if (draftConfirmModal) {
+            draftConfirmModal.classList.remove('is-visible');
+            draftConfirmModal.style.display = 'none';
+            draftConfirmModal.style.visibility = 'hidden';
+            draftConfirmModal.style.opacity = '0';
+        }
+        pendingDraftSavePayload = null;
+    }
+
+    function showDraftConfirmModal(reasons) {
+        if (!draftConfirmModal || !draftConfirmReasonsList) return;
+        draftConfirmReasonsList.innerHTML = '';
+        (reasons || []).forEach(reason => {
+            const li = document.createElement('li');
+            li.textContent = reason;
+            li.style.marginBottom = '4px';
+            draftConfirmReasonsList.appendChild(li);
+        });
+        // .modal-overlay CSS defaults to visibility:hidden / opacity:0 until .is-visible
+        draftConfirmModal.style.display = 'flex';
+        draftConfirmModal.style.visibility = 'visible';
+        draftConfirmModal.style.opacity = '1';
+        draftConfirmModal.classList.add('is-visible');
+    }
+
+    function updateProblemStatusBadge(problemId, status) {
+        if (!problemId || !status) return;
+        const card = document.querySelector(`.problem-item-row[data-id="${problemId}"], .problem-item-row[data-problem-id="${problemId}"]`);
+        const badge = card?.querySelector('.problem-status-badge');
+        if (badge) {
+            badge.textContent = status;
+        }
+    }
+
+    async function persistWorkspaceSave({ confirmDraft = false } = {}) {
+        const collected = collectWorkspaceSavePayload();
+        const problemId = collected.problemId;
+        if (!problemId) {
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Missing problem id`;
+            }
+            return;
+        }
+
+        const payload = {
+            ...collected.payload,
+            confirm_draft: confirmDraft
+        };
+
+        if (saveStatusSpan) {
+            saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${confirmDraft ? 'Saving draft...' : 'Checking workspace...'}`;
+        }
+        if (saveDraftBtn) saveDraftBtn.disabled = true;
+
+        try {
+            const response = await fetch(`/api/problem/${problemId}/save-workspace/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify(payload)
+            });
+
+            let result = {};
             try {
-                const response = await fetch(`/api/problem/${problemId}/save-workspace/`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': getCsrfToken()
-                    },
-                    body: JSON.stringify(payload)
-                });
+                result = await response.json();
+            } catch (_) {
+                result = {};
+            }
 
-                const result = await response.json();
-
-                if (response.ok && result.success) {
-                    if (saveStatusSpan) {
-                        saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Synced`;
-                    }
-                    // console.log("Database transaction complete:", result.message);
-                } else {
-                    if (saveStatusSpan) {
-                        saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Save Failed`;
-                    }
-                    alert(`Compilation Error:\n${result.error || 'Unknown tracking malfunction.'}`);
-                }
-            } catch (error) {
-                console.error("AJAX Communication failure:", error);
+            if (response.ok && result.needs_confirmation) {
+                pendingDraftSavePayload = collected.payload;
+                showDraftConfirmModal(result.unfinished_reasons || []);
                 if (saveStatusSpan) {
-                    saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Connection Error`;
+                    saveStatusSpan.innerHTML = `<i class="fas fa-info-circle" style="color:#d97706;"></i> Draft confirmation needed`;
                 }
-                alert("Network communication timeout occurred processing save transaction.");
-            } finally {
-                resetSaveButtonState();
+                return;
+            }
+
+            if (response.ok && result.success) {
+                hideDraftConfirmModal();
+                updateProblemStatusBadge(problemId, result.problem_status);
+                if (saveStatusSpan) {
+                    const statusLabel = result.problem_status === 'complete' ? 'Saved as complete' : 'Saved as draft';
+                    saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> ${statusLabel}`;
+                }
+                return;
+            }
+
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Save Failed`;
+            }
+            console.error('Workspace save failed:', result.error || response.status);
+        } catch (error) {
+            console.error("AJAX Communication failure:", error);
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Connection Error`;
+            }
+        } finally {
+            resetSaveButtonState();
+        }
+    }
+
+    if (saveDraftBtn) {
+        saveDraftBtn.addEventListener('click', async function() {
+            hideDraftConfirmModal();
+            await persistWorkspaceSave({ confirmDraft: false });
+        });
+    }
+
+    if (draftCancelBtn) {
+        draftCancelBtn.addEventListener('click', function() {
+            hideDraftConfirmModal();
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Not saved`;
+            }
+        });
+    }
+
+    if (draftConfirmBtn) {
+        draftConfirmBtn.addEventListener('click', async function() {
+            await persistWorkspaceSave({ confirmDraft: true });
+        });
+    }
+
+    if (draftConfirmModal) {
+        draftConfirmModal.addEventListener('click', function(e) {
+            if (e.target === draftConfirmModal) {
+                hideDraftConfirmModal();
+                if (saveStatusSpan) {
+                    saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Not saved`;
+                }
             }
         });
     }
@@ -3130,11 +1951,7 @@ document.addEventListener('DOMContentLoaded', function() {
             let rawOutput = blueprintData.output || tokenDefinition.output;
 
             if (!rawOutput) {
-                if (baseArchetype === 'randInt') rawOutput = ['integer'];
-                else if (baseArchetype === 'rand') rawOutput = ['double'];
-                else if (baseArchetype === 'formula') rawOutput = ['double', 'integer', 'formula'];
-                else if (baseArchetype === 'matrix') rawOutput = ['matrix'];
-                else if (baseArchetype === 'graph') rawOutput = ['content'];
+                rawOutput = getEntityInformation(baseArchetype, { action: 'getOutputTypes' }) || [];
             }
 
             const derivedOutputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
@@ -3145,7 +1962,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 isCompatible = derivedOutputs.some(type => ['double', 'integer', 'formula'].includes(type));
             }
 
-            if (targetTypeAttr === 'text' && (inputKey.startsWith('formula_') || currentCard.getAttribute('data-token') === 'graph')) {
+            const linkOverride = getEntityInformation(currentCard.getAttribute('data-token'), {
+                action: 'isLinkCompatible',
+                inputKey,
+                targetTypeAttr,
+                derivedOutputs,
+                acceptedTargetTypes
+            });
+            if (linkOverride === true) {
+                isCompatible = true;
+            } else if (targetTypeAttr === 'text' && (inputKey.startsWith('formula_') || currentCard.getAttribute('data-token') === 'graph')) {
                 if (derivedOutputs.includes('formula') || derivedOutputs.includes('double') || derivedOutputs.includes('integer')) {
                     isCompatible = true;
                 }
@@ -3296,8 +2122,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 const innerFlexContainer = wrapper.firstElementChild;
                 if (innerFlexContainer) {
                     innerFlexContainer.appendChild(pill);
+                } else if (linkBtn && typeof linkBtn.before === 'function') {
+                    linkBtn.before(pill);
+                } else if (linkBtn && linkBtn.parentNode) {
+                    linkBtn.parentNode.insertBefore(pill, linkBtn);
                 } else {
-                    wrapper.insertBefore(pill, linkBtn);
+                    wrapper.appendChild(pill);
                 }
             }
             pill.textContent = chosenTokenString;
@@ -3353,7 +2183,13 @@ document.addEventListener('DOMContentLoaded', function() {
         
         pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center;';
         pill.innerText = chosenTokenString;
-        wrapper.insertBefore(pill, linkBtn);
+        if (linkBtn && typeof linkBtn.before === 'function') {
+            linkBtn.before(pill);
+        } else if (linkBtn && linkBtn.parentNode) {
+            linkBtn.parentNode.insertBefore(pill, linkBtn);
+        } else {
+            wrapper.appendChild(pill);
+        }
 
         // Transform link icon to an active red delete close asset marker
         linkBtn.innerHTML = '<i class="fas fa-times"></i>';
@@ -3388,93 +2224,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Close options dropdown panels automatically if clicking outward away from tracking structures
     document.addEventListener('click', function() {
         document.querySelectorAll('.linkable-tokens-dropdown').forEach(d => d.style.display = 'none');
-    });
-
-    // -------------------------------------------------------------
-    // GLOBAL CONTROLLER: MATRIX VARIABLE SUBSTITUTION GENERATOR
-    // -------------------------------------------------------------
-    document.body.addEventListener('change', function(e) {
-        const picker = e.target.closest('.picker-unused-variables');
-        if (!picker) return;
-
-        // Isolate this execution loop strictly to matrix component cards
-        const card = picker.closest('.workspace-block-card, .workspace-component-card');
-        const deleteBtn = card?.querySelector('.btn-delete-workspace-component');
-        const isMatrixCard = deleteBtn?.getAttribute('data-token') === 'matrix';
-        
-        if (!isMatrixCard) return; // 🚀 Let formula's local listener handle formula cards safely!
-
-        const pickedVar = picker.value;
-        if (!pickedVar || pickedVar === '-- N/A --') return;
-
-        const substitutionsContainer = card.querySelector('.substitutions-list-container');
-        if (!substitutionsContainer) return;
-
-        // Prevent adding duplicates
-        if (substitutionsContainer.querySelector(`[data-input-key="sub_${pickedVar}"]`)) {
-            picker.value = "";
-            return;
-        }
-
-        // Construct a matrix-isolated, pipeline-compliant input row item
-        const row = document.createElement('div');
-        row.className = 'substitution-row-item linked-input-wrapper';
-        row.setAttribute('data-var-name', pickedVar);
-        row.setAttribute('data-input-key', `sub_${pickedVar}`);
-        row.setAttribute('data-input-type', 'text');
-        row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-bottom: 6px; background: #ffffff; padding: 4px 6px; border-radius: 4px; border: 1px solid #cbd5e1; box-sizing: border-box;';
-
-        row.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 6px; flex-grow: 1; min-width: 0;">
-                <span style="font-size: 0.8rem; font-family: monospace; font-weight: bold; background: #e2e8f0; padding: 2px 6px; border-radius: 3px; color: #0f172a; flex-shrink: 0;">${pickedVar}</span>
-                <span style="color: #94a3b8; font-size: 0.75rem; flex-shrink: 0;">=</span>
-                <input type="text" class="val-substitution-input" value="" placeholder="Value or expression" style="flex-grow: 1; border: none; outline: none; font-size: 0.8rem; padding: 2px 4px; min-width: 0;">
-            </div>
-            
-            <div style="position: relative; display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
-                <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.7rem; height: 24px; width: 24px; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-                    <i class="fas fa-link"></i>
-                </button>
-                <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: auto; right: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 4px; box-sizing: border-box;"></div>
-                
-                <button type="button" class="btn-delete-substitution-row" title="Remove assignment" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.85rem; padding: 2px; display: flex; align-items: center; justify-content: center; transition: color 0.15s;">
-                    <i class="fas fa-times-circle"></i>
-                </button>
-            </div>
-        `;
-
-        // Local cleanup script logic for the removal asset button
-        const delBtn = row.querySelector('.btn-delete-substitution-row');
-        delBtn.addEventListener('click', function(event) {
-            event.stopPropagation();
-            row.remove();
-            
-            // Put choice back into selection dropdown array immediately
-            const opt = document.createElement('option');
-            opt.value = pickedVar;
-            opt.textContent = pickedVar;
-            picker.appendChild(opt);
-            
-            // Reveal container if it was previously auto-hidden
-            picker.parentElement.style.display = 'flex';
-            
-            card.dispatchEvent(new Event('change', { bubbles: true }));
-        });
-
-        substitutionsContainer.appendChild(row);
-        
-        // Remove option item selection from dropdown cleanly
-        const selectedOption = picker.querySelector(`option[value="${pickedVar}"]`);
-        if (selectedOption) selectedOption.remove();
-        picker.value = "";
-
-        // If no values remain, hide parent row out of sight
-        if (picker.options.length <= 1) {
-            picker.parentElement.style.display = 'none';
-        }
-
-        // Force dispatch change to alert the layout index compile pipeline (dispatchWorkspaceBatchSync)
-        card.dispatchEvent(new Event('change', { bubbles: true }));
     });
 
     // =============================================================================

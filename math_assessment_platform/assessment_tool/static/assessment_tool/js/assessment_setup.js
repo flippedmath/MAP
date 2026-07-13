@@ -296,14 +296,23 @@ document.addEventListener("DOMContentLoaded", function() {
 
         Sortable.create(listContainer, {
             animation: 150,
+            draggable: '.problem-item-row',
+            filter: 'input, button, a, .cqd-clickable-count',
+            preventOnFilter: false,
             ghostClass: 'sortable-ghost',
             onEnd: async function(evt) {
+                if (evt.oldIndex === evt.newIndex) return;
+
                 const movedCard = evt.item;
                 const branchId = movedCard.getAttribute('data-branch-id');
-                
+                if (!branchId) {
+                    console.error("Nested reorder aborted: moved item is missing data-branch-id.");
+                    return;
+                }
+
                 const prevCard = movedCard.previousElementSibling;
                 const nextCard = movedCard.nextElementSibling;
-                
+
                 const prevBranchId = prevCard ? prevCard.getAttribute('data-branch-id') : null;
                 const nextBranchId = nextCard ? nextCard.getAttribute('data-branch-id') : null;
 
@@ -340,14 +349,55 @@ document.addEventListener("DOMContentLoaded", function() {
     // SortableJS: Initial Page Load Instantiation
     // -------------------------------------------------------------
     if (canvasList) {
-        // 1. Make the Top-Level Sections rearrangeable!
+        // 1. Make the Top-Level Sections rearrangeable and persist order
         Sortable.create(canvasList, {
             animation: 150,
-            handle: '.aqg-drag-handle', // This attaches the dragging behavior specifically to your grip icon handle
+            handle: '.aqg-drag-handle',
+            draggable: '.aqg-section-card',
             ghostClass: 'sortable-ghost',
             onEnd: async function(evt) {
-                console.log("Section card structure reordered:", evt.item);
-                // Optional: Place your top-level section reordering fetch payload here if you track it in your DB
+                if (evt.oldIndex === evt.newIndex) return;
+
+                const movedCard = evt.item;
+                const aqgId = movedCard.getAttribute('data-id');
+                if (!aqgId || !window.AQG_CONFIG?.reorderUrl) {
+                    console.error("Section reorder aborted: missing aqg id or reorderUrl.");
+                    return;
+                }
+
+                const prevCard = movedCard.previousElementSibling;
+                const nextCard = movedCard.nextElementSibling;
+                const prevId = prevCard?.classList.contains('aqg-section-card')
+                    ? prevCard.getAttribute('data-id')
+                    : null;
+                const nextId = nextCard?.classList.contains('aqg-section-card')
+                    ? nextCard.getAttribute('data-id')
+                    : null;
+
+                try {
+                    const response = await fetch(AQG_CONFIG.reorderUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken')
+                        },
+                        body: JSON.stringify({
+                            aqg_id: aqgId,
+                            prev_id: prevId,
+                            next_id: nextId
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (response.ok && data.success) {
+                        movedCard.setAttribute('data-order', data.new_order);
+                    } else {
+                        alert(data.error || "Failed to save question group section order.");
+                    }
+                } catch (err) {
+                    console.error("Section reorder save failed:", err);
+                    alert("Network error while saving question group section order.");
+                }
             }
         });
 

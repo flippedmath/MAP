@@ -750,6 +750,94 @@ class BaseEntity:
         except (ValueError, TypeError):
             return default_fallback
 
+    def insert_implicit_multiplication(self, formula_str: str) -> str:
+        """
+        Shared math-expression normalizer used by formula and matrix entities.
+        Converts caret powers (^) to SymPy exponents (**) and inserts implicit
+        multiplication (e.g. 5x -> 5*x, (x+1)(x-1) -> (x+1)*(x-1)).
+        """
+        if not formula_str:
+            return ""
+
+        s = str(formula_str).strip()
+
+        # Convert standard caret power notation to SymPy Python exponents
+        s = s.replace('^', '**')
+
+        # Complete list of standard SymPy functions (longer names FIRST to prevent partial matching)
+        funcs = (
+            r'(?:'
+            r'asin|acos|atan|acot|acsc|asec|'
+            r'sinh|cosh|tanh|coth|csch|sech|'
+            r'asinh|acosh|atanh|acoth|acsch|asech|'
+            r'sin|cos|tan|cot|csc|sec|'
+            r'exp|log|ln|sqrt|diff|integrate|limit'
+            r')'
+        )
+
+        # 1. Number followed by a letter/variable/backslash (e.g., 8x -> 8*x)
+        s = re.sub(r'(\d)([a-zA-Z\\])', r'\1*\2', s)
+
+        # 2. Number followed by an opening parenthesis (e.g., 8(x+1) -> 8*(x+1))
+        s = re.sub(r'(\d)\(', r'\1*(', s)
+
+        # 3. Standalone variable followed by '(' excluding system function names
+        s = re.sub(r'\b(?!' + funcs + r'\b)([a-zA-Z\d_]+)\(', r'\1*(', s)
+
+        # 4. Closing parenthesis followed by an opening parenthesis
+        s = re.sub(r'\)\(', r')*(', s)
+
+        # 5. Closing parenthesis followed by a number or variable
+        s = re.sub(r'\)([\d[a-zA-Z])', r')*\1', s)
+
+        # 6. Variable followed by a known math function name
+        s = re.sub(r'\b(?!' + funcs + r'\b)([a-zA-Z\d_]+)(' + funcs + r')\b', r'\1*\2', s)
+
+        # 7. Numbers before functions
+        s = re.sub(r'(\d)(' + funcs + r')\b', r'\1*\2', s)
+
+        return s
+
+    def parse_math_expression(self, expression_str, local_dict=None, evaluate=False):
+        """
+        Parse a user/math expression with the same normalization rules as FormulaEntity.
+        """
+        normalized = self.insert_implicit_multiplication(str(expression_str))
+        return sp.parse_expr(normalized, local_dict=local_dict or {}, evaluate=evaluate)
+
+    def strip_trivial_multiplicative_ones(self, expr):
+        """
+        Remove evaluate=False artifacts like Mul(-1, 1) (-> -1) and other *1 / 1* factors
+        without expanding or otherwise rewriting the expression tree.
+        """
+        if isinstance(expr, sp.MatrixBase):
+            return expr.applyfunc(self.strip_trivial_multiplicative_ones)
+        if isinstance(expr, tuple):
+            return tuple(self.strip_trivial_multiplicative_ones(item) for item in expr)
+        if not isinstance(expr, sp.Basic):
+            return expr
+
+        def _is_one(factor):
+            return factor == 1 or factor == sp.Integer(1)
+
+        if isinstance(expr, sp.Mul):
+            factors = [self.strip_trivial_multiplicative_ones(arg) for arg in expr.args]
+            factors = [factor for factor in factors if not _is_one(factor)]
+            if not factors:
+                return sp.Integer(1)
+            if len(factors) == 1:
+                return factors[0]
+            return sp.Mul(*factors, evaluate=False)
+
+        if expr.args:
+            new_args = tuple(self.strip_trivial_multiplicative_ones(arg) for arg in expr.args)
+            if new_args != expr.args:
+                try:
+                    return expr.func(*new_args, evaluate=False)
+                except TypeError:
+                    return expr.func(*new_args)
+        return expr
+
     def is_valid(self):
         self.errors = {}
         self.cleaned_data = {}
@@ -1353,50 +1441,6 @@ class FormulaEntity(BaseEntity):
 
         return len(self.errors) == 0
 
-
-    def insert_implicit_multiplication(self, formula_str: str) -> str:
-        if not formula_str:
-            return ""
-            
-        # Clean up whitespace but keep the characters intact
-        s = formula_str.strip()
-
-        # Convert standard caret power notation to SymPy Python exponents
-        s = s.replace('^', '**')
-        
-        # 🎯 Complete list of standard SymPy functions (longer names go FIRST to prevent partial matching)
-        funcs = (
-            r'(?:'
-            r'asin|acos|atan|acot|acsc|asec|'  # Inverse Trig
-            r'sinh|cosh|tanh|coth|csch|sech|'  # Hyperbolic
-            r'asinh|acosh|atanh|acoth|acsch|asech|'  # Inverse Hyperbolic
-            r'sin|cos|tan|cot|csc|sec|'        # Standard & Reciprocal Trig
-            r'exp|log|ln|sqrt|diff|integrate|limit' # Calculus & Core
-            r')'
-        )
-        
-        # 1. Number followed by a letter/variable/backslash (e.g., 8x -> 8*x, 8alpha -> 8*alpha)
-        s = re.sub(r'(\d)([a-zA-Z\\])', r'\1*\2', s)
-        
-        # 2. Number followed by an opening parenthesis (e.g., 8(x+1) -> 8*(x+1))
-        s = re.sub(r'(\d)\(', r'\1*(', s)
-        
-        # 3. Standalone variable followed by an opening parenthesis, EXCLUDING system function names (e.g., x(y+1) -> x*(y+1))
-        s = re.sub(r'\b(?!' + funcs + r'\b)([a-zA-Z\d_]+)\(', r'\1*(', s)
-        
-        # 4. Closing parenthesis followed by an opening parenthesis (e.g., (x+1)(x-1) -> (x+1)*(x-1))
-        s = re.sub(r'\)\(', r')*(', s)
-        
-        # 5. Closing parenthesis followed by a number or variable (e.g., (x+1)8 -> (x+1)*8, (x+1)y -> (x+1)*y)
-        s = re.sub(r'\)([\d[a-zA-Z])', r')*\1', s)
-        
-        # 6. Variable followed by a known math function name (e.g., xacot(x) -> x*acot(x))
-        s = re.sub(r'\b(?!' + funcs + r'\b)([a-zA-Z\d_]+)(' + funcs + r')\b', r'\1*\2', s)
-        
-        # 7. Numbers before functions: (e.g., 5coth(x) -> 5*coth(x))
-        s = re.sub(r'(\d)(' + funcs + r')\b', r'\1*\2', s)
-
-        return s
 
     def evaluate_output(self):
         formula_str = str(self.runtime_values.get("formula", "")).strip()
@@ -2005,7 +2049,7 @@ class MatrixEntity(BaseEntity):
                     continue
 
                 try:
-                    sp.parse_expr(s_val, local_dict=local_dict, evaluate=False)
+                    self.parse_math_expression(s_val, local_dict=local_dict, evaluate=False)
                 except Exception:
                     self.errors["matrix_data"] = (
                         f"Invalid cell calculation at row {r_idx}, column {c_idx} ('{cell_value}'). "
@@ -2017,7 +2061,7 @@ class MatrixEntity(BaseEntity):
         self.runtime_values["_reconstructed_2d_grid"] = matrix_data
         return len(self.errors) == 0
 
-    def _resolve_cell_to_scalar(self, cell_value, local_dict) -> sp.Expr:
+    def _resolve_cell_to_scalar(self, cell_value, local_dict, evaluate=True) -> sp.Expr:
         if cell_value is None:
             return sp.Integer(0)
 
@@ -2034,11 +2078,11 @@ class MatrixEntity(BaseEntity):
                 parts = resolved_raw.split('=')
                 resolved_raw = parts[-1].strip()
 
-            return sp.parse_expr(str(resolved_raw), local_dict=local_dict, evaluate=True)
+            return self.parse_math_expression(str(resolved_raw), local_dict=local_dict, evaluate=evaluate)
 
-        return sp.parse_expr(s, local_dict=local_dict, evaluate=True)
+        return self.parse_math_expression(s, local_dict=local_dict, evaluate=evaluate)
 
-    def _build_sympy_matrix(self, local_dict) -> SymPyMatrix:
+    def _build_sympy_matrix(self, local_dict, evaluate_cells=True) -> SymPyMatrix:
         linked_token = self.cleaned_data.get("linked_matrix")
         if linked_token:
             raw_target_matrix_val = self.resolve_token_dependency(linked_token)
@@ -2047,15 +2091,15 @@ class MatrixEntity(BaseEntity):
             if isinstance(raw_target_matrix_val, str):
                 s_a = raw_target_matrix_val.strip()
                 
-                # 🎯 FIX: Route stringified Matrix layouts through parse_expr to respect local_dict overrides
+                # Route stringified Matrix layouts through shared math parser
                 if s_a.startswith("Matrix("):
-                    return sp.parse_expr(s_a, local_dict=local_dict, evaluate=True)
+                    return sp.parse_expr(s_a, local_dict=local_dict, evaluate=evaluate_cells)
                 else:
-                    return sp.parse_expr(s_a, local_dict=local_dict, evaluate=True)
+                    return self.parse_math_expression(s_a, local_dict=local_dict, evaluate=evaluate_cells)
                     
             if isinstance(raw_target_matrix_val, SymPyMatrix):
-                # 🎯 FIX: If it's already an active SymPy Matrix instance object, 
-                # we must explicitly substitute our local variables into it
+                # If it's already an active SymPy Matrix instance object,
+                # explicitly substitute our local variables into it
                 return raw_target_matrix_val.subs(local_dict)
                 
             if isinstance(raw_target_matrix_val, list):
@@ -2074,40 +2118,55 @@ class MatrixEntity(BaseEntity):
         for r_idx in range(r_count):
             current_row = []
             for c_idx in range(c_count):
-                cell_scalar = self._resolve_cell_to_scalar(raw_grid[r_idx][c_idx], local_dict)
+                cell_scalar = self._resolve_cell_to_scalar(
+                    raw_grid[r_idx][c_idx], local_dict, evaluate=evaluate_cells
+                )
                 current_row.append(cell_scalar)
             evaluated_2d_array.append(current_row)
 
         return SymPyMatrix(evaluated_2d_array)
 
-    def evaluate_output(self):
-        action = self.runtime_values.get("calculate", "leave as matrix")
+    def _build_substitution_local_dict(self, action):
+        """
+        Build SymPy local_dict for variable substitutions.
+        leave as matrix / simplify: parse without evaluating (preserve structure for LaTeX).
+        other ops: parse with evaluation so transforms can run.
+        """
         var_list = self.runtime_values.get("parsed_variables_array", [])
         subs_map = self.runtime_values.get("_variable_substitutions_map", {})
-        
-        # Build evaluation substitution dictionary context mapping
+        evaluate_subs = action not in ("leave as matrix", "simplify")
+
         local_dict = {}
         for var in var_list:
             if var in subs_map and subs_map[var] is not None:
-                # 🎯 FIX: Wrap string expressions using sp.Symbol inside a global evaluate=False context
-                # This ensures SymPy treats substituted values textually without computing the math layout
-                if action == "leave as matrix":
-                    local_dict[var] = sp.Symbol(f"({subs_map[var]})") if "-" in str(subs_map[var]) else sp.Symbol(str(subs_map[var]))
-                else:
-                    local_dict[var] = sp.parse_expr(str(subs_map[var]), evaluate=True)
+                local_dict[var] = self.parse_math_expression(
+                    str(subs_map[var]), evaluate=evaluate_subs
+                )
             else:
                 local_dict[var] = sp.Symbol(var)
 
-        if 'pi' not in local_dict: local_dict['pi'] = sp.pi
-        if 'exp' not in local_dict: local_dict['exp'] = sp.exp
+        if 'pi' not in local_dict:
+            local_dict['pi'] = sp.pi
+        if 'exp' not in local_dict:
+            local_dict['exp'] = sp.exp
+        return local_dict
 
-        # 🎯 FIX: Apply global context manager suppression rule for non-simplification matrix formatting
+    def evaluate_output(self):
+        action = self.runtime_values.get("calculate", "leave as matrix")
+        local_dict = self._build_substitution_local_dict(action)
+
+        # leave as matrix: substitute without simplifying expression trees
         if action == "leave as matrix":
             with sp.evaluate(False):
-                matrix_A = self._build_sympy_matrix(local_dict)
+                matrix_A = self._build_sympy_matrix(local_dict, evaluate_cells=False)
                 result = matrix_A
+        elif action == "simplify":
+            # Same substitution path as leave as matrix, then simplify each entry
+            with sp.evaluate(False):
+                matrix_A = self._build_sympy_matrix(local_dict, evaluate_cells=False)
+            result = matrix_A.applyfunc(sp.simplify)
         else:
-            matrix_A = self._build_sympy_matrix(local_dict)
+            matrix_A = self._build_sympy_matrix(local_dict, evaluate_cells=True)
             if action == "transpose":
                 result = matrix_A.T
             elif action == "inversion":
@@ -2130,13 +2189,13 @@ class MatrixEntity(BaseEntity):
                 
                 resolved_b_data = self.resolve_token_dependency(matrix_b_token)
                 
-                # 🎯 FIX: Cast stringified SymPy expressions smoothly back into functional structures
+                # Cast stringified SymPy expressions smoothly back into functional structures
                 if isinstance(resolved_b_data, str):
                     s_b = resolved_b_data.strip()
                     if s_b.startswith("Matrix("):
                         matrix_B = sp.sympify(s_b)
                     else:
-                        matrix_B = sp.parse_expr(s_b, local_dict=local_dict, evaluate=True)
+                        matrix_B = self.parse_math_expression(s_b, local_dict=local_dict, evaluate=True)
                 elif isinstance(resolved_b_data, list):
                     matrix_B = SymPyMatrix(resolved_b_data)
                 else:
@@ -2160,6 +2219,7 @@ class MatrixEntity(BaseEntity):
             else:
                 result = matrix_A
 
+        result = self.strip_trivial_multiplicative_ones(result)
         self.last_computed_sympy_result = result
         return str(result)
     
@@ -2327,8 +2387,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             evaluated_output = clean_inputs.get('formula', clean_inputs.get('nodes', '0'))
             latex_output = str(evaluated_output)
 
-    # Post-processing string cleanup filters for Formula assets
-    if archetype_name.lower().startswith('formula'):
+    # Post-processing string cleanup for evaluate=False *1 artifacts (formula + matrix)
+    if archetype_name.lower().startswith('formula') or archetype_name.lower().startswith('matrix'):
         if isinstance(evaluated_output, str):
             evaluated_output = re.sub(r'\b-1\*1\b', '-1', evaluated_output)
             evaluated_output = re.sub(r'\b1\*', '', evaluated_output)

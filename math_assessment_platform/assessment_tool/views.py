@@ -10,6 +10,7 @@ from .models import (
     EntityType, EntityUserInput
 )
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity
+import html
 import json
 from django.http import JsonResponse
 
@@ -1376,9 +1377,9 @@ def reorder_aqg_ajax(request, course_id, assessment_id):
         next_order = ""
 
         if prev_id:
-            prev_order = AssessmentQuestionGroup.objects.get(id=prev_id).order or ""
+            prev_order = AssessmentQuestionGroup.objects.get(id=prev_id, assessment_id=assessment_id).order or ""
         if next_id:
-            next_order = AssessmentQuestionGroup.objects.get(id=next_id).order or ""
+            next_order = AssessmentQuestionGroup.objects.get(id=next_id, assessment_id=assessment_id).order or ""
 
         new_order = calculate_midpoint_order(prev_order, next_order)
 
@@ -1466,7 +1467,7 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
                 branch_location=problem_branch_node,  # Coordinates link
                 title=final_item_name,                # Suffix incremented calculated name
                 aqg=aqg,                              # Assessment structural layout frame hook
-                problem_status='draft'                # Status = 'draft' or 'complete
+                problem_status='draft'                # Status = 'draft' or 'complete'
             )
 
         # 5. 🎯 NEW: Render the problem_card component into a raw HTML string snippet
@@ -1598,10 +1599,10 @@ def update_cqd_count_ajax(request):
 @login_required
 @require_POST
 def reorder_nested_item_ajax(request):
-    # Determine permission scopes across Teacher/IT parameters
-    # Note: If your system uses a course context here, you can extract context validation checks 
-    # but checking for BranchGroup ownership offers an intuitive fallback layout baseline safety layer.
-    
+    """
+    Persist midpoint-order for a problem / CQD branch node after drag-and-drop
+    inside an assessment question group section.
+    """
     try:
         data = json.loads(request.body)
         branch_id = data.get('branch_id')
@@ -1611,36 +1612,46 @@ def reorder_nested_item_ajax(request):
         if not branch_id:
             return JsonResponse({'success': False, 'error': 'Missing targets.'}, status=400)
 
-        # 1. Fetch target node with ownership validation rules
-        if request.user.user_type == 'IT_Support' or request.user.is_staff:
-            target_node = get_object_or_404(BranchGroup, id=branch_id)
-        else:
-            target_node = get_object_or_404(BranchGroup, id=branch_id, owner=request.user)
+        target_node = get_object_or_404(BranchGroup, id=branch_id)
 
+        # Authorize: staff/IT, branch owner, or teacher on the parent assessment's course
+        user_type = getattr(request.user, 'user_type', 'Student')
+        is_privileged = user_type == 'IT_Support' or request.user.is_staff
+        is_owner = target_node.owner_id == request.user.id
+
+        is_course_teacher = False
+        if not is_privileged and not is_owner:
+            parent_aqg = AssessmentQuestionGroup.objects.filter(
+                branch_location_id=target_node.parent_id
+            ).select_related('assessment').first()
+            if parent_aqg:
+                is_course_teacher = UsersInCourse.objects.filter(
+                    course_id=parent_aqg.assessment.course_id,
+                    user=request.user,
+                    user__user_type='Teacher'
+                ).exists()
+
+        if not (is_privileged or is_owner or is_course_teacher):
+            return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+        # Adjacent siblings must share the same parent folder
         prev_order = ""
         next_order = ""
-
-        # 2. Extract companion midpoint string sequences out of adjacent sibling nodes
         if prev_branch_id:
-            prev_order = BranchGroup.objects.get(id=prev_branch_id).order or ""
+            prev_node = get_object_or_404(BranchGroup, id=prev_branch_id, parent_id=target_node.parent_id)
+            prev_order = prev_node.order or ""
         if next_branch_id:
-            next_order = BranchGroup.objects.get(id=next_branch_id).order or ""
+            next_node = get_object_or_404(BranchGroup, id=next_branch_id, parent_id=target_node.parent_id)
+            next_order = next_node.order or ""
 
-
-        # 3. Calculate position using your established midpoint algorithm function loop string builder
         new_order = calculate_midpoint_order(prev_order, next_order)
 
-        print(f"prev_branch_id: {prev_branch_id} -- prev_order: {prev_order}")
-        print(f"next_branch_id: {next_branch_id} -- next_order: {next_order}")
-        print(f"branch_id: {branch_id} -- new_order: {new_order}")
-
-        # 4. Atomic write transaction execution state loop
         with transaction.atomic():
             target_node.order = new_order
             target_node.save(update_fields=['order', 'modification_date'])
 
         return JsonResponse({'success': True, 'new_order': new_order})
-        
+
     except Exception as e:
         return JsonResponse({'success': False, 'error': f"Sorting Matrix Runtime Failure: {str(e)}"}, status=400)
     
@@ -1856,12 +1867,52 @@ def verify_workspace_clearance(user, problem):
 
 
 
+# Workspace tokens always end with a trailing index (e.g. primeFactors1); avoid matching HTML tags like <br>
+_ENTITY_TOKEN_RE = re.compile(r'(?:&lt;|<)([a-zA-Z][a-zA-Z0-9_]*\d+)(?:&gt;|>)')
+
+
+def _is_quill_display_empty(body_html):
+    """True when the problem display canvas has no meaningful teacher text/tokens."""
+    if not body_html or not str(body_html).strip():
+        return True
+    raw = str(body_html)
+    # Quill stores tokens as &lt;primeFactors1&gt;; count those before stripping HTML
+    has_entity_token = bool(_ENTITY_TOKEN_RE.search(raw))
+    without_tokens = _ENTITY_TOKEN_RE.sub(' ', raw)
+    text = html.unescape(without_tokens)
+    text = re.sub(r'<[^>]+>', ' ', text).replace('\xa0', ' ').strip()
+    return not text and not has_entity_token
+
+
+def _entity_is_referenced_anywhere(sequence_token, body_html, all_entities):
+    """True when a token is used in the display HTML or linked from another entity."""
+    raw_html = body_html or ""
+    # Quill persists literal tokens as &lt;token&gt; rather than raw <token>
+    markers = (f"<{sequence_token}>", f"&lt;{sequence_token}&gt;")
+    if any(marker in raw_html for marker in markers):
+        return True
+    if f"<{sequence_token}>" in html.unescape(raw_html):
+        return True
+    for entity in all_entities:
+        if entity.get("sequence_token") == sequence_token:
+            continue
+        serialized = json.dumps(entity.get("inputs", {}))
+        if any(marker in serialized for marker in markers):
+            return True
+        if f"<{sequence_token}>" in html.unescape(serialized):
+            return True
+    return False
+
+
 @require_POST
-@user_passes_test(lambda u: u.is_superuser or u.is_staff, login_url='/dashboard/')
+@login_required
 def save_problem_workspace(request, problem_id):
     """
-    Unified, transactional endpoint that runs teacher tokens through verification matrices,
-    commits verified variables to entity_segment rows, and updates the text canvas in QuestionBlock.
+    Save the problem workspace canvas + entities.
+
+    Incomplete / invalid work is allowed. When unfinished reasons exist and the
+    client has not confirmed draft save, return needs_confirmation with reasons.
+    Confirmed unfinished saves set problem_status='draft'; clean saves set 'complete'.
     """
     try:
         payload = json.loads(request.body)
@@ -1877,13 +1928,19 @@ def save_problem_workspace(request, problem_id):
         return JsonResponse({'success': False, 'error': 'Permission Denied: Insufficient authorization clearing.'}, status=403)
 
     user_inputs = payload.get("inputs", [])
-    body_html = payload.get("body_html", "").strip() 
-    
+    body_html = payload.get("body_html", "").strip()
+    confirm_draft = bool(payload.get("confirm_draft", False))
+
     if not isinstance(user_inputs, list):
         return JsonResponse({"success": False, "error": "The workspace inputs block layout must be an array list structure."}, status=400)
 
+    unfinished_reasons = []
+
+    if _is_quill_display_empty(body_html):
+        unfinished_reasons.append("The problem display area has no student-facing content yet.")
+
     # =========================================================================
-    # 🎯 FIX A: TOPOLOGICAL SORT TO RUN VALIDATION IN DEPENDENCY ORDER
+    # Topological sort so dependency chains validate in order
     # =========================================================================
     sorted_user_inputs = []
     visited_tokens = set()
@@ -1895,13 +1952,12 @@ def save_problem_workspace(request, problem_id):
         node_data = input_map.get(node_token)
         if not node_data:
             return
-            
-        # Discover dependencies linked via strings inside input properties
+
         inputs_str = json.dumps(node_data.get("inputs", {}))
         for token_key in input_map.keys():
             if f"<{token_key}>" in inputs_str and token_key != node_token:
                 visit_node(token_key)
-                
+
         visited_tokens.add(node_token)
         sorted_user_inputs.append(node_data)
 
@@ -1909,24 +1965,30 @@ def save_problem_workspace(request, problem_id):
         seq = entity.get("sequence_token")
         if seq and seq not in visited_tokens:
             visit_node(seq)
-            
-    # Fallback to catch any elements missing structural sequence tags
+
     for entity in user_inputs:
         if not entity.get("sequence_token"):
             sorted_user_inputs.append(entity)
     # =========================================================================
 
+    for entity_data in sorted_user_inputs:
+        sequence_token = entity_data.get("sequence_token") or entity_data.get("token")
+        if sequence_token and not _entity_is_referenced_anywhere(sequence_token, body_html, sorted_user_inputs):
+            unfinished_reasons.append(
+                f"Entity '{sequence_token}' is not used in the display area or linked by any other entity."
+            )
+
     cached_patterns = {}
-    validated_engines = []
+    persistable_engines = []
     locally_validated_tokens = set()
 
-    # Process using our newly sorted array dependency pipeline loop
     for index, entity_data in enumerate(sorted_user_inputs):
-        token_id = entity_data.get("token") 
+        token_id = entity_data.get("token")
         sequence_token = entity_data.get("sequence_token", token_id)
 
         if not token_id:
-            return JsonResponse({"success": False, "error": f"Missing 'token' identity string at index [{index}]."}, status=400)
+            unfinished_reasons.append(f"Workspace entity at position {index + 1} is missing its type token.")
+            continue
 
         if token_id not in cached_patterns:
             try:
@@ -1936,10 +1998,15 @@ def save_problem_workspace(request, problem_id):
                     pattern_data = json.loads(pattern_data)
                 cached_patterns[token_id] = pattern_data
             except EntityType.DoesNotExist:
-                return JsonResponse({"success": False, "error": f"Token configuration type '{token_id}' is invalid."}, status=400)
+                unfinished_reasons.append(
+                    f"Entity '{sequence_token or token_id}' uses unknown type '{token_id}'."
+                )
+                continue
 
         blueprint = cached_patterns[token_id]
-        provided_fields = entity_data.get("inputs", {})
+        provided_fields = entity_data.get("inputs", {}) or {}
+        display_name = blueprint.get('name', token_id)
+        label = sequence_token or display_name
 
         substitutions_map = {}
         cleaned_provided_fields = {}
@@ -1957,7 +2024,7 @@ def save_problem_workspace(request, problem_id):
         if token_id == 'formula':
             if not cleaned_provided_fields.get('formula'):
                 cleaned_provided_fields['formula'] = "0"
-                
+
             if solve_method == 'variable substitution':
                 has_substitutions = len(substitutions_map) > 0 or "substitutions" in provided_fields
                 if not has_substitutions:
@@ -1966,22 +2033,27 @@ def save_problem_workspace(request, problem_id):
                         for entity in sorted_user_inputs if entity.get("sequence_token") != sequence_token
                     )
                     if not is_linked_dependency:
-                        return JsonResponse({"success": False, "error": f"Validation failed for '{sequence_token}': Missing substitution rows."}, status=422)
-                
-                # FIX: Explicitly keep 'variable to solve for' empty for substitution mode
+                        unfinished_reasons.append(
+                            f"[{label}] Variable substitution mode has no substitution rows."
+                        )
                 cleaned_provided_fields['variable to solve for'] = ""
-                
+
             elif solve_method == 'simplify':
-                target_var = cleaned_provided_fields.get('variable to solve for', '').strip()
-                if not target_var: 
-                    cleaned_provided_fields['variable to solve for'] = "" 
+                cleaned_provided_fields['variable to solve for'] = cleaned_provided_fields.get(
+                    'variable to solve for', ''
+                ).strip()
             else:
-                # Catch-all or methods that DO require a target variable fallback
-                vars_list = [v.strip() for v in cleaned_provided_fields.get('variables', '').split(',') if v.strip()]
+                vars_list = [
+                    v.strip()
+                    for v in cleaned_provided_fields.get('variables', '').split(',')
+                    if v.strip()
+                ]
                 if vars_list and not cleaned_provided_fields.get('variable to solve for'):
                     cleaned_provided_fields['variable to solve for'] = vars_list[0]
                 else:
-                    cleaned_provided_fields['variable to solve for'] = cleaned_provided_fields.get('variable to solve for', '').strip()
+                    cleaned_provided_fields['variable to solve for'] = cleaned_provided_fields.get(
+                        'variable to solve for', ''
+                    ).strip()
 
         runtime_payload = []
         for entity in sorted_user_inputs:
@@ -1993,63 +2065,91 @@ def save_problem_workspace(request, problem_id):
             runtime_payload.append(entity_copy)
 
         validator = get_entity_validator(
-            token_id, 
-            cleaned_provided_fields, 
-            blueprint, 
+            token_id,
+            cleaned_provided_fields,
+            blueprint,
             all_entities_payload=runtime_payload
         )
 
-        if not validator.is_valid():
-            error_details = ", ".join([f"[{k}]: {v}" for k, v in validator.errors.items()])
-            return JsonResponse({"success": False, "error": f"Validation failed for '{blueprint.get('name', token_id)}' component: {error_details}"}, status=422)
-            
-        if sequence_token:
-            locally_validated_tokens.add(sequence_token)
+        is_valid = validator.is_valid()
+        if not is_valid:
+            error_details = "; ".join([f"{k}: {v}" for k, v in validator.errors.items()])
+            unfinished_reasons.append(f"[{label}] {error_details}")
+            # Persist raw teacher inputs so unfinished drafts can be reopened exactly
+            draft_content = dict(cleaned_provided_fields)
+            for sub_key, sub_value in substitutions_map.items():
+                draft_content[sub_key] = sub_value
+            content_source = draft_content
+        else:
+            if sequence_token:
+                locally_validated_tokens.add(sequence_token)
+            content_source = dict(validator.cleaned_data)
+            if token_id in ['formula', 'matrix']:
+                for sub_key, sub_value in substitutions_map.items():
+                    content_source[sub_key] = sub_value
 
-        validated_engines.append({
+        persistable_engines.append({
             "token_id": token_id,
             "sequence_token": sequence_token,
             "shuffle_seed": entity_data.get("shuffle_seed", ""),
-            "validator": validator,
             "blueprint": blueprint,
-            "substitutions_map": substitutions_map
+            "content_source": content_source,
+            "is_valid": is_valid,
         })
 
-    # 🎯 STEP B: ATOMIC DATABASE SAVE TRANSACTION
+    # Deduplicate while preserving order
+    seen_reasons = set()
+    unique_reasons = []
+    for reason in unfinished_reasons:
+        if reason not in seen_reasons:
+            seen_reasons.add(reason)
+            unique_reasons.append(reason)
+    unfinished_reasons = unique_reasons
+
+    if unfinished_reasons and not confirm_draft:
+        return JsonResponse({
+            "success": False,
+            "needs_confirmation": True,
+            "unfinished_reasons": unfinished_reasons,
+            "message": "Problem is unfinished and requires draft confirmation before saving."
+        }, status=200)
+
+    problem_status = 'draft' if unfinished_reasons else 'complete'
+
     with transaction.atomic():
         problem.title = payload.get("title", problem.title)
+        problem.problem_status = problem_status
         problem.save()
 
         structured_json_string = json.dumps({"html_content": body_html})
-        q_block, created = QuestionBlock.objects.get_or_create(problem=problem, defaults={'content': structured_json_string})
+        q_block, created = QuestionBlock.objects.get_or_create(
+            problem=problem,
+            defaults={'content': structured_json_string}
+        )
         if not created:
             q_block.content = structured_json_string
             q_block.save()
 
         EntitySegment.objects.filter(problem=problem).delete()
 
-        for engine_item in validated_engines:
+        for engine_item in persistable_engines:
             token_id = engine_item["token_id"]
             sequence_token = engine_item["sequence_token"]
             shuffle_seed = engine_item["shuffle_seed"]
             blueprint = engine_item["blueprint"]
-            validator = engine_item["validator"]
-            item_substitutions = engine_item["substitutions_map"]
-            
-            content_payload = dict(validator.cleaned_data)
+            content_payload = dict(engine_item["content_source"])
 
-            # 🎯 FIX B: RESTORE SUBSTITUTIONS FOR BOTH FORMULA AND MATRIX COMPONENT TYPES
-            if token_id in ['formula', 'matrix']:
-                for sub_key, sub_value in item_substitutions.items():
-                    content_payload[sub_key] = sub_value
-            
             points_value = content_payload.get("points") or blueprint.get("points", {}).get("default", 0.0)
             content_payload["answer_field"] = blueprint.get("answer_field", False)
-            content_payload["sequence_token"] = sequence_token 
+            content_payload["sequence_token"] = sequence_token
             content_payload["shuffle_seed"] = shuffle_seed
 
             blueprint_default = blueprint.get("default_answer")
-            default_answer_fallback = str(blueprint_default).lower() in ['true', '1', 'yes'] if blueprint_default not in [True, False] else blueprint_default
+            default_answer_fallback = (
+                str(blueprint_default).lower() in ['true', '1', 'yes']
+                if blueprint_default not in [True, False]
+                else blueprint_default
+            )
 
             EntitySegment.objects.create(
                 problem=problem,
@@ -2059,7 +2159,16 @@ def save_problem_workspace(request, problem_id):
                 default_answer=str(default_answer_fallback)
             )
 
-    return JsonResponse({"success": True, "message": "Workspace structure compiled successfully."})
+    return JsonResponse({
+        "success": True,
+        "message": (
+            "Workspace saved as draft."
+            if problem_status == 'draft'
+            else "Workspace saved as complete."
+        ),
+        "problem_status": problem_status,
+        "unfinished_reasons": unfinished_reasons,
+    })
 
 
 

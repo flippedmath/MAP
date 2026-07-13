@@ -161,7 +161,7 @@ class Command(BaseCommand):
                 # Operation Configuration
                 "calculate": {
                     "field": "dropdown", 
-                    "value": ["string_match(['leave as matrix', 'multiply', 'add', 'subtract', 'inversion', 'transpose', 'scalar', 'determinate'])"], 
+                    "value": ["string_match(['leave as matrix', 'simplify', 'multiply', 'add', 'subtract', 'inversion', 'transpose', 'scalar', 'determinate'])"], 
                     "default": "leave as matrix"
                 },
                 
@@ -174,14 +174,15 @@ class Command(BaseCommand):
             "disabled": False,
             "note": (
                 "<div style='font-family: system-ui, sans-serif; font-size: 0.75rem; color: #1e293b; max-width: 480px; max-height: 400px; overflow-y: auto; padding-right: 4px;'>\n"
-                "<p style='padding: 3px; color: #475569;'><strong>Matrix Operations:</strong> Define a local grid size, declare custom algebraic variables, or link a source Matrix. Individual cells strictly accept manual numbers, declared input variables, or clean macro token entity links.</p>\n"
+                "<p style='padding: 3px; color: #475569;'><strong>Matrix Operations:</strong> Define a local grid size, declare custom algebraic variables, or link a source Matrix. Individual cells strictly accept manual numbers, declared input variables, or clean macro token entity links. Cell formulas use the same syntax rules as the Formula entity (e.g. <code>x^2</code> ≡ <code>x**2</code>, <code>5x</code> ≡ <code>5*x</code>).</p>\n"
                 "<p style='margin: 8px 0 4px 0; font-weight: bold; color: #0284c7; border-bottom: 1px solid #cbd5e1;'>Calculation Rules & Constraints</p>\n"
                 "<table style='width: 100%; border-collapse: collapse; margin-bottom: 8px; text-align: left;'>\n"
                 "  <thead>\n"
                 "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Action</th><th style='padding: 3px;'>Output Type</th><th style='padding: 3px;'>Requirements</th></tr>\n"
                 "  </thead>\n"
                 "  <tbody>\n"
-                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>leave as matrix</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Returns current state without transformations.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>leave as matrix</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Returns current state after substitutions without simplifying.</td></tr>\n"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>simplify</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Same as leave as matrix, then simplifies each entry after substitutions.</td></tr>\n"
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>multiply (AxB)</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Requires <strong>Matrix B</strong> link. Columns A must equal Rows B.</td></tr>\n"
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>add / subtract</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Requires <strong>Matrix B</strong> link. Must share identical dimensions.</td></tr>\n"
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>inversion (A^-1)</td><td style='padding: 3px; color: #0284c7;'>matrix</td><td style='padding: 3px; color: #475569;'>Must be a square matrix with a non-zero determinant.</td></tr>\n"
