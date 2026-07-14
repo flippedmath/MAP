@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.db import IntegrityError
 import random
 import json
+import math
 import sympy as sp
 from sympy import Matrix as SymPyMatrix
 from sympy.parsing.sympy_parser import parse_expr
@@ -964,6 +965,32 @@ class BaseEntity:
 
     def evaluate_output(self):
         raise NotImplementedError("Child entity component sub-classes must override evaluate_output().")
+
+    def grade_answer(self, student_input, points_available):
+        """
+        Score a student response against this entity's answer key.
+        Child answer-field classes override with real checks.
+        Empty / missing input always earns 0 of points_available.
+        """
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        empty = (
+            student_input is None
+            or student_input == ""
+            or student_input == []
+            or student_input == {}
+            or (isinstance(student_input, dict) and not any(
+                v not in (None, "", [], {}) for v in student_input.values()
+            ))
+        )
+        if empty:
+            return {"earned": 0.0, "max": pts, "detail": "No student input"}
+        return {"earned": 0.0, "max": pts, "detail": "Grading not implemented"}
     
 
 class RandomIntegerEntity(BaseEntity):
@@ -2176,6 +2203,18 @@ class MatrixEntity(BaseEntity):
 
         result = self.strip_trivial_multiplicative_ones(result)
         self.last_computed_sympy_result = result
+        if action == "determinate":
+            # Scalar determinant — linkable as integer/double (not a matrix)
+            try:
+                numeric = float(sp.N(result))
+                if numeric.is_integer():
+                    self.output_types = ["integer", "double"]
+                else:
+                    self.output_types = ["double"]
+            except Exception:
+                self.output_types = ["double"]
+        else:
+            self.output_types = ["matrix"]
         return str(result)
 
 
@@ -2306,6 +2345,286 @@ class MatrixResultByIndexEntity(BaseEntity):
         return str(cell)
 
 
+class NumAnswerEntity(BaseEntity):
+    """
+    Answer-field numeric response: correct value (literal or linked int/double)
+    compared to the student answer after rounding both to N decimal places.
+    """
+
+    def _coerce_bool(self, raw):
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _parse_decimal_places(self, raw, default=3):
+        if raw is None or raw == "":
+            return default
+        try:
+            n = int(float(raw))
+        except (TypeError, ValueError):
+            return None
+        if n < 0:
+            return None
+        return n
+
+    def _to_finite_float(self, raw):
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, bool):
+            return None
+        try:
+            if hasattr(raw, "evalf") and not isinstance(raw, (int, float)):
+                raw = float(sp.N(raw))
+            else:
+                raw = float(raw)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(raw):
+            return None
+        return raw
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        # Prefer resolved runtime value (links already expanded by BaseEntity)
+        raw_value = self.runtime_values.get("value", self.data.get("value"))
+        resolved = self._to_finite_float(raw_value)
+        if resolved is None:
+            self.errors["value"] = "A numeric correct answer is required (number or linked integer/double)."
+            return False
+
+        places_raw = self.runtime_values.get(
+            "decimal_places",
+            self.data.get("decimal_places", 3),
+        )
+        places = self._parse_decimal_places(places_raw, default=3)
+        if places is None:
+            self.errors["decimal_places"] = "Decimal places must be an integer greater than or equal to 0."
+            return False
+
+        show_note = self._coerce_bool(
+            self.data.get(
+                "show_rounding_note",
+                self.runtime_values.get("show_rounding_note", False),
+            )
+        )
+
+        self.runtime_values["resolved_value"] = resolved
+        self.runtime_values["decimal_places"] = places
+        self.runtime_values["show_rounding_note"] = show_note
+        self.cleaned_data["value"] = self.data.get("value", resolved)
+        self.cleaned_data["decimal_places"] = places
+        self.cleaned_data["show_rounding_note"] = show_note
+        return True
+
+    def evaluate_output(self):
+        resolved = self.runtime_values.get("resolved_value")
+        if resolved is None:
+            if not self.is_valid():
+                raise ValueError("Cannot evaluate numAnswer: configuration is invalid.")
+            resolved = self.runtime_values.get("resolved_value")
+
+        places = self.runtime_values.get("decimal_places", 3)
+        try:
+            places = int(places)
+        except (TypeError, ValueError):
+            places = 3
+        if places < 0:
+            places = 0
+
+        rounded = round(float(resolved), places)
+        self.output_types = ["double"]
+        if places == 0 and float(rounded).is_integer():
+            self.output_types = ["integer", "double"]
+            return str(int(rounded))
+        # Fixed decimal display so the latex box shows the rounded key clearly
+        return f"{rounded:.{places}f}"
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        places = self.runtime_values.get("decimal_places", 3)
+        try:
+            places = int(places)
+        except (TypeError, ValueError):
+            places = 3
+        if places < 0:
+            places = 0
+
+        correct = self.runtime_values.get("resolved_value")
+        if correct is None:
+            correct = self._to_finite_float(self.runtime_values.get("value"))
+
+        raw_student = student_input
+        if isinstance(student_input, dict):
+            raw_student = student_input.get("value", "")
+        if raw_student is None or (isinstance(raw_student, str) and raw_student.strip() == ""):
+            return {
+                "earned": 0.0,
+                "max": pts,
+                "detail": "No student input",
+            }
+
+        student_val = self._to_finite_float(raw_student)
+        if student_val is None or correct is None:
+            return {
+                "earned": 0.0,
+                "max": pts,
+                "detail": f"Incorrect (rounded to {places} decimals)",
+            }
+
+        rounded_student = round(student_val, places)
+        rounded_correct = round(float(correct), places)
+        if rounded_student == rounded_correct:
+            return {"earned": pts, "max": pts, "detail": "Correct"}
+        return {
+            "earned": 0.0,
+            "max": pts,
+            "detail": f"Incorrect (rounded to {places} decimals)",
+        }
+
+
+class ShortAnswerEntity(BaseEntity):
+    """
+    Answer-field short text / expression response.
+    Exact match uses trim + lowercase; sympy path uses trimmed original-case
+    strings and requires equivalence without needing further simplification
+    (count_ops(student) <= count_ops(correct)).
+    """
+
+    def _trim_str(self, raw):
+        if raw is None:
+            return ""
+        if isinstance(raw, dict):
+            raw = raw.get("value", "")
+        return str(raw).strip()
+
+    def _to_sympy(self, raw):
+        s = self._trim_str(raw)
+        if not s:
+            return None
+        normalized = self.insert_implicit_multiplication(s)
+        try:
+            if re.search(r"(?<![<>!=])=(?!=)", normalized):
+                left, right = re.split(r"(?<![<>!=])=(?!=)", normalized, maxsplit=1)
+                left_expr = sp.parse_expr(left.strip(), evaluate=False)
+                right_expr = sp.parse_expr(right.strip(), evaluate=False)
+                return sp.Eq(left_expr, right_expr)
+            return sp.parse_expr(normalized, evaluate=False)
+        except Exception:
+            return None
+
+    def _simplify_key(self, raw):
+        """Return simplified display/grade key string, or trimmed text if unparseable."""
+        trimmed = self._trim_str(raw)
+        expr = self._to_sympy(trimmed)
+        if expr is None:
+            return trimmed
+        try:
+            if isinstance(expr, sp.Equality):
+                left = sp.simplify(expr.lhs)
+                right = sp.simplify(expr.rhs)
+                return f"{left} = {right}"
+            return str(sp.simplify(expr))
+        except Exception:
+            return trimmed
+
+    def _exprs_equivalent(self, student_expr, correct_expr):
+        def as_diff(e):
+            if isinstance(e, sp.Equality):
+                return e.lhs - e.rhs
+            return e
+
+        try:
+            return sp.simplify(as_diff(student_expr) - as_diff(correct_expr)) == 0
+        except Exception:
+            return False
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        raw_value = self.runtime_values.get("value", self.data.get("value"))
+        trimmed = self._trim_str(raw_value)
+        if not trimmed:
+            self.errors["value"] = "A correct answer is required (text or linked formula)."
+            return False
+
+        simplified = self._simplify_key(trimmed)
+        self.runtime_values["resolved_value"] = trimmed
+        self.runtime_values["simplified_key"] = simplified
+        self.cleaned_data["value"] = self.data.get("value", trimmed)
+        return True
+
+    def evaluate_output(self):
+        simplified = self.runtime_values.get("simplified_key")
+        if simplified is None:
+            if not self.is_valid():
+                raise ValueError("Cannot evaluate shortAnswer: configuration is invalid.")
+            simplified = self.runtime_values.get("simplified_key")
+
+        self.output_types = ["string"]
+        return str(simplified) if simplified is not None else ""
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        correct_key = self.runtime_values.get("simplified_key")
+        if correct_key is None:
+            raw_correct = self.runtime_values.get(
+                "resolved_value",
+                self.runtime_values.get("value", self.data.get("value")),
+            )
+            correct_key = self._simplify_key(raw_correct)
+
+        student_raw = student_input
+        if isinstance(student_input, dict):
+            student_raw = student_input.get("value", "")
+        student_trimmed = self._trim_str(student_raw)
+        correct_trimmed = self._trim_str(correct_key)
+
+        if not student_trimmed:
+            return {"earned": 0.0, "max": pts, "detail": "No student input"}
+
+        # Tier 1: exact match on trimmed + lowercased copies only
+        if student_trimmed.lower() == correct_trimmed.lower():
+            return {"earned": pts, "max": pts, "detail": "Exact match"}
+
+        # Tier 2: sympy on trimmed original-case strings (not lowercased)
+        student_expr = self._to_sympy(student_trimmed)
+        correct_expr = self._to_sympy(correct_trimmed)
+        if student_expr is None or correct_expr is None:
+            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
+
+        if not self._exprs_equivalent(student_expr, correct_expr):
+            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
+
+        try:
+            student_ops = sp.count_ops(student_expr)
+            correct_ops = sp.count_ops(correct_expr)
+        except Exception:
+            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
+
+        if student_ops <= correct_ops:
+            return {"earned": pts, "max": pts, "detail": "Equivalent (simplified form)"}
+        return {
+            "earned": 0.0,
+            "max": pts,
+            "detail": "Equivalent but not simplified",
+        }
+
+
 class SlopeFieldGraphEntity(BaseEntity):
     """
     Answer-field slope field: validate dy/dx = f(x,y), axis lattice, and selected points.
@@ -2369,6 +2688,14 @@ class SlopeFieldGraphEntity(BaseEntity):
             for yv in self._iter_axis(y_range):
                 lattice_keys.add(self._point_key(xv, yv))
 
+        # Build slopes early so we can prune non-selectable teacher marks
+        lattice_entries = self._build_lattice_entries(parsed, x_range, y_range)
+        selectable_keys = {
+            self._point_key(e["x"], e["y"])
+            for e in lattice_entries
+            if e.get("selectable")
+        }
+
         raw_selected = self.data.get("selected_points", [])
         if isinstance(raw_selected, str):
             try:
@@ -2389,7 +2716,7 @@ class SlopeFieldGraphEntity(BaseEntity):
             except (TypeError, ValueError):
                 continue
             key = self._point_key(px, py)
-            if key in lattice_keys and key not in seen:
+            if key in lattice_keys and key in selectable_keys and key not in seen:
                 seen.add(key)
                 cleaned_selected.append([round(px, 10), round(py, 10)])
 
@@ -2399,6 +2726,11 @@ class SlopeFieldGraphEntity(BaseEntity):
         self.runtime_values["resolved_x-axis range"] = x_range
         self.runtime_values["resolved_y-axis range"] = y_range
         self.runtime_values["selected_points"] = cleaned_selected
+        self.runtime_values["lattice_entries"] = lattice_entries
+
+        show_instructions = self._coerce_bool(self.data.get("show_instructions", False))
+        self.runtime_values["show_instructions"] = show_instructions
+        self.cleaned_data["show_instructions"] = show_instructions
 
         self.cleaned_data["equation"] = display_eq
         self.cleaned_data["x-axis range"] = x_range
@@ -2413,6 +2745,11 @@ class SlopeFieldGraphEntity(BaseEntity):
         self.cleaned_data["y_step"] = y_range[2]
 
         return True
+
+    def _coerce_bool(self, raw):
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
 
     def _normalize_equation(self, raw):
         s = str(raw or "").strip()
@@ -2493,24 +2830,76 @@ class SlopeFieldGraphEntity(BaseEntity):
     def _point_key(self, x, y):
         return (round(float(x), 8), round(float(y), 8))
 
-    def evaluate_output(self):
-        rhs = self.runtime_values.get("equation_rhs", "0")
-        display = self.runtime_values.get("equation_display", f"dy/dx = {rhs}")
-        x_range = self.runtime_values.get("resolved_x-axis range", [-5.0, 5.0, 1.0])
-        y_range = self.runtime_values.get("resolved_y-axis range", [-5.0, 5.0, 1.0])
-        selected = self.runtime_values.get("selected_points", [])
-        expr = self.runtime_values.get("parsed_slope_expr")
+    def _slopes_match(self, m1, m2, rel_tol=1e-8, abs_tol=1e-9):
+        if m1 is None or m2 is None:
+            return False
+        try:
+            a = float(m1)
+            b = float(m2)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(a) or not math.isfinite(b):
+            return False
+        return abs(a - b) <= max(abs_tol, rel_tol * max(1.0, abs(a), abs(b)))
 
-        if expr is None:
-            local_dict = {"x": sp.Symbol("x"), "y": sp.Symbol("y")}
-            expr = self.parse_math_expression(rhs, local_dict=local_dict, evaluate=False)
+    def _undirected_angles_match(self, angle_a, angle_b, eps=1e-6):
+        """Compare undirected line angles (mod π)."""
+        try:
+            a = float(angle_a)
+            b = float(angle_b)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(a) or not math.isfinite(b):
+            return False
 
+        def fold(theta):
+            t = math.fmod(theta, math.pi)
+            if t < 0:
+                t += math.pi
+            return t
+
+        d = abs(fold(a) - fold(b))
+        return min(d, math.pi - d) <= eps
+
+    def _mark_lattice_selectable(self, lattice):
+        """Point P is selectable if undefined, or some other lattice Q shares P's field slope."""
+        for entry in lattice:
+            if not entry.get("finite", True) or entry.get("slope") is None:
+                entry["selectable"] = True
+                continue
+            m = entry["slope"]
+            try:
+                m = float(m)
+            except (TypeError, ValueError):
+                entry["selectable"] = True
+                continue
+            if not math.isfinite(m):
+                entry["selectable"] = True
+                continue
+
+            px, py = entry["x"], entry["y"]
+            selectable = False
+            for other in lattice:
+                if other is entry:
+                    continue
+                dx = other["x"] - px
+                dy = other["y"] - py
+                if abs(dx) < 1e-12:
+                    # Vertical neighbor — only matches an infinite field slope
+                    continue
+                if self._slopes_match(dy / dx, m):
+                    selectable = True
+                    break
+            entry["selectable"] = selectable
+        return lattice
+
+    def _build_lattice_entries(self, expr, x_range, y_range):
         x_sym = sp.Symbol("x")
         y_sym = sp.Symbol("y")
         lattice = []
         for xv in self._iter_axis(x_range):
             for yv in self._iter_axis(y_range):
-                entry = {"x": xv, "y": yv, "slope": 0.0, "finite": True}
+                entry = {"x": xv, "y": yv, "slope": 0.0, "finite": True, "selectable": False}
                 try:
                     val = expr.subs({x_sym: xv, y_sym: yv})
                     val = sp.N(val)
@@ -2523,6 +2912,23 @@ class SlopeFieldGraphEntity(BaseEntity):
                     entry["finite"] = False
                     entry["slope"] = None
                 lattice.append(entry)
+        return self._mark_lattice_selectable(lattice)
+
+    def evaluate_output(self):
+        rhs = self.runtime_values.get("equation_rhs", "0")
+        display = self.runtime_values.get("equation_display", f"dy/dx = {rhs}")
+        x_range = self.runtime_values.get("resolved_x-axis range", [-5.0, 5.0, 1.0])
+        y_range = self.runtime_values.get("resolved_y-axis range", [-5.0, 5.0, 1.0])
+        selected = self.runtime_values.get("selected_points", [])
+        expr = self.runtime_values.get("parsed_slope_expr")
+
+        if expr is None:
+            local_dict = {"x": sp.Symbol("x"), "y": sp.Symbol("y")}
+            expr = self.parse_math_expression(rhs, local_dict=local_dict, evaluate=False)
+
+        lattice = self.runtime_values.get("lattice_entries")
+        if not lattice:
+            lattice = self._build_lattice_entries(expr, x_range, y_range)
 
         manifest = {
             "archetype": "slopeFieldGraph",
@@ -2534,8 +2940,99 @@ class SlopeFieldGraphEntity(BaseEntity):
             },
             "selected_points": selected,
             "lattice": lattice,
+            "show_instructions": bool(self.runtime_values.get("show_instructions", False)),
         }
         return json.dumps(manifest)
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        selected = self.runtime_values.get("selected_points") or []
+        max_total = pts * len(selected)
+
+        lattice = self.runtime_values.get("lattice_entries")
+        if not lattice:
+            expr = self.runtime_values.get("parsed_slope_expr")
+            x_range = self.runtime_values.get("resolved_x-axis range", [-5.0, 5.0, 1.0])
+            y_range = self.runtime_values.get("resolved_y-axis range", [-5.0, 5.0, 1.0])
+            if expr is not None:
+                lattice = self._build_lattice_entries(expr, x_range, y_range)
+            else:
+                lattice = []
+
+        lattice_by_key = {
+            self._point_key(e["x"], e["y"]): e for e in lattice
+        }
+
+        marks = []
+        if isinstance(student_input, dict):
+            raw_marks = student_input.get("marks")
+            if isinstance(raw_marks, list):
+                marks = raw_marks
+        elif isinstance(student_input, list):
+            marks = student_input
+
+        marks_by_key = {}
+        for mark in marks:
+            if not isinstance(mark, dict):
+                continue
+            try:
+                mx = float(mark.get("x"))
+                my = float(mark.get("y"))
+            except (TypeError, ValueError):
+                continue
+            marks_by_key[self._point_key(mx, my)] = mark
+
+        if not selected:
+            empty = not marks
+            return {
+                "earned": 0.0,
+                "max": 0.0,
+                "detail": "No coordinates selected for grading" if empty else "0/0 coordinates correct",
+            }
+
+        correct = 0
+        for pair in selected:
+            if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+                continue
+            key = self._point_key(pair[0], pair[1])
+            entry = lattice_by_key.get(key)
+            mark = marks_by_key.get(key)
+            if mark is None:
+                continue
+
+            kind = str(mark.get("kind") or "").strip().lower()
+            is_undefined = (
+                entry is None
+                or not entry.get("finite", True)
+                or entry.get("slope") is None
+            )
+            if is_undefined:
+                if kind == "undefined":
+                    correct += 1
+                continue
+
+            if kind != "slope":
+                continue
+            try:
+                angle = float(mark.get("angle"))
+            except (TypeError, ValueError):
+                continue
+            field_angle = math.atan(float(entry["slope"]))
+            if self._undirected_angles_match(angle, field_angle):
+                correct += 1
+
+        earned = pts * correct
+        return {
+            "earned": float(earned),
+            "max": float(max_total),
+            "detail": f"{correct}/{len(selected)} coordinates correct",
+        }
     
 
 def get_entity_validator(token_string, data_payload, pattern_blueprint, all_entities_payload=None):
@@ -2552,6 +3049,8 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "graph": GraphEntity,
         "matrix": MatrixEntity,
         "matrixResultByIndex": MatrixResultByIndexEntity,
+        "numAnswer": NumAnswerEntity,
+        "shortAnswer": ShortAnswerEntity,
         "slopeFieldGraph": SlopeFieldGraphEntity,
     }
     
@@ -2706,6 +3205,10 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "formulas"
             elif archetype_name == "slopeFieldGraph":
                 error_field = "equation"
+            elif archetype_name == "numAnswer":
+                error_field = "value"
+            elif archetype_name == "shortAnswer":
+                error_field = "value"
             errors = {
                 error_field: (
                     f"Expression could not be evaluated after resolving linked "
@@ -2715,7 +3218,13 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
     else:
         # Fallback parsing for invalid states
         try:
-            if clean_inputs.get('formula'):
+            if archetype_name == 'numAnswer':
+                evaluated_output = "[Invalid Numeric Answer]"
+                latex_output = "[Invalid Numeric Answer]"
+            elif archetype_name == 'shortAnswer':
+                evaluated_output = "[Invalid Short Answer]"
+                latex_output = "[Invalid Short Answer]"
+            elif clean_inputs.get('formula') and archetype_name == 'formula':
                 evaluated_output = str(validator.evaluate_output())
                 latex_output = evaluated_output
             elif archetype_name == 'graph':

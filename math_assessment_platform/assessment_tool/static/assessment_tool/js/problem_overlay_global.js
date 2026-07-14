@@ -9,6 +9,8 @@ import {
     processEntity as slopeFieldGraphProcessor,
     renderSlopeFieldCanvas
 } from './entities/slopeFieldGraph.js';
+import { processEntity as numAnswerProcessor } from './entities/numAnswer.js';
+import { processEntity as shortAnswerProcessor } from './entities/shortAnswer.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -21,6 +23,8 @@ const ENTITY_REGISTRY = {
     'matrixResultByIndex': matrixResultByIndexProcessor,
     'graph': graphProcessor,
     'slopeFieldGraph': slopeFieldGraphProcessor,
+    'numAnswer': numAnswerProcessor,
+    'shortAnswer': shortAnswerProcessor,
 };
 
 
@@ -80,6 +84,19 @@ document.addEventListener('DOMContentLoaded', function() {
     // 🎯 Live formula cache to prevent lagging network requests on rendering passes
     let formulaLiveLatexCache = {};
 
+    // Ephemeral student answers from Workspace Simulation Preview only.
+    // Never included in save-workspace payloads; cleared when closing/reloading the overlay.
+    // Real student-answer persistence belongs elsewhere (future assessment flow).
+    const previewStudentAnswers = {};
+    let previewGradeRefreshTimer = null;
+    let previewGradeRequestId = 0;
+
+    function clearPreviewStudentAnswers() {
+        Object.keys(previewStudentAnswers).forEach((key) => {
+            delete previewStudentAnswers[key];
+        });
+    }
+
     // Global Workspace Quill Editor Tracker Instance
     let workspaceQuillInstance = null;
 
@@ -137,7 +154,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (targetContainer) {
                 removePlaceholders(targetContainer);
                 createTokenBadge(tokenSelected);
-                createNewBlockInstanceUI(tokenSelected, targetContainer, {});
+                const tokenSourceArray = isVariable ? dynamicVarsTokens : answerFieldsTokens;
+                const matchingTokenData = tokenSourceArray.find(item => item.token === tokenSelected);
+                const defaultPoints = matchingTokenData?.points_default ?? 1.0;
+                createNewBlockInstanceUI(tokenSelected, targetContainer, {}, defaultPoints);
                 
                 const builtCards = targetContainer.querySelectorAll('.workspace-block-card');
                 const newestCard = builtCards[builtCards.length - 1];
@@ -251,7 +271,7 @@ document.addEventListener('DOMContentLoaded', function() {
     /**
      * Unified Form Element Interface Constructor Factory
      */
-    function createNewBlockInstanceUI(token, containerElement, savedValues = {}, points = 0.0, overrideSequenceToken = undefined) {
+    function createNewBlockInstanceUI(token, containerElement, savedValues = {}, points = undefined, overrideSequenceToken = undefined) {
 
         const card = document.createElement('div');
         card.className = 'workspace-component-card workspace-block-card';
@@ -260,7 +280,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const isVariable = dynamicVarsTokens.some(item => item.token === token);
         const headerColor = isVariable ? '#0284c7' : '#16a34a';
-        const typeBadgeText = isVariable ? 'Variable' : `${points} Pts`;
+        const tokenSourceArray = isVariable ? dynamicVarsTokens : answerFieldsTokens;
+        const matchingTokenData = tokenSourceArray.find(item => item.token === token);
+        const resolvedPoints = (points !== undefined && points !== null && points !== '')
+            ? Number(points)
+            : Number(matchingTokenData?.points_default ?? 1.0);
+        const safePoints = Number.isFinite(resolvedPoints) ? resolvedPoints : 1.0;
 
         let indexedTokenString = "";
 
@@ -285,8 +310,6 @@ document.addEventListener('DOMContentLoaded', function() {
             indexedTokenString = `${token}${nextSequenceIndex}`;
         }
 
-        const tokenSourceArray = isVariable ? dynamicVarsTokens : answerFieldsTokens;
-        const matchingTokenData = tokenSourceArray.find(item => item.token === token);
         const tokenNoteHint = matchingTokenData ? (matchingTokenData.note || '') : '';
 
         // Helper function to prevent inserting literal token strings into type="number" inputs
@@ -305,6 +328,15 @@ document.addEventListener('DOMContentLoaded', function() {
             fieldsHtml = `<p style="font-size:0.8rem; color:#64748b; margin:0;">Standard attributes container template wrapper.</p>`;
         }
 
+        const pointsBadgeHtml = isVariable
+            ? `<span style="font-size: 0.77rem; background:#e0f2fe; color:#0369a1; padding:1px 6px; border-radius:10px; font-weight:500;">Variable</span>`
+            : `<label style="font-size: 0.72rem; background:#dcfce7; color:#166534; padding:2px 6px; border-radius:10px; font-weight:500; display:inline-flex; align-items:center; gap:4px; cursor:pointer;" title="Points value for this answer field">
+                    <input type="number" min="0" step="any" class="val-answer-field-points" value="${safePoints}" style="width:48px; font-size:0.72rem; padding:1px 4px; border:1px solid #86efac; border-radius:4px; background:#fff; color:#166534; font-weight:600;">
+                    Pts
+               </label>`;
+
+        card.setAttribute('data-points', String(safePoints));
+
         card.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px dashed #e2e8f0; padding-bottom: 6px; margin-bottom: 4px;">
                 <span style="font-weight: 600; font-size: 0.85rem; color: ${headerColor};"><i class="fas fa-cube"></i> &lt;${indexedTokenString}&gt;</span>
@@ -316,7 +348,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         </button>
                     ` : ''}
 
-                    <span style="font-size: 0.77rem; background:${isVariable ? '#e0f2fe' : '#dcfce7'}; color:${isVariable ? '#0369a1' : '#166534'}; padding:1px 6px; border-radius:10px; font-weight:500;">${typeBadgeText}</span>
+                    ${pointsBadgeHtml}
                     
                     ${tokenNoteHint ? `
                         <div class="workspace-info-tooltip-container" 
@@ -428,6 +460,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
         card.addEventListener('input', function(e) {
             if (e.target.matches('input, select, textarea')) {
+                if (e.target.classList.contains('val-answer-field-points')) {
+                    const parsed = parseFloat(e.target.value);
+                    if (Number.isFinite(parsed)) {
+                        card.setAttribute('data-points', String(parsed));
+                    }
+                    scheduleWorkspacePreviewGradeRefresh(200);
+                }
                 if (typeof saveStatusSpan !== 'undefined' && saveStatusSpan) {
                     saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
                 }
@@ -573,6 +612,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (!canvasContent || canvasContent === '<p><br></p>') {
             renderTarget.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Interactive layout testing view builds dynamically here...</p>';
+            scheduleWorkspacePreviewGradeRefresh();
             return;
         }
 
@@ -580,6 +620,182 @@ document.addEventListener('DOMContentLoaded', function() {
             renderPreviewCanvasMarkup(canvasContent, renderTarget);
         } else {
             console.warn("Simulation preview aborted: renderPreviewCanvasMarkup is not available.");
+        }
+        scheduleWorkspacePreviewGradeRefresh();
+    }
+
+    function scheduleWorkspacePreviewGradeRefresh(delayMs = 280) {
+        if (previewGradeRefreshTimer) clearTimeout(previewGradeRefreshTimer);
+        previewGradeRefreshTimer = setTimeout(() => {
+            previewGradeRefreshTimer = null;
+            refreshWorkspacePreviewGrades();
+        }, delayMs);
+    }
+
+    function collectAnswerFieldEntitiesForGrading() {
+        const entities = [];
+        const answerCards = inputsContainer
+            ? inputsContainer.querySelectorAll('.workspace-block-card')
+            : document.querySelectorAll('#sidebar-inputs-list .workspace-block-card');
+
+        answerCards.forEach(card => {
+            const baseToken = card.getAttribute('data-token');
+            if (!baseToken) return;
+            if (!answerFieldsTokens.some(item => item.token === baseToken)) return;
+
+            const delBtn = card.querySelector('.btn-delete-workspace-component');
+            const sequenceToken = delBtn?.getAttribute('data-indexed-token') || baseToken;
+            const matchingMeta = answerFieldsTokens.find(item => item.token === baseToken);
+            const label = matchingMeta?.name
+                ? `${matchingMeta.name} (<${sequenceToken}>)`
+                : `<${sequenceToken}>`;
+
+            const inputValues = {};
+            card.querySelectorAll('.linked-input-wrapper:not(.row-variable-substitutions .linked-input-wrapper):not(.substitutions-list-container .linked-input-wrapper)').forEach(wrapper => {
+                const inputKey = wrapper.getAttribute('data-input-key');
+                if (!inputKey) return;
+                const boundToken = wrapper.getAttribute('data-bound-token');
+                if (boundToken) {
+                    let cleanToken = boundToken.replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                    if (!cleanToken.startsWith('<')) cleanToken = `<${cleanToken}`;
+                    if (!cleanToken.endsWith('>')) cleanToken = `${cleanToken}>`;
+                    inputValues[inputKey] = cleanToken;
+                } else {
+                    const interactiveField = wrapper.querySelector('input, select, textarea');
+                    if (interactiveField && !interactiveField.classList.contains('val-input-simplify-target')) {
+                        inputValues[inputKey] = interactiveField.value.trim();
+                    }
+                }
+            });
+
+            const serializedInputs = getEntityInformation(baseToken, {
+                action: 'serialize',
+                card,
+                inputsCollected: inputValues
+            });
+            if (serializedInputs && typeof serializedInputs === 'object') {
+                Object.assign(inputValues, serializedInputs);
+            }
+
+            const rawPts = card.querySelector('.val-answer-field-points')?.value;
+            let points = parseFloat(rawPts);
+            if (!Number.isFinite(points)) {
+                points = parseFloat(card.getAttribute('data-points'));
+            }
+            if (!Number.isFinite(points)) points = 0;
+
+            entities.push({
+                token: sequenceToken,
+                sequence_token: sequenceToken,
+                archetype: baseToken,
+                label,
+                points,
+                inputs: inputValues,
+                simulated_value: card.getAttribute('data-simulated-value') || ''
+            });
+        });
+
+        return entities;
+    }
+
+    function renderWorkspacePreviewGradeResults(data) {
+        const target = document.getElementById('workspace-preview-grade-target');
+        if (!target) return;
+
+        const items = Array.isArray(data?.items) ? data.items : [];
+        if (!items.length) {
+            target.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">No answer input fields in this problem yet.</p>';
+            return;
+        }
+
+        const rows = items.map(item => {
+            const earned = Number(item.earned) || 0;
+            const max = Number(item.max) || 0;
+            const detail = item.detail ? `<div style="font-size:0.72rem; color:#64748b; margin-top:2px;">${escapeHtmlText(item.detail)}</div>` : '';
+            const label = escapeHtmlText(item.label || item.token || 'Answer field');
+            return `
+                <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:8px 0; border-bottom:1px solid #e2e8f0;">
+                    <div style="min-width:0;">
+                        <div style="font-size:0.85rem; font-weight:600; color:#0f172a;">${label}</div>
+                        ${detail}
+                    </div>
+                    <div style="font-size:0.85rem; font-weight:700; color:#166534; white-space:nowrap;">${formatGradeNumber(earned)} / ${formatGradeNumber(max)}</div>
+                </div>
+            `;
+        }).join('');
+
+        const earnedTotal = Number(data.earned_total) || 0;
+        const maxTotal = Number(data.max_total) || 0;
+        target.innerHTML = `
+            <div>${rows}</div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding-top:10px; border-top:2px solid #cbd5e1;">
+                <span style="font-size:0.85rem; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.03em;">Total</span>
+                <span style="font-size:1rem; font-weight:800; color:#0f172a;">${formatGradeNumber(earnedTotal)} / ${formatGradeNumber(maxTotal)}</span>
+            </div>
+        `;
+    }
+
+    function formatGradeNumber(n) {
+        if (!Number.isFinite(n)) return '0';
+        if (Number.isInteger(n)) return String(n);
+        return String(Math.round(n * 1000) / 1000);
+    }
+
+    function escapeHtmlText(val) {
+        return String(val)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    async function refreshWorkspacePreviewGrades() {
+        const target = document.getElementById('workspace-preview-grade-target');
+        const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
+        const entities = collectAnswerFieldEntitiesForGrading();
+        // Sibling dynamic variables (and all cards) so linked answer keys can resolve
+        const all_entities = typeof serializeAllWorkspaceEntities === 'function'
+            ? serializeAllWorkspaceEntities()
+            : entities;
+
+        if (!target) return;
+        if (!problemId) {
+            target.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Open a problem to grade preview answers.</p>';
+            return;
+        }
+        if (!entities.length) {
+            renderWorkspacePreviewGradeResults({ items: [], earned_total: 0, max_total: 0 });
+            return;
+        }
+
+        const student_answers = {};
+        entities.forEach(entity => {
+            const key = entity.sequence_token || entity.token;
+            const stored = previewStudentAnswers[key];
+            student_answers[key] = (stored === undefined) ? null : stored;
+        });
+
+        const requestId = ++previewGradeRequestId;
+        try {
+            const response = await fetch(`/api/problem/${problemId}/grade-workspace-preview/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({ entities, all_entities, student_answers })
+            });
+            const data = await response.json();
+            if (requestId !== previewGradeRequestId) return;
+            if (!response.ok || data.success === false) {
+                target.innerHTML = `<p style="color:#dc2626; margin:0; font-size:0.85rem;">${escapeHtmlText(data.error || 'Grading request failed.')}</p>`;
+                return;
+            }
+            renderWorkspacePreviewGradeResults(data);
+        } catch (err) {
+            if (requestId !== previewGradeRequestId) return;
+            console.error('Preview grading failed:', err);
+            target.innerHTML = '<p style="color:#dc2626; margin:0; font-size:0.85rem;">Grading request failed.</p>';
         }
     }
 
@@ -781,7 +997,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         previewInstanceId: `live-preview-canvas-${cleanToken}-${++previewGraphSeq}`,
                         registerPreviewGraph: (job) => {
                             if (job) pendingGraphRenders.push(job);
-                        }
+                        },
+                        initialValue: (() => {
+                            const stored = previewStudentAnswers[cleanToken];
+                            if (stored && typeof stored === 'object' && stored.value != null) {
+                                return stored.value;
+                            }
+                            return '';
+                        })()
                     });
                     if (answerPreviewHtml) {
                         return answerPreviewHtml;
@@ -855,12 +1078,46 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Paint graphs only after preview DOM exists (setTimeout-from-replace races with tables)
         flushPreviewGraphRenders(renderTarget, pendingGraphRenders);
+        bindPreviewNumAnswerInputs(renderTarget);
+        bindPreviewShortAnswerInputs(renderTarget);
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
         // Remeasure once plot SVG layout settles
         setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 40);
         setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 200);
+    }
+
+    function bindPreviewNumAnswerInputs(root) {
+        if (!root) return;
+        root.querySelectorAll('.preview-num-answer-input').forEach((input) => {
+            if (input.dataset.previewNumBound === '1') return;
+            input.dataset.previewNumBound = '1';
+            const tokenKey = input.getAttribute('data-token') || '';
+            const sync = () => {
+                if (!tokenKey) return;
+                previewStudentAnswers[tokenKey] = { value: input.value };
+                scheduleWorkspacePreviewGradeRefresh(180);
+            };
+            input.addEventListener('input', sync);
+            input.addEventListener('change', sync);
+        });
+    }
+
+    function bindPreviewShortAnswerInputs(root) {
+        if (!root) return;
+        root.querySelectorAll('.preview-short-answer-input').forEach((input) => {
+            if (input.dataset.previewShortBound === '1') return;
+            input.dataset.previewShortBound = '1';
+            const tokenKey = input.getAttribute('data-token') || '';
+            const sync = () => {
+                if (!tokenKey) return;
+                previewStudentAnswers[tokenKey] = { value: input.value };
+                scheduleWorkspacePreviewGradeRefresh(180);
+            };
+            input.addEventListener('input', sync);
+            input.addEventListener('change', sync);
+        });
     }
 
     /**
@@ -895,9 +1152,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const height = Math.max(100, Math.round(width * (240 / 340)));
             canvasEl.style.width = '100%';
-            canvasEl.style.height = `${height}px`;
-            canvasEl.style.minHeight = `${height}px`;
-            canvasEl.innerHTML = '';
             if (container) {
                 container.style.maxWidth = `${width + 8}px`;
                 container.style.width = '100%';
@@ -905,12 +1159,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
             try {
                 if (job.kind === 'slopeFieldGraph' || job.graphConfig?.archetype === 'slopeFieldGraph') {
+                    // Let the host grow for equation label + optional instruction text
+                    canvasEl.style.height = 'auto';
+                    canvasEl.style.minHeight = '';
+                    canvasEl.style.overflow = 'visible';
+                    canvasEl.innerHTML = '';
+                    const tokenKey = job.cleanToken || '';
+                    const stored = tokenKey ? previewStudentAnswers[tokenKey] : null;
+                    const initialMarks = (stored && Array.isArray(stored.marks)) ? stored.marks : [];
                     renderSlopeFieldCanvas(canvasEl, job.graphConfig, {
                         mode: 'student',
                         width,
-                        height
+                        height,
+                        initialMarks,
+                        onStudentAnswerChange: (marks) => {
+                            if (!tokenKey) return;
+                            previewStudentAnswers[tokenKey] = { marks: Array.isArray(marks) ? marks : [] };
+                            scheduleWorkspacePreviewGradeRefresh(180);
+                        }
                     });
                 } else {
+                    canvasEl.style.height = `${height}px`;
+                    canvasEl.style.minHeight = `${height}px`;
+                    canvasEl.innerHTML = '';
                     renderGraphComponentCanvas(job.canvasId, job.graphConfig, { width, height });
                 }
             } catch (err) {
@@ -1282,8 +1553,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!token) return;
 
 
-            // 🎯 Determine base archetype and correct case-matching for database key lookups
-            let baseArchetypeToken = token.replace(/[0-9]/g, '');
+            // 🎯 Determine base archetype (trailing index only — keep digits inside names)
+            let baseArchetypeToken = token.replace(/\d+$/, '');
 
             // 🎯 Dynamic Lookup from your database blueprints global map
             const databaseBlueprints = window.DATABASE_BLUEPRINTS || {};
@@ -1780,6 +2051,10 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (cardElement) cardElement.remove();
 
+            if (indexedTokenToRemove && Object.prototype.hasOwnProperty.call(previewStudentAnswers, indexedTokenToRemove)) {
+                delete previewStudentAnswers[indexedTokenToRemove];
+            }
+
             // Remove the exact matching indexed text badge wrapper from the top tracking row ledger
             if (tokensLedger && indexedTokenToRemove) {
                 tokensLedger.querySelectorAll('.token-badge-clickable').forEach(badge => {
@@ -1803,6 +2078,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 updateWorkspaceSimulationPreview();
             }
+            scheduleWorkspacePreviewGradeRefresh();
             return;
         }
 
@@ -1862,6 +2138,7 @@ document.addEventListener('DOMContentLoaded', function() {
         workspaceOverlay.setAttribute('data-current-problem-id', problemId);
         workspaceOverlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
+        clearPreviewStudentAnswers();
 
         if (saveStatusSpan) {
             saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Loading workspace options...`;
@@ -2211,6 +2488,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (closeOverlayBtn) {
         closeOverlayBtn.addEventListener('click', function() {
+            clearPreviewStudentAnswers();
             workspaceOverlay.style.display = 'none';
             document.body.style.overflow = '';
         });
@@ -5473,6 +5751,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let pendingDraftSavePayload = null;
 
     function collectWorkspaceSavePayload() {
+        // Preview student answers (previewStudentAnswers) are intentionally omitted —
+        // only teacher authoring state is persisted from this overlay.
         const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
         const titleValue = overlayTitleField ? overlayTitleField.value.trim() : '';
         const canvasHtml = getWorkspaceQuillHtmlForSave();
@@ -5551,6 +5831,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 token: baseToken,
                 sequence_token: indexedTokenString,
                 shuffle_seed: shuffleSeedValue,
+                points: (() => {
+                    const isAnswerField = answerFieldsTokens.some(item => item.token === baseToken);
+                    if (!isAnswerField) return undefined;
+                    const raw = card.querySelector('.val-answer-field-points')?.value;
+                    const parsed = parseFloat(raw);
+                    return Number.isFinite(parsed) ? parsed : (Number(card.getAttribute('data-points')) || 0);
+                })(),
                 inputs: inputValues
             });
         });
@@ -5959,14 +6246,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 } catch (e) {}
             }
 
-            // Prefer live card output types (e.g. matrixResultByIndex cell classification)
-            // when the entity processor returns an array; otherwise use blueprint output.
+            // Prefer live card output types (e.g. matrixResultByIndex cell classification,
+            // matrix determinate → double) when the entity processor returns an array;
+            // otherwise use blueprint output / data-output-types attribute.
             let rawOutput = getEntityInformation(baseArchetype, {
                 action: 'getOutputTypes',
                 card
             });
-            if (!Array.isArray(rawOutput)) {
-                rawOutput = blueprintData.output || tokenDefinition.output || [];
+            if (!Array.isArray(rawOutput) || rawOutput.length === 0) {
+                const attrTypes = (card.getAttribute('data-output-types') || '')
+                    .split(',')
+                    .map(t => t.trim())
+                    .filter(Boolean);
+                if (attrTypes.length) {
+                    rawOutput = attrTypes;
+                } else {
+                    rawOutput = blueprintData.output || tokenDefinition.output || [];
+                }
             }
 
             const derivedOutputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
@@ -5982,10 +6278,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 inputKey,
                 targetTypeAttr,
                 derivedOutputs,
-                acceptedTargetTypes
+                acceptedTargetTypes,
+                sourceArchetype: baseArchetype,
+                sourceToken: indexedToken
             });
             if (linkOverride === true) {
                 isCompatible = true;
+            } else if (linkOverride === false) {
+                isCompatible = false;
             } else if (targetTypeAttr === 'text' && (inputKey.startsWith('formula_') || currentCard.getAttribute('data-token') === 'graph')) {
                 if (derivedOutputs.includes('formula') || derivedOutputs.includes('double') || derivedOutputs.includes('integer')) {
                     isCompatible = true;

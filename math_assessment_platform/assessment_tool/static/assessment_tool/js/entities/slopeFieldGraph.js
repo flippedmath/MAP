@@ -49,6 +49,7 @@ function getFieldsHtml(savedValues) {
     const [xMin, xMax, xStep] = getAxisTriple(savedValues, 'x');
     const [yMin, yMax, yStep] = getAxisTriple(savedValues, 'y');
     const selectedJson = JSON.stringify(Array.isArray(savedValues.selected_points) ? savedValues.selected_points : []);
+    const showInstructions = isShowInstructionsEnabled(savedValues);
 
     return `
         <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box;">
@@ -86,11 +87,26 @@ function getFieldsHtml(savedValues) {
                 </div>
             </div>
 
+            <div class="linked-input-wrapper" data-input-key="show_instructions" data-input-type="checkbox" style="display:flex; align-items:center; gap:8px;">
+                <label style="font-size:0.75rem; color:#475569; font-weight:500; display:inline-flex; align-items:center; gap:6px; cursor:pointer; margin:0;">
+                    <input type="checkbox" class="val-slope-show-instructions" ${showInstructions ? 'checked' : ''} style="cursor:pointer;">
+                    Show instructions under preview graph
+                </label>
+            </div>
+
             <input type="hidden" class="val-slope-selected-points" value='${escapeAttr(selectedJson)}'>
             <div class="slope-field-card-host" data-selected-points='${escapeAttr(selectedJson)}' style="width:100%; min-height:240px; background:#ffffff; border:1px solid #e2e8f0; border-radius:4px;"></div>
-            <span style="font-size:0.7rem; color:#64748b;">Click a lattice dot to mark/unmark that slope tick (dark = selected).</span>
+            <span style="font-size:0.7rem; color:#64748b;">Only lattice points whose slope lines up exactly with another visible lattice point (or are undefined) can be marked — light blue = selectable, red = selected, gray = not selectable.</span>
+            <div class="slope-points-summary" style="font-size:0.75rem; color:#166534; font-weight:500; padding:2px 0;">1 point per coordinate. = 0 points total</div>
         </div>
     `;
+}
+
+function isShowInstructionsEnabled(savedValues) {
+    const raw = savedValues?.show_instructions;
+    if (typeof raw === 'boolean') return raw;
+    if (raw == null || raw === '') return false;
+    return ['true', '1', 'yes', 'checked', 'on'].includes(String(raw).toLowerCase());
 }
 
 function escapeAttr(val) {
@@ -99,6 +115,26 @@ function escapeAttr(val) {
         .replace(/"/g, '&quot;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
+}
+
+function updateSlopePointsSummary(card) {
+    if (!card) return;
+    const summary = card.querySelector('.slope-points-summary');
+    if (!summary) return;
+
+    const rawPts = card.querySelector('.val-answer-field-points')?.value;
+    let pts = parseFloat(rawPts);
+    if (!Number.isFinite(pts)) {
+        pts = parseFloat(card.getAttribute('data-points'));
+    }
+    if (!Number.isFinite(pts)) pts = 1;
+
+    const host = card.querySelector('.slope-field-card-host');
+    const selected = host ? readSelectedFromHost(host) : [];
+    const count = Array.isArray(selected) ? selected.length : 0;
+    const total = pts * count;
+    const unit = pts === 1 ? 'point' : 'points';
+    summary.textContent = `${pts} ${unit} per coordinate. = ${total} points total`;
 }
 
 function bindEvents({ card, updateWorkspaceSimulationPreview }) {
@@ -110,7 +146,36 @@ function bindEvents({ card, updateWorkspaceSimulationPreview }) {
         // Selection clicks are bound inside renderSlopeFieldCanvas(author mode)
     }
 
-    // Checkbox-like change isn't needed; axis/equation already fire card input → preview
+    const pointsInput = card.querySelector('.val-answer-field-points');
+    if (pointsInput && !pointsInput.dataset.slopePointsBound) {
+        pointsInput.dataset.slopePointsBound = '1';
+        const syncPoints = () => {
+            const parsed = parseFloat(pointsInput.value);
+            if (Number.isFinite(parsed)) {
+                card.setAttribute('data-points', String(parsed));
+            }
+            updateSlopePointsSummary(card);
+            if (typeof updateWorkspaceSimulationPreview === 'function') {
+                updateWorkspaceSimulationPreview();
+            }
+        };
+        pointsInput.addEventListener('input', syncPoints);
+        pointsInput.addEventListener('change', syncPoints);
+    }
+
+    const instructionsCheckbox = card.querySelector('.val-slope-show-instructions');
+    if (instructionsCheckbox && !instructionsCheckbox.dataset.slopeInstructionsBound) {
+        instructionsCheckbox.dataset.slopeInstructionsBound = '1';
+        instructionsCheckbox.addEventListener('change', () => {
+            const probe = card.querySelector('.val-slope-equation') || card;
+            probe.dispatchEvent(new Event('input', { bubbles: true }));
+            if (typeof updateWorkspaceSimulationPreview === 'function') {
+                updateWorkspaceSimulationPreview();
+            }
+        });
+    }
+
+    updateSlopePointsSummary(card);
     return true;
 }
 
@@ -159,7 +224,9 @@ function serialize({ card, inputsCollected }) {
         inputsCollected['y-axis range']
     );
     writeSelectedToHost(card, selected);
+    updateSlopePointsSummary(card);
     inputsCollected.selected_points = selected;
+    inputsCollected.show_instructions = !!card.querySelector('.val-slope-show-instructions')?.checked;
     return inputsCollected;
 }
 
@@ -246,6 +313,7 @@ function applyBatchSync({ card, result, token }) {
         selected = pruneSelectedToLattice(selected, config.lattice || []);
         writeSelectedToHost(card, selected);
         config.selected_points = selected;
+        updateSlopePointsSummary(card);
 
         renderSlopeFieldCanvas(host, config, {
             mode: 'author',
@@ -253,11 +321,13 @@ function applyBatchSync({ card, result, token }) {
             height: 240,
             onSelectionChange: (points) => {
                 writeSelectedToHost(card, points);
+                updateSlopePointsSummary(card);
                 // Bubble so overlay marks unsaved + runs live sync / preview refresh
                 const probe = card.querySelector('.val-slope-equation') || card;
                 probe.dispatchEvent(new Event('input', { bubbles: true }));
             }
         });
+        updateSlopePointsSummary(card);
     } catch (err) {
         console.error('Slope field card render failed:', err);
         host.innerHTML = `<div style="padding:12px; color:#dc2626; font-size:0.85rem; text-align:center;">⚠️ Could not render slope field.</div>`;
@@ -325,7 +395,7 @@ function renderPreviewToken({
 
     return `
         <div class="simulated-live-slope-preview-container" style="display:inline-block; vertical-align:middle; margin:4px 2px; max-width:348px; width:100%;">
-            <div id="${canvasId}" class="live-preview-slope-canvas" style="width:100%; min-height:240px; background:#fff; border:1px solid #e2e8f0; border-radius:4px;"></div>
+            <div id="${canvasId}" class="live-preview-slope-canvas" style="width:100%; background:#fff; border:1px solid #e2e8f0; border-radius:4px; overflow:visible;"></div>
         </div>
     `;
 }
@@ -377,28 +447,69 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
         return Number(n).toFixed(8);
     }
 
-    function tickEndpoints(x, y, slope, finite) {
+    function isUndefinedSlope(p) {
+        if (!p) return true;
+        if (p.finite === false) return true;
+        if (p.slope === null || p.slope === undefined) return true;
+        return !Number.isFinite(Number(p.slope));
+    }
+
+    function tickEndpoints(x, y, slope) {
         const cx = xToPx(x);
         const cy = yToPx(y);
-        // Half-length in graph units along the direction vector of length tickLen
-        let dx = tickLen / 2;
-        let dy = 0;
-        if (!finite || slope === null || slope === undefined || !Number.isFinite(Number(slope))) {
-            // Vertical
-            dx = 0;
-            dy = tickLen / 2;
-        } else {
-            const m = Number(slope);
-            const angle = Math.atan(m);
-            dx = (tickLen / 2) * Math.cos(angle);
-            dy = (tickLen / 2) * Math.sin(angle);
-        }
+        const m = Number(slope);
+        const angle = Math.atan(m);
+        const dx = (tickLen / 2) * Math.cos(angle);
+        const dy = (tickLen / 2) * Math.sin(angle);
         // Convert graph deltas to pixels (y inverted)
         const scaleX = plotW / (xMax - xMin || 1);
         const scaleY = plotH / (yMax - yMin || 1);
         const pdx = dx * scaleX;
         const pdy = -dy * scaleY;
         return { x1: cx - pdx, y1: cy - pdy, x2: cx + pdx, y2: cy + pdy, cx, cy };
+    }
+
+    /** Empty circle used when slope is undefined (equation or student mark). */
+    function createUndefinedCircle(cx, cy, {
+        marked = false,
+        interactive = false,
+        selectable = true,
+        x,
+        y
+    } = {}) {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', String(cx));
+        circle.setAttribute('cy', String(cy));
+        circle.setAttribute('r', marked || interactive ? '5.5' : '4.5');
+        circle.setAttribute('fill', 'none');
+        let stroke = '#94a3b8';
+        let strokeWidth = '1.5';
+        if (interactive) {
+            stroke = '#0f172a';
+            strokeWidth = '2.25';
+        } else if (marked) {
+            stroke = '#dc2626';
+            strokeWidth = '2.25';
+        } else if (selectable) {
+            stroke = '#93c5fd';
+            strokeWidth = '1.75';
+        } else {
+            stroke = '#cbd5e1';
+            strokeWidth = '1.5';
+        }
+        circle.setAttribute('stroke', stroke);
+        circle.setAttribute('stroke-width', strokeWidth);
+        if (x != null) circle.setAttribute('data-x', String(x));
+        if (y != null) circle.setAttribute('data-y', String(y));
+        circle.setAttribute('data-undefined', '1');
+        if (interactive) {
+            circle.setAttribute('class', 'slope-student-locked slope-student-undefined');
+            circle.style.cursor = 'pointer';
+        } else {
+            circle.setAttribute('class', 'slope-undefined-tick');
+            circle.setAttribute('pointer-events', 'none');
+        }
+        return circle;
     }
 
     function endpointsFromAngle(x, y, angleRad) {
@@ -413,8 +524,35 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
         return { x1: cx - pdx, y1: cy - pdy, x2: cx + pdx, y2: cy + pdy, cx, cy };
     }
 
-    // Build lattice lookup for snapping
-    const latticePoints = lattice.map((p) => ({ x: p.x, y: p.y, slope: p.slope, finite: p.finite !== false }));
+    // Build lattice lookup for snapping / selectability
+    const latticePoints = lattice.map((p) => {
+        const finite = p.finite !== false
+            && p.slope != null
+            && Number.isFinite(Number(p.slope));
+        let selectable;
+        if (Object.prototype.hasOwnProperty.call(p, 'selectable')) {
+            selectable = !!p.selectable;
+        } else {
+            // Fallback when older manifests omit the flag: undefined points only
+            selectable = !finite;
+        }
+        return {
+            x: p.x,
+            y: p.y,
+            slope: p.slope,
+            finite,
+            selectable
+        };
+    });
+
+    const selectableKeySet = new Set(
+        latticePoints.filter((p) => p.selectable).map((p) => pointKey(p.x, p.y))
+    );
+    // Drop teacher selections that are no longer selectable
+    selected = selected.filter((pair) => {
+        if (!Array.isArray(pair) || pair.length < 2) return false;
+        return selectableKeySet.has(pointKey(pair[0], pair[1]));
+    });
 
     function nearestLattice(mx, my) {
         let best = null;
@@ -432,13 +570,17 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
     }
 
     targetEl.innerHTML = '';
+    targetEl.style.display = 'flex';
+    targetEl.style.flexDirection = 'column';
+    targetEl.style.boxSizing = 'border-box';
+    targetEl.style.overflow = 'visible';
 
     const equationLabel = document.createElement('div');
     equationLabel.className = 'slope-field-equation-label';
     const equationText = config.equation_display
         || (config.equation ? `dy/dx = ${config.equation}` : '');
     equationLabel.textContent = equationText;
-    equationLabel.style.cssText = 'padding: 6px 10px 4px; font-size: 0.85rem; font-weight: 600; color: #334155; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-align: center; line-height: 1.3;';
+    equationLabel.style.cssText = 'padding: 6px 10px 4px; font-size: 0.85rem; font-weight: 600; color: #334155; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-align: center; line-height: 1.3; flex-shrink: 0;';
     if (equationText) {
         targetEl.appendChild(equationLabel);
     }
@@ -448,8 +590,19 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
     svg.setAttribute('width', String(width));
     svg.setAttribute('height', String(height));
     svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-    svg.style.cssText = 'display:block; width:100%; height:auto; user-select:none;';
+    svg.style.cssText = 'display:block; width:100%; height:auto; max-height:none; user-select:none; flex-shrink:0;';
     targetEl.appendChild(svg);
+
+    if (mode === 'student' && config.show_instructions) {
+        const hint = document.createElement('div');
+        hint.className = 'slope-field-student-hint';
+        hint.style.cssText = 'padding: 6px 10px 8px; font-size: 0.7rem; color: #64748b; text-align: left; line-height: 1.35; flex-shrink: 0;';
+        hint.innerHTML = [
+            'Click a colored point, then another lattice point to draw the slope.',
+            'Click the same colored point twice to mark the slope as undefined.'
+        ].map((line) => `<div>${line}</div>`).join('');
+        targetEl.appendChild(hint);
+    }
 
     // Plot background
     const bg = document.createElementNS(svgNS, 'rect');
@@ -519,15 +672,36 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
         ticksLayer.innerHTML = '';
         const set = selectedSet();
         for (const p of latticePoints) {
-            const ep = tickEndpoints(p.x, p.y, p.slope, p.finite);
+            const marked = isSelected(p.x, p.y, set);
+            const selectable = !!p.selectable;
+            if (isUndefinedSlope(p)) {
+                const cx = xToPx(p.x);
+                const cy = yToPx(p.y);
+                ticksLayer.appendChild(createUndefinedCircle(cx, cy, {
+                    marked,
+                    selectable,
+                    x: p.x,
+                    y: p.y
+                }));
+                continue;
+            }
+            const ep = tickEndpoints(p.x, p.y, p.slope);
             const line = document.createElementNS(svgNS, 'line');
             line.setAttribute('x1', String(ep.x1));
             line.setAttribute('y1', String(ep.y1));
             line.setAttribute('x2', String(ep.x2));
             line.setAttribute('y2', String(ep.y2));
-            const marked = isSelected(p.x, p.y, set);
-            line.setAttribute('stroke', marked ? '#0f172a' : '#cbd5e1');
-            line.setAttribute('stroke-width', marked ? '2.25' : '1.25');
+            let stroke = '#cbd5e1';
+            let strokeWidth = '1.25';
+            if (marked) {
+                stroke = '#dc2626';
+                strokeWidth = '2.25';
+            } else if (selectable) {
+                stroke = '#93c5fd';
+                strokeWidth = '1.75';
+            }
+            line.setAttribute('stroke', stroke);
+            line.setAttribute('stroke-width', strokeWidth);
             line.setAttribute('stroke-linecap', 'round');
             line.setAttribute('data-x', String(p.x));
             line.setAttribute('data-y', String(p.y));
@@ -545,18 +719,27 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             const circle = document.createElementNS(svgNS, 'circle');
             circle.setAttribute('cx', String(cx));
             circle.setAttribute('cy', String(cy));
-            circle.setAttribute('r', mode === 'student' && isSelected(p.x, p.y, set) ? '4.5' : '3.25');
             const marked = isSelected(p.x, p.y, set);
+            const selectable = !!p.selectable;
+            circle.setAttribute('r', mode === 'student' && marked ? '4.5' : '3.25');
             if (mode === 'student') {
                 circle.setAttribute('fill', marked ? '#d97706' : '#64748b');
                 circle.style.cursor = marked ? 'pointer' : 'default';
+            } else if (!selectable) {
+                circle.setAttribute('fill', '#cbd5e1');
+                circle.style.cursor = 'default';
+                circle.setAttribute('pointer-events', 'none');
+            } else if (marked) {
+                circle.setAttribute('fill', '#dc2626');
+                circle.style.cursor = 'pointer';
             } else {
-                circle.setAttribute('fill', marked ? '#0f172a' : '#475569');
+                circle.setAttribute('fill', '#60a5fa');
                 circle.style.cursor = 'pointer';
             }
             circle.setAttribute('data-x', String(p.x));
             circle.setAttribute('data-y', String(p.y));
             circle.setAttribute('data-marked', marked ? '1' : '0');
+            circle.setAttribute('data-selectable', selectable ? '1' : '0');
             circle.setAttribute('class', 'slope-lattice-dot');
             dotsLayer.appendChild(circle);
         }
@@ -565,10 +748,18 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
     if (mode === 'author') {
         drawAuthorTicks();
         drawDots();
+        targetEl.setAttribute('data-selected-points', JSON.stringify(selected));
+        // If server pruned non-selectable points, push once without looping forever
+        const incomingSelected = Array.isArray(config.selected_points) ? config.selected_points : [];
+        const prunedChanged = JSON.stringify(incomingSelected) !== JSON.stringify(selected);
+        if (prunedChanged && typeof options.onSelectionChange === 'function') {
+            options.onSelectionChange(selected.slice());
+        }
 
         svg.addEventListener('click', (evt) => {
             const dot = evt.target.closest?.('.slope-lattice-dot');
             if (!dot || !svg.contains(dot)) return;
+            if (dot.getAttribute('data-selectable') !== '1') return;
             const x = parseFloat(dot.getAttribute('data-x'));
             const y = parseFloat(dot.getAttribute('data-y'));
             if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -591,9 +782,29 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
         // Student mode: dots only; marked dots interactive
         drawDots();
 
-        /** @type {Map<string, {x:number,y:number,angle:number,el:SVGLineElement}>} */
+        /** @type {Map<string, {x:number,y:number,kind:'slope'|'undefined',angle?:number,el:SVGElement}>} */
         const locked = new Map();
         let draft = null; // { x, y, angle, el }
+
+        function exportMarks() {
+            return Array.from(locked.values()).map((entry) => {
+                const mark = {
+                    x: entry.x,
+                    y: entry.y,
+                    kind: entry.kind
+                };
+                if (entry.kind === 'slope' && Number.isFinite(entry.angle)) {
+                    mark.angle = entry.angle;
+                }
+                return mark;
+            });
+        }
+
+        function notifyAnswerChange() {
+            if (typeof options.onStudentAnswerChange === 'function') {
+                options.onStudentAnswerChange(exportMarks());
+            }
+        }
 
         function removeDraft() {
             if (draft?.el) draft.el.remove();
@@ -608,6 +819,7 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
                 line.setAttribute('stroke-width', '2.5');
                 line.setAttribute('stroke-linecap', 'round');
                 line.setAttribute('class', 'slope-student-draft');
+                line.setAttribute('pointer-events', 'none');
                 studentLayer.appendChild(line);
                 draft = { x, y, angle, el: line };
             }
@@ -618,21 +830,85 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             draft.el.setAttribute('y2', String(ep.y2));
         }
 
+        function clearLockedAt(key) {
+            const existing = locked.get(key);
+            if (existing?.el) existing.el.remove();
+            locked.delete(key);
+        }
+
         function lockDraft() {
             if (!draft) return;
             const key = pointKey(draft.x, draft.y);
-            // Replace any existing lock at this point
-            const existing = locked.get(key);
-            if (existing?.el) existing.el.remove();
+            clearLockedAt(key);
 
             draft.el.setAttribute('stroke', '#0f172a');
             draft.el.setAttribute('class', 'slope-student-locked');
             draft.el.setAttribute('data-x', String(draft.x));
             draft.el.setAttribute('data-y', String(draft.y));
             draft.el.style.cursor = 'pointer';
-            locked.set(key, { x: draft.x, y: draft.y, angle: draft.angle, el: draft.el });
+            locked.set(key, {
+                x: draft.x,
+                y: draft.y,
+                kind: 'slope',
+                angle: draft.angle,
+                el: draft.el
+            });
             draft = null;
+            notifyAnswerChange();
         }
+
+        function lockUndefinedAt(dx, dy) {
+            const key = pointKey(dx, dy);
+            clearLockedAt(key);
+            const circle = createUndefinedCircle(xToPx(dx), yToPx(dy), {
+                interactive: true,
+                x: dx,
+                y: dy
+            });
+            studentLayer.appendChild(circle);
+            locked.set(key, { x: dx, y: dy, kind: 'undefined', el: circle });
+            notifyAnswerChange();
+        }
+
+        function restoreMark(mark) {
+            if (!mark || typeof mark !== 'object') return;
+            const x = parseFloat(mark.x);
+            const y = parseFloat(mark.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            const key = pointKey(x, y);
+            clearLockedAt(key);
+            const kind = String(mark.kind || '').toLowerCase();
+            if (kind === 'undefined') {
+                const circle = createUndefinedCircle(xToPx(x), yToPx(y), {
+                    interactive: true,
+                    x,
+                    y
+                });
+                studentLayer.appendChild(circle);
+                locked.set(key, { x, y, kind: 'undefined', el: circle });
+                return;
+            }
+            const angle = parseFloat(mark.angle);
+            if (!Number.isFinite(angle)) return;
+            const ep = endpointsFromAngle(x, y, angle);
+            const line = document.createElementNS(svgNS, 'line');
+            line.setAttribute('x1', String(ep.x1));
+            line.setAttribute('y1', String(ep.y1));
+            line.setAttribute('x2', String(ep.x2));
+            line.setAttribute('y2', String(ep.y2));
+            line.setAttribute('stroke', '#0f172a');
+            line.setAttribute('stroke-width', '2.5');
+            line.setAttribute('stroke-linecap', 'round');
+            line.setAttribute('class', 'slope-student-locked');
+            line.setAttribute('data-x', String(x));
+            line.setAttribute('data-y', String(y));
+            line.style.cursor = 'pointer';
+            studentLayer.appendChild(line);
+            locked.set(key, { x, y, kind: 'slope', angle, el: line });
+        }
+
+        const initialMarks = Array.isArray(options.initialMarks) ? options.initialMarks : [];
+        initialMarks.forEach(restoreMark);
 
         function svgPointFromEvent(evt) {
             const pt = svg.createSVGPoint();
@@ -662,20 +938,48 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
         });
 
         svg.addEventListener('click', (evt) => {
-            // Remove locked segment if clicked
-            const lockedLine = evt.target.closest?.('.slope-student-locked');
-            if (lockedLine && studentLayer.contains(lockedLine)) {
-                const lx = lockedLine.getAttribute('data-x');
-                const ly = lockedLine.getAttribute('data-y');
+            // Remove locked segment / undefined mark if clicked
+            const lockedEl = evt.target.closest?.('.slope-student-locked');
+            if (lockedEl && studentLayer.contains(lockedEl)) {
+                const lx = lockedEl.getAttribute('data-x');
+                const ly = lockedEl.getAttribute('data-y');
                 locked.delete(pointKey(parseFloat(lx), parseFloat(ly)));
-                lockedLine.remove();
+                lockedEl.remove();
                 removeDraft();
+                notifyAnswerChange();
                 evt.stopPropagation();
                 return;
             }
 
             if (draft) {
-                // Second click: lock current angle (optionally re-snap on click position)
+                // Second click on the same lattice dot → mark undefined (empty circle)
+                const sameDot = evt.target.closest?.('.slope-lattice-dot');
+                let sx = NaN;
+                let sy = NaN;
+                if (sameDot && svg.contains(sameDot)) {
+                    sx = parseFloat(sameDot.getAttribute('data-x'));
+                    sy = parseFloat(sameDot.getAttribute('data-y'));
+                } else {
+                    // Fallback: click near the draft origin counts as same-dot
+                    const p = svgPointFromEvent(evt);
+                    if (p) {
+                        const distPx = Math.hypot(xToPx(draft.x) - p.px, yToPx(draft.y) - p.py);
+                        if (distPx <= 14) {
+                            sx = draft.x;
+                            sy = draft.y;
+                        }
+                    }
+                }
+                if (Number.isFinite(sx) && Number.isFinite(sy)
+                    && pointKey(sx, sy) === pointKey(draft.x, draft.y)) {
+                    const dx = draft.x;
+                    const dy = draft.y;
+                    removeDraft();
+                    lockUndefinedAt(dx, dy);
+                    return;
+                }
+
+                // Second click elsewhere: lock current angle
                 const p = svgPointFromEvent(evt);
                 if (p) {
                     const angle = angleTowardNearest(draft.x, draft.y, p.x, p.y);
@@ -695,11 +999,9 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
 
             // Start draft horizontal (angle 0)
             const key = pointKey(x, y);
-            const existing = locked.get(key);
-            if (existing?.el) {
-                existing.el.remove();
-                locked.delete(key);
-            }
+            const hadLock = locked.has(key);
+            clearLockedAt(key);
+            if (hadLock) notifyAnswerChange();
             setDraftLine(x, y, 0);
         });
     }

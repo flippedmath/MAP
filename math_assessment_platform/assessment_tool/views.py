@@ -1941,6 +1941,144 @@ def _entity_is_referenced_anywhere(sequence_token, body_html, all_entities):
 
 @require_POST
 @login_required
+def grade_problem_workspace_preview(request, problem_id):
+    """
+    Ephemeral server-side grading for the workspace simulation preview.
+    Does not persist scores or student answers.
+    """
+    try:
+        problem = Problem.objects.get(pk=problem_id)
+    except Problem.DoesNotExist:
+        return JsonResponse({"success": False, "error": "Problem not found"}, status=404)
+
+    if not verify_workspace_clearance(request.user, problem):
+        return JsonResponse({
+            "success": False,
+            "error": "Permission Denied: Insufficient authorization clearing."
+        }, status=403)
+
+    try:
+        payload = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"success": False, "error": "Malformed JSON payload."}, status=400)
+
+    entities = payload.get("entities") or []
+    # Full workspace graph (dynamic variables + answer fields) for linked-token resolution
+    context_entities = payload.get("all_entities") or entities
+    student_answers = payload.get("student_answers") or {}
+    if not isinstance(entities, list):
+        return JsonResponse({"success": False, "error": "entities must be an array."}, status=400)
+    if not isinstance(context_entities, list):
+        return JsonResponse({"success": False, "error": "all_entities must be an array."}, status=400)
+    if not isinstance(student_answers, dict):
+        return JsonResponse({"success": False, "error": "student_answers must be an object."}, status=400)
+
+    # Sibling context for cross-token resolution during validation / grading
+    all_entities_payload = []
+    for item in context_entities:
+        if not isinstance(item, dict):
+            continue
+        token_raw = str(item.get("token") or item.get("sequence_token") or "").strip()
+        sequence_token = str(item.get("sequence_token") or token_raw).strip()
+        explicit_archetype = str(item.get("archetype") or "").strip()
+        token_field = str(item.get("token") or "").strip()
+        # serializeAllWorkspaceEntities: token=archetype, sequence_token=indexed
+        # answer-field grade payload: token=indexed, archetype=base
+        if explicit_archetype:
+            archetype = explicit_archetype
+        elif token_field and sequence_token and token_field != sequence_token:
+            archetype = token_field
+        else:
+            archetype = re.sub(r"\d+$", "", token_raw).strip()
+        if not sequence_token or not archetype:
+            continue
+        all_entities_payload.append({
+            "token": archetype,
+            "sequence_token": sequence_token,
+            "inputs": item.get("inputs") or {},
+            "simulated_value": item.get("simulated_value") or "",
+        })
+
+    items = []
+    earned_total = 0.0
+    max_total = 0.0
+
+    for item in entities:
+        if not isinstance(item, dict):
+            continue
+        token_raw = str(item.get("token") or item.get("sequence_token") or "").strip()
+        sequence_token = str(item.get("sequence_token") or token_raw).strip()
+        archetype = str(item.get("archetype") or re.sub(r"\d+$", "", token_raw)).strip()
+        if not sequence_token or not archetype:
+            continue
+
+        label = item.get("label") or sequence_token
+        points_raw = item.get("points")
+        try:
+            points_available = float(points_raw) if points_raw is not None else 0.0
+        except (TypeError, ValueError):
+            points_available = 0.0
+
+        student_input = student_answers.get(sequence_token)
+        if student_input is None and token_raw in student_answers:
+            student_input = student_answers.get(token_raw)
+
+        pattern_blueprint = get_blueprint_for_token(archetype) or {}
+        name_list = pattern_blueprint.get("entity_name_list")
+        if isinstance(name_list, str):
+            try:
+                parsed_list = json.loads(name_list)
+                name_list = parsed_list if isinstance(parsed_list, list) else [name_list]
+            except Exception:
+                name_list = [name_list]
+        is_answer_field = (
+            pattern_blueprint.get("answer_field") is True
+            or (isinstance(name_list, list) and "Answer Input Fields" in name_list)
+            or name_list == "Answer Input Fields"
+        )
+        if not is_answer_field:
+            continue
+
+        validator = get_entity_validator(
+            archetype,
+            item.get("inputs") or {},
+            pattern_blueprint,
+            all_entities_payload=all_entities_payload,
+        )
+        if not validator.is_valid():
+            result = validator.grade_answer(student_input, points_available)
+            earned = 0.0
+            max_pts = float(result.get("max", points_available) or 0.0)
+            detail = "Entity configuration invalid"
+            if validator.errors:
+                detail = f"Invalid: {next(iter(validator.errors.values()))}"
+        else:
+            result = validator.grade_answer(student_input, points_available)
+            earned = float(result.get("earned", 0.0) or 0.0)
+            max_pts = float(result.get("max", points_available) or 0.0)
+            detail = result.get("detail") or ""
+
+        earned_total += earned
+        max_total += max_pts
+        items.append({
+            "token": sequence_token,
+            "archetype": archetype,
+            "label": label,
+            "earned": earned,
+            "max": max_pts,
+            "detail": detail,
+        })
+
+    return JsonResponse({
+        "success": True,
+        "items": items,
+        "earned_total": earned_total,
+        "max_total": max_total,
+    })
+
+
+@require_POST
+@login_required
 def save_problem_workspace(request, problem_id):
     """
     Save the problem workspace canvas + entities.
@@ -2188,7 +2326,11 @@ def save_problem_workspace(request, problem_id):
             blueprint = engine_item["blueprint"]
             content_payload = dict(engine_item["content_source"])
 
-            points_value = content_payload.get("points") or blueprint.get("points", {}).get("default", 0.0)
+            points_value = entity_data.get("points")
+            if points_value is None:
+                points_value = content_payload.get("points")
+            if points_value is None:
+                points_value = blueprint.get("points", {}).get("default", 0.0)
             content_payload["answer_field"] = blueprint.get("answer_field", False)
             content_payload["sequence_token"] = sequence_token
             content_payload["shuffle_seed"] = shuffle_seed
@@ -2252,7 +2394,8 @@ def problem_workspace_editor(request, problem_id):
             "token": entity_type.name,
             "name": pattern.get("name", entity_type.name),
             "note": pattern.get("note", ""),
-            "inputs": pattern.get("inputs", {})
+            "inputs": pattern.get("inputs", {}),
+            "points_default": (pattern.get("points") or {}).get("default", 1.0),
         }
         
         if "Dynamic Variables" in name_list:

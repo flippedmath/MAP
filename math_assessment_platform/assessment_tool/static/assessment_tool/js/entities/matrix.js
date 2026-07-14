@@ -22,7 +22,7 @@ export function processEntity(contextData) {
         case 'renderPreviewToken':
             return renderPreviewToken(contextData);
         case 'getOutputTypes':
-            return ['matrix'];
+            return getMatrixOutputTypes(contextData);
         case 'hideRefreshButton':
             return false;
         case 'needsLatexRenderBox':
@@ -32,6 +32,20 @@ export function processEntity(contextData) {
         default:
             return null;
     }
+}
+
+/** Determinant is a scalar; other matrix ops remain matrix-typed for linking. */
+function getMatrixOutputTypes({ card, savedValues } = {}) {
+    let mode = savedValues?.calculate;
+    if (card) {
+        const live = card.querySelector('.val-matrix-calculate')?.value;
+        if (live) mode = live;
+    }
+    mode = mode || 'leave as matrix';
+    if (mode === 'determinate') {
+        return ['double', 'integer'];
+    }
+    return ['matrix'];
 }
 
 function getFieldsHtml(savedValues) {
@@ -380,6 +394,11 @@ function bindEvents({ card, savedValues = {} }) {
             if (scalarRow) {
                 scalarRow.style.display = (mode === 'scalar') ? 'flex' : 'none';
             }
+            if (mode === 'determinate') {
+                card.setAttribute('data-output-types', 'double,integer');
+            } else {
+                card.setAttribute('data-output-types', 'matrix');
+            }
         }
 
         // Shared formula rules: typing expressions in cells updates substitution picker
@@ -486,6 +505,19 @@ function serialize({ card, inputsCollected }) {
 
 function applyBatchSync({ card, result, token }) {
     if (!card || !result) return null;
+
+    const types = Array.isArray(result.output_types) ? result.output_types : [];
+    if (types.length) {
+        card.setAttribute('data-output-types', types.join(','));
+    } else {
+        // Fall back to calculate-mode inference when server omits types
+        const mode = card.querySelector('.val-matrix-calculate')?.value || 'leave as matrix';
+        if (mode === 'determinate') {
+            card.setAttribute('data-output-types', 'double,integer');
+        } else {
+            card.setAttribute('data-output-types', 'matrix');
+        }
+    }
 
     const targetDisplay = ensureLatexRenderBox(card);
     if (!targetDisplay) return null;

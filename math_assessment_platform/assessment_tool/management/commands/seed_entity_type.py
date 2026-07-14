@@ -240,31 +240,38 @@ class Command(BaseCommand):
 
     ANSWER_INPUT_FIELDS = [
         {
-            "name": "Numeric Tolerance",
+            "name": "Numeric Answer",
             "token": "numAnswer",
             "answer_field": True,
             "inputs": {
-                "value": {"field": "double", "value": ["double"]},
-                "tolerance": {"field": "double", "value": ["double"], "default": 0.0005}
+                "value": {"field": "double", "value": ["double", "integer"]},
+                "decimal_places": {"field": "integer", "value": ["integer"], "default": 3},
+                "show_rounding_note": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
             "output": ["double"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "A tolerance of 0.0005 is equivalent to identifying that the user needs to be at least accurate up to 0.001"
+            "note": "Compare student number to the correct value after rounding both to N decimal places (default 3)."
         },
         {
             "name": "Short Answer",
             "token": "shortAnswer",
             "answer_field": True,
             "inputs": {
-                "value": {"field": "text", "value": ["string"]}
+                "value": {"field": "text", "value": ["string", "formula"]}
             },
             "output": ["string"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "An exact match of text is looked for. Note: it does trim text and match upper/lower cases before comparing."
+            "note": (
+                "Trim + case-insensitive exact match first. Otherwise sympy equivalence vs the simplified key; "
+                "rearrangements allowed but answers that still need simplifying are incorrect. May link a formula entity. "
+                "Expression entry: \"**\" is the same as \"^\". \"*\" is only required between two variables "
+                "(e.g. x*y); it is not required when a number is followed by a variable (e.g. 2x). "
+                "Formatting follows the same rules as editing a formula entity field — see that entity's info note for more detail."
+            )
         },
         {
             "name": "Long Answer",
@@ -372,13 +379,14 @@ class Command(BaseCommand):
                 "equation": {"field": "text", "value": ["string", "formula"], "default": "dy/dx = x + y"},
                 "x-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 1]},
                 "y-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 1]},
-                "selected_points": {"field": "array", "value": ["array([array(['double'])])"], "default": []}
+                "selected_points": {"field": "array", "value": ["array([array(['double'])])"], "default": []},
+                "show_instructions": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
             "output": ["content"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Slope field answer: teacher marks lattice points; students align slope ticks on those points in the live assessment."
+            "note": "Slope field answer: teacher marks lattice points; students align slope ticks on those points. Optional Show instructions checkbox appends brief how-to text under the preview graph."
         }
     ]
     def add_arguments(self, parser):
