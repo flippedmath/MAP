@@ -11,6 +11,7 @@ import {
 } from './entities/slopeFieldGraph.js';
 import { processEntity as numAnswerProcessor } from './entities/numAnswer.js';
 import { processEntity as shortAnswerProcessor } from './entities/shortAnswer.js';
+import { processEntity as arrayMatchingUnorderedProcessor } from './entities/arrayMatchingUnordered.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -25,6 +26,7 @@ const ENTITY_REGISTRY = {
     'slopeFieldGraph': slopeFieldGraphProcessor,
     'numAnswer': numAnswerProcessor,
     'shortAnswer': shortAnswerProcessor,
+    'arrayMatchingUnordered': arrayMatchingUnorderedProcessor,
 };
 
 
@@ -1080,6 +1082,7 @@ document.addEventListener('DOMContentLoaded', function() {
         flushPreviewGraphRenders(renderTarget, pendingGraphRenders);
         bindPreviewNumAnswerInputs(renderTarget);
         bindPreviewShortAnswerInputs(renderTarget);
+        bindPreviewArrayMatchingInputs(renderTarget);
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
@@ -1109,6 +1112,22 @@ document.addEventListener('DOMContentLoaded', function() {
         root.querySelectorAll('.preview-short-answer-input').forEach((input) => {
             if (input.dataset.previewShortBound === '1') return;
             input.dataset.previewShortBound = '1';
+            const tokenKey = input.getAttribute('data-token') || '';
+            const sync = () => {
+                if (!tokenKey) return;
+                previewStudentAnswers[tokenKey] = { value: input.value };
+                scheduleWorkspacePreviewGradeRefresh(180);
+            };
+            input.addEventListener('input', sync);
+            input.addEventListener('change', sync);
+        });
+    }
+
+    function bindPreviewArrayMatchingInputs(root) {
+        if (!root) return;
+        root.querySelectorAll('.preview-array-matching-input').forEach((input) => {
+            if (input.dataset.previewArrayMatchingBound === '1') return;
+            input.dataset.previewArrayMatchingBound = '1';
             const tokenKey = input.getAttribute('data-token') || '';
             const sync = () => {
                 if (!tokenKey) return;

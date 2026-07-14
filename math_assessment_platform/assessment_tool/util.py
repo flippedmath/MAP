@@ -2625,6 +2625,160 @@ class ShortAnswerEntity(BaseEntity):
         }
 
 
+class ArrayMatchingUnorderedEntity(BaseEntity):
+    """
+    Answer-field unordered comma-separated list matching.
+    Numbers compare after round(..., 3); strings after trim+lowercase.
+    Multiset matching. Optional partial credit with ±sub / −½ sub penalties.
+    """
+
+    def _coerce_bool(self, raw):
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _raw_to_str(self, raw):
+        if raw is None:
+            return ""
+        if isinstance(raw, dict):
+            raw = raw.get("value", raw.get("results", ""))
+        if isinstance(raw, (list, tuple)):
+            return ", ".join(str(x) for x in raw)
+        return str(raw)
+
+    def _normalize_token(self, piece):
+        text = str(piece).strip().lower()
+        if not text:
+            return None
+        try:
+            num = float(text)
+            if math.isfinite(num):
+                return ("num", round(num, 3))
+        except (TypeError, ValueError):
+            pass
+        return ("str", text)
+
+    def _parse_list(self, raw):
+        s = self._raw_to_str(raw).strip()
+        if not s:
+            return []
+        items = []
+        for part in s.split(","):
+            token = self._normalize_token(part)
+            if token is not None:
+                items.append(token)
+        return items
+
+    def _format_token(self, token):
+        kind, val = token
+        if kind == "num":
+            if float(val).is_integer():
+                return str(int(val))
+            return str(val)
+        return str(val)
+
+    def _format_list(self, items):
+        return ", ".join(self._format_token(t) for t in items)
+
+    def _match_counts(self, key_items, student_items):
+        """Greedy multiset match. Returns (matches, missing, extras)."""
+        remaining = list(student_items)
+        matches = 0
+        for key in key_items:
+            found_idx = None
+            for i, stud in enumerate(remaining):
+                if stud == key:
+                    found_idx = i
+                    break
+            if found_idx is not None:
+                matches += 1
+                remaining.pop(found_idx)
+        missing = len(key_items) - matches
+        extras = len(remaining)
+        return matches, missing, extras
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        raw_results = self.runtime_values.get("results", self.data.get("results"))
+        key_items = self._parse_list(raw_results)
+        if not key_items:
+            self.errors["results"] = "At least one comma-separated answer is required (or link primeFactors)."
+            return False
+
+        partial = self._coerce_bool(
+            self.data.get(
+                "partial_credit",
+                self.runtime_values.get("partial_credit", False),
+            )
+        )
+
+        self.runtime_values["key_items"] = key_items
+        self.runtime_values["key_display"] = self._format_list(key_items)
+        self.runtime_values["partial_credit"] = partial
+        self.cleaned_data["results"] = self.data.get("results", raw_results)
+        self.cleaned_data["partial_credit"] = partial
+        return True
+
+    def evaluate_output(self):
+        display = self.runtime_values.get("key_display")
+        if display is None:
+            if not self.is_valid():
+                raise ValueError("Cannot evaluate arrayMatchingUnordered: configuration is invalid.")
+            display = self.runtime_values.get("key_display")
+        self.output_types = ["string"]
+        return str(display) if display is not None else ""
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        key_items = self.runtime_values.get("key_items")
+        if key_items is None:
+            raw_results = self.runtime_values.get("results", self.data.get("results"))
+            key_items = self._parse_list(raw_results)
+
+        n = len(key_items) if key_items else 0
+        if n == 0:
+            return {"earned": 0.0, "max": pts, "detail": "No answer key"}
+
+        student_raw = student_input
+        if isinstance(student_input, dict):
+            student_raw = student_input.get("value", student_input.get("results", ""))
+        student_str = self._raw_to_str(student_raw).strip()
+        if not student_str:
+            return {"earned": 0.0, "max": pts, "detail": "No student input"}
+
+        student_items = self._parse_list(student_str)
+        matches, missing, extras = self._match_counts(key_items, student_items)
+        partial = self._coerce_bool(
+            self.runtime_values.get(
+                "partial_credit",
+                self.data.get("partial_credit", False),
+            )
+        )
+
+        if not partial:
+            if matches == n and extras == 0:
+                return {"earned": pts, "max": pts, "detail": "All correct"}
+            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
+
+        sub = pts / n
+        earned = matches * sub - 0.5 * sub * (missing + extras)
+        if earned < 0:
+            earned = 0.0
+        return {
+            "earned": earned,
+            "max": pts,
+            "detail": f"{matches}/{n} matched (partial)",
+        }
+
+
 class SlopeFieldGraphEntity(BaseEntity):
     """
     Answer-field slope field: validate dy/dx = f(x,y), axis lattice, and selected points.
@@ -3051,6 +3205,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "matrixResultByIndex": MatrixResultByIndexEntity,
         "numAnswer": NumAnswerEntity,
         "shortAnswer": ShortAnswerEntity,
+        "arrayMatchingUnordered": ArrayMatchingUnorderedEntity,
         "slopeFieldGraph": SlopeFieldGraphEntity,
     }
     
@@ -3209,6 +3364,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "value"
             elif archetype_name == "shortAnswer":
                 error_field = "value"
+            elif archetype_name == "arrayMatchingUnordered":
+                error_field = "results"
             errors = {
                 error_field: (
                     f"Expression could not be evaluated after resolving linked "
@@ -3224,6 +3381,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'shortAnswer':
                 evaluated_output = "[Invalid Short Answer]"
                 latex_output = "[Invalid Short Answer]"
+            elif archetype_name == 'arrayMatchingUnordered':
+                evaluated_output = "[Invalid Array Matching]"
+                latex_output = "[Invalid Array Matching]"
             elif clean_inputs.get('formula') and archetype_name == 'formula':
                 evaluated_output = str(validator.evaluate_output())
                 latex_output = evaluated_output

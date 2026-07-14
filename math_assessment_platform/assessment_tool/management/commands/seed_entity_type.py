@@ -291,13 +291,21 @@ class Command(BaseCommand):
             "token": "arrayMatchingUnordered",
             "answer_field": True,
             "inputs": {
-                "results": {"field": "string", "value": ["array([['integer', 'double', 'string', 'formula']])"]}
+                "results": {"field": "text", "value": ["string", "array(['integer'])"]},
+                "partial_credit": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
-            "output": ["array(['integer', 'double', 'string', 'formula'])"],
+            "output": ["string"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Given an array, compare to Student provided comma/space-separated array to count matches"
+            "note": (
+                "Unordered comma-separated list. Tokens are trimmed and lowercased; numbers compare after rounding to 3 decimals. "
+                "Default scoring is all-or-nothing. May link only a primeFactors entity."
+                "<br>"
+                "Partial credit for partial answer: with N key items and P points, sub = P/N. "
+                "Earned = max(0, matches×sub − ½×sub×(missing + extras)), where matches are multiset hits, "
+                "missing are unmatched key items, and extras are unmatched student items."
+            )
         },
         {
             "name": "Multiple Choice",
