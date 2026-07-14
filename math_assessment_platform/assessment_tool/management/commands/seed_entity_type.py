@@ -195,19 +195,18 @@ class Command(BaseCommand):
             )
         },
         {
-            "name": "Matrix Calculations By Index",
+            "name": "Matrix Cell By Index",
             "token": "matrixResultByIndex",
-            "answer_field": True,
             "inputs": {
                 "matrix": {"field": "entity", "value": ["matrix"]},
                 "row": {"field": "integer", "value": ["integer"], "default": 1},
-                "column": {"field": "integer", "value": ["integer"], "default": 1}
+                "column": {"field": "integer", "value": ["integer"], "default": 1},
+                "simplify": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
             "output": ["double", "integer", "formula"],
-            "points": {"field": "double", "value": ["double"], "default": 1.0},
-            "entity_name_list": "Answer Input Fields",
+            "entity_name_list": "Dynamic Variables",
             "disabled": False,
-            "note": "Pull out a specific cell value in a given matrix"
+            "note": "Extract a single cell from a linked matrix. Row and column 1 identify the upper-left cell. Output type follows the cell (integer, double, or formula). Check Simplify to run SymPy simplify on the extracted cell."
         },
         {
             "name": "Prime Factors",

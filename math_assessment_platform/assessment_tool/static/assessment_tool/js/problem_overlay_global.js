@@ -3,6 +3,7 @@ import { processEntity as randProcessor } from './entities/rand.js';
 import { processEntity as primeFactorsProcessor } from './entities/primeFactors.js';
 import { processEntity as formulaProcessor } from './entities/formula.js';
 import { processEntity as matrixProcessor } from './entities/matrix.js';
+import { processEntity as matrixResultByIndexProcessor } from './entities/matrixResultByIndex.js';
 import { processEntity as graphProcessor } from './entities/graph.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
@@ -13,6 +14,7 @@ const ENTITY_REGISTRY = {
     'primeFactors': primeFactorsProcessor,
     'formula': formulaProcessor,
     'matrix': matrixProcessor,
+    'matrixResultByIndex': matrixResultByIndexProcessor,
     'graph': graphProcessor,
 };
 
@@ -206,6 +208,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (savedSequenceToken) {
                                 formulaLiveLatexCache[savedSequenceToken] = segment.latex_output;
                             }
+                        }
+                        if (Array.isArray(segment.output_types) && segment.output_types.length) {
+                            latestCard.setAttribute('data-output-types', segment.output_types.join(','));
                         }
                         if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
                             latestCard.setAttribute('data-shuffle-seed', segment.shuffle_seed);
@@ -691,7 +696,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const isFormulaCondition = baseArchetypeToken === 'formula';
                 
                 // If it looks like a known archetype, treat it as a variable processing path
-                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors', 'graph', 'matrix'].includes(baseArchetypeToken);
+                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors', 'graph', 'matrix', 'matrixResultByIndex'].includes(baseArchetypeToken);
 
                 if (isVar) {
                     let displayVal = formulaLiveLatexCache[cleanToken];
@@ -706,7 +711,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             displayVal = card.getAttribute('data-simulated-value')
                                 || evaluateSingleCardOutput(card, cleanToken);
                         }
-                    } else if (baseArchetypeToken === 'formula' || baseArchetypeToken === 'matrix') {
+                    } else if (baseArchetypeToken === 'formula' || baseArchetypeToken === 'matrix' || baseArchetypeToken === 'matrixResultByIndex') {
                         if (!isServerValueValid && card) {
                             displayVal = card.getAttribute('data-latex-output')
                                 || card.getAttribute('data-simulated-value')
@@ -5746,6 +5751,44 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 return; // 🚀 EXIT EARLY
             }
+
+            // matrixResultByIndex source matrix unlink
+            if (inputKey === 'matrix') {
+                const statusLabel = wrapper.querySelector('.link-status-text');
+                if (statusLabel) {
+                    statusLabel.textContent = 'Required: Select a matrix';
+                    statusLabel.style.color = '#ef4444';
+                }
+
+                const rawInput = wrapper.querySelector('input.val-matrix-result-source, input, select');
+                if (rawInput) rawInput.value = '';
+
+                const pill = wrapper.querySelector('.linked-token-pill');
+                if (pill) pill.remove();
+
+                linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+                linkBtn.className = 'btn-input-link-trigger';
+                linkBtn.style.color = '#94a3b8';
+                linkBtn.style.borderColor = '#cbd5e1';
+
+                if (rawInput) {
+                    rawInput.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
+                const activeCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
+                if (activeCard) {
+                    activeCard.removeAttribute('data-output-types');
+                    const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                    if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                        dispatchWorkspaceBatchSync(cardId);
+                    } else {
+                        updateWorkspaceSimulationPreview();
+                    }
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+                return;
+            }
             // 🎯 🌟 ADDED OVERRIDE: Handle unlinking variable substitution rows smoothly
             if (inputKey && inputKey.startsWith('sub_')) {
                 wrapper.removeAttribute('data-bound-token');
@@ -5864,10 +5907,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 } catch (e) {}
             }
 
-            let rawOutput = blueprintData.output || tokenDefinition.output;
-
-            if (!rawOutput) {
-                rawOutput = getEntityInformation(baseArchetype, { action: 'getOutputTypes' }) || [];
+            // Prefer live card output types (e.g. matrixResultByIndex cell classification)
+            // when the entity processor returns an array; otherwise use blueprint output.
+            let rawOutput = getEntityInformation(baseArchetype, {
+                action: 'getOutputTypes',
+                card
+            });
+            if (!Array.isArray(rawOutput)) {
+                rawOutput = blueprintData.output || tokenDefinition.output || [];
             }
 
             const derivedOutputs = Array.isArray(rawOutput) ? rawOutput : [rawOutput];
@@ -6014,6 +6061,47 @@ document.addEventListener('DOMContentLoaded', function() {
                 updateWorkspaceSimulationPreview();
             }
             return; // 🚀 EXIT EARLY: Avoid creating an inline green pill for this custom container layout row!
+        }
+
+        // matrixResultByIndex source matrix link
+        if (inputKey === 'matrix') {
+            const statusLabel = wrapper.querySelector('.link-status-text');
+            if (statusLabel) {
+                statusLabel.textContent = `Linked to: ${rawTokenId}`;
+                statusLabel.style.color = '#0284c7';
+            }
+
+            const actualInputNode = wrapper.querySelector('input.val-matrix-result-source, input, select');
+            if (actualInputNode) {
+                actualInputNode.value = chosenTokenString;
+            }
+
+            const existingPill = wrapper.querySelector('.linked-token-pill');
+            if (existingPill) existingPill.remove();
+
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+
+            wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+
+            if (actualInputNode) {
+                actualInputNode.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+
+            const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+            if (activeCard) {
+                const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                    dispatchWorkspaceBatchSync(cardId);
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+            } else {
+                updateWorkspaceSimulationPreview();
+            }
+            return;
         }
         // 🎯 🌟 ADDED OVERRIDE: Precise visual layout insertion for Matrix dynamic variable sub rows
         if (inputKey && inputKey.startsWith('sub_')) {

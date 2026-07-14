@@ -2177,6 +2177,133 @@ class MatrixEntity(BaseEntity):
         result = self.strip_trivial_multiplicative_ones(result)
         self.last_computed_sympy_result = result
         return str(result)
+
+
+class MatrixResultByIndexEntity(BaseEntity):
+    """
+    Extract a single cell from a linked matrix entity using 1-based row/column indices.
+    (1, 1) is the upper-left corner of the evaluated matrix result.
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.last_computed_sympy_result = None
+        self.output_types = []
+        self._resolved_matrix = None
+        self._row_index = None
+        self._col_index = None
+
+    def _should_simplify(self):
+        raw = self.data.get("simplify", False)
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _coerce_to_matrix(self, raw_value):
+        # Parse without evaluating so cell structure is preserved until optional simplify.
+        if isinstance(raw_value, (SymPyMatrix, sp.MatrixBase)):
+            return raw_value
+        if isinstance(raw_value, list):
+            return SymPyMatrix(raw_value)
+        if isinstance(raw_value, str):
+            s = raw_value.strip()
+            if not s:
+                raise ValueError("Linked matrix value is empty.")
+            if s.startswith("Matrix("):
+                parsed = sp.sympify(s, evaluate=False)
+            else:
+                parsed = self.parse_math_expression(s, evaluate=False)
+            if isinstance(parsed, (SymPyMatrix, sp.MatrixBase)):
+                return parsed
+            raise ValueError("Linked entity evaluated to a non-matrix value.")
+        raise ValueError(f"Unable to interpret linked matrix payload of type {type(raw_value).__name__}.")
+
+    def _classify_cell(self, cell_expr):
+        """Return a single most-specific output type for link compatibility."""
+        if cell_expr is None:
+            return []
+        if hasattr(cell_expr, 'free_symbols') and cell_expr.free_symbols:
+            return ["formula"]
+        try:
+            if getattr(cell_expr, 'is_Integer', False):
+                return ["integer"]
+            if getattr(cell_expr, 'is_integer', False) is True:
+                return ["integer"]
+            if getattr(cell_expr, 'is_number', False):
+                return ["double"]
+        except Exception:
+            pass
+        return ["formula"]
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        # Persist checkbox into cleaned/runtime so saves keep the teacher choice
+        simplify_flag = self._should_simplify()
+        self.cleaned_data["simplify"] = simplify_flag
+        self.runtime_values["simplify"] = simplify_flag
+
+        matrix_token = self.cleaned_data.get("matrix")
+        if not matrix_token or (isinstance(matrix_token, str) and not matrix_token.strip()):
+            self.errors["matrix"] = "A source matrix must be linked."
+            return False
+
+        raw_matrix = self.runtime_values.get("matrix")
+        try:
+            matrix_obj = self._coerce_to_matrix(raw_matrix)
+        except Exception as exc:
+            self.errors["matrix"] = (
+                f"Linked entity did not evaluate to a matrix: {exc}"
+            )
+            return False
+
+        row = self.runtime_values.get("row")
+        col = self.runtime_values.get("column")
+
+        if row is None:
+            self.errors["row"] = "Row index is required (1 = top row)."
+        elif not isinstance(row, int) or row < 1:
+            self.errors["row"] = "Row index must be an integer greater than or equal to 1."
+
+        if col is None:
+            self.errors["column"] = "Column index is required (1 = left column)."
+        elif not isinstance(col, int) or col < 1:
+            self.errors["column"] = "Column index must be an integer greater than or equal to 1."
+
+        if self.errors:
+            return False
+
+        n_rows, n_cols = matrix_obj.shape
+        if row > n_rows:
+            self.errors["row"] = (
+                f"Row {row} is outside matrix dimensions {n_rows}×{n_cols}."
+            )
+        if col > n_cols:
+            self.errors["column"] = (
+                f"Column {col} is outside matrix dimensions {n_rows}×{n_cols}."
+            )
+
+        if self.errors:
+            return False
+
+        self._resolved_matrix = matrix_obj
+        self._row_index = row
+        self._col_index = col
+        return True
+
+    def evaluate_output(self):
+        if self._resolved_matrix is None:
+            # Allow evaluate after a prior is_valid() on a fresh instance path
+            if not self.is_valid():
+                raise ValueError("Cannot extract matrix cell: configuration is invalid.")
+
+        cell = self._resolved_matrix[self._row_index - 1, self._col_index - 1]
+        cell = self.strip_trivial_multiplicative_ones(cell)
+        if self.runtime_values.get("simplify") or self._should_simplify():
+            cell = sp.simplify(cell)
+        self.last_computed_sympy_result = cell
+        self.output_types = self._classify_cell(cell)
+        return str(cell)
     
 
 def get_entity_validator(token_string, data_payload, pattern_blueprint, all_entities_payload=None):
@@ -2192,6 +2319,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "formula": FormulaEntity,
         "graph": GraphEntity,
         "matrix": MatrixEntity,
+        "matrixResultByIndex": MatrixResultByIndexEntity,
     }
     
     # Fallback to base configuration validator if a custom token model isn't written yet
@@ -2244,8 +2372,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             # 🎯 Component Type Specific Pre-Formatting Overrides
             if archetype_name == 'graph':
                 latex_output = "[Graph Component]"
-            elif archetype_name.lower().startswith('matrix'):
-                # 🎯 Matrix Specific Output Rendering: Formats SymPy matrices as proper LaTeX structural layouts
+            elif archetype_name == 'matrix' or archetype_name == 'matrixResultByIndex':
+                # Matrix / cell extract: format SymPy results as LaTeX
                 if hasattr(validator, 'last_computed_sympy_result'):
                     result_obj = validator.last_computed_sympy_result
                     latex_output = sp.latex(result_obj)
@@ -2335,8 +2463,10 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             is_valid = False
             # Field-scoped so the workspace banner and save draft path can surface it
             error_field = "formula"
-            if archetype_name.lower().startswith("matrix"):
+            if archetype_name == "matrix":
                 error_field = "matrix_data"
+            elif archetype_name == "matrixResultByIndex":
+                error_field = "matrix"
             elif archetype_name == "graph":
                 error_field = "formulas"
             errors = {
@@ -2354,9 +2484,12 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'graph':
                 evaluated_output = "[Invalid Graph Config]"
                 latex_output = "[Invalid Graph Config]"
-            elif archetype_name.lower().startswith('matrix'):
+            elif archetype_name == 'matrix':
                 evaluated_output = "[Invalid Matrix Config]"
                 latex_output = "[Invalid Matrix Config]"
+            elif archetype_name == 'matrixResultByIndex':
+                evaluated_output = "[Invalid Matrix Cell Index]"
+                latex_output = "[Invalid Matrix Cell Index]"
             else:
                 evaluated_output = "0"
                 latex_output = "0"
@@ -2365,7 +2498,7 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             latex_output = str(evaluated_output)
 
     # Post-processing string cleanup for evaluate=False *1 artifacts (formula + matrix)
-    if archetype_name.lower().startswith('formula') or archetype_name.lower().startswith('matrix'):
+    if archetype_name.lower().startswith('formula') or archetype_name in ('matrix', 'matrixResultByIndex'):
         if isinstance(evaluated_output, str):
             evaluated_output = re.sub(r'\b-1\*1\b', '-1', evaluated_output)
             evaluated_output = re.sub(r'\b1\*', '', evaluated_output)
@@ -2381,10 +2514,15 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
 
     extracted_vars.sort()
 
+    output_types = []
+    if is_valid and hasattr(validator, 'output_types'):
+        output_types = list(getattr(validator, 'output_types') or [])
+
     return {
         'is_valid': is_valid,
         'errors': errors,
         'evaluated_output': evaluated_output,
         'latex_output': latex_output,
-        'extracted_variables': ", ".join(extracted_vars)
+        'extracted_variables': ", ".join(extracted_vars),
+        'output_types': output_types,
     }

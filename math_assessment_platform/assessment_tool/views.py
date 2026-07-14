@@ -2111,7 +2111,7 @@ def save_problem_workspace(request, problem_id):
         # Schema/syntax checks replace linked tokens with placeholders, so an
         # entity can pass is_valid() and still blow up when the resolved sympy
         # form is evaluated (e.g. formula referencing another Integral result).
-        if is_valid and token_id in ('formula', 'matrix', 'graph'):
+        if is_valid and token_id in ('formula', 'matrix', 'graph', 'matrixResultByIndex'):
             try:
                 validator.evaluate_output()
             except Exception as eval_err:
@@ -2324,7 +2324,8 @@ def problem_workspace_editor(request, problem_id):
             "inputs": clean_inputs,
             "simulated_value": render_results['evaluated_output'], # Keep for internal map symmetry
             "evaluated_output": render_results['evaluated_output'],
-            "latex_output": render_results['latex_output']
+            "latex_output": render_results['latex_output'],
+            "output_types": render_results.get('output_types', []),
         })
 
     # 3. Safely pull Quill rich text from QuestionBlock
@@ -2467,7 +2468,8 @@ def validate_component_preview(request):
             updated_cache[sequence_token_id] = {
                 'evaluated_output': render_results['evaluated_output'],
                 'latex_output': render_results['latex_output'],
-                'extracted_variables': render_results['extracted_variables']
+                'extracted_variables': render_results['extracted_variables'],
+                'output_types': render_results.get('output_types', []),
             }
 
         return JsonResponse({
