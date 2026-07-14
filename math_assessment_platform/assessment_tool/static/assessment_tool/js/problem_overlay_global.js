@@ -539,6 +539,18 @@ document.addEventListener('DOMContentLoaded', function() {
     // -------------------------------------------------------------
     // LIVE PREVIEW SIMULATION RENDERING ENGINE (DYNAMIC RE-CALCULATION)
     // -------------------------------------------------------------
+    function normalizeWorkspaceLatexInput(rawLatex) {
+        if (rawLatex == null) return '';
+        let latex = String(rawLatex).trim();
+        // Allow users to paste $...$ or $$...$$ wrappers; Quill/KaTeX expect bare math.
+        if (/^\$\$[\s\S]*\$\$$/.test(latex)) {
+            latex = latex.slice(2, -2).trim();
+        } else if (/^\$[\s\S]*\$$/.test(latex)) {
+            latex = latex.slice(1, -1).trim();
+        }
+        return latex;
+    }
+
     function updateWorkspaceSimulationPreview() {
         if (window.isHydratingWorkspace) return; // 🛑 Halt execution during hydration loop
         const renderTarget = document.getElementById('simulation-render-target');
@@ -547,7 +559,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        let canvasContent = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
+        let canvasContent = workspaceQuillInstance ? getWorkspaceQuillHtmlForSave() : '';
 
         if (!canvasContent || canvasContent === '<p><br></p>') {
             renderTarget.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Interactive layout testing view builds dynamically here...</p>';
@@ -563,6 +575,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // 🎯 HELPER SUB-ROUTINE: HANDLES REGEX STRING REPLACEMENT & KATEX PARSING
     function renderPreviewCanvasMarkup(canvasContent, renderTarget) {
+        const pendingGraphRenders = [];
+        let previewGraphSeq = 0;
         
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = canvasContent;
@@ -570,11 +584,67 @@ document.addEventListener('DOMContentLoaded', function() {
         // Strip text-editor formula nodes and transition them into preview layouts
         const formulaNodes = tempContainer.querySelectorAll('.ql-formula');
         formulaNodes.forEach(formula => {
-            const latexValue = formula.getAttribute('data-value') || '';
+            const latexValue = normalizeWorkspaceLatexInput(formula.getAttribute('data-value') || '');
             const mathSpan = document.createElement('span');
             mathSpan.className = 'preview-static-latex';
             mathSpan.textContent = latexValue;
             formula.parentNode.replaceChild(mathSpan, formula);
+        });
+
+        // Ensure nested table embeds render their grid in the preview (from data-value + live HTML)
+        tempContainer.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+            syncWorkspaceNestedTableNode(node);
+            const config = parseNestedTableConfig(node.getAttribute('data-value') || '');
+            // Rebuild grid for preview so BR / size / latex from data-value are authoritative
+            config.cells = (config.cells || []).map(row =>
+                (row || []).map(cell => ensureNestedCellHtmlLineBreaks(cell))
+            );
+            const table = document.createElement('table');
+            table.className = 'ql-nested-table-inner';
+            if (config.noBorder) table.classList.add('no-border');
+            if (config.expandEntities) {
+                table.classList.add('ql-table-expand-entities');
+                table.setAttribute('data-expand-entities', 'true');
+            } else {
+                table.classList.remove('ql-table-expand-entities');
+                table.setAttribute('data-expand-entities', 'false');
+            }
+            for (let r = 0; r < config.rows; r++) {
+                const tr = document.createElement('tr');
+                for (let c = 0; c < config.cols; c++) {
+                    const td = document.createElement('td');
+                    fillNestedTdFromHtml(td, (config.cells[r] && config.cells[r][c]) || '');
+                    td.removeAttribute('contenteditable');
+                    tr.appendChild(td);
+                }
+                table.appendChild(tr);
+            }
+            node.innerHTML = '';
+            node.appendChild(table);
+            applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
+            // Expand row heights to fit multi-line content in preview
+            const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+            const heights = rows.map(tr => {
+                let contentH = NESTED_MIN_ROW;
+                Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
+                    contentH = Math.max(contentH, Math.ceil(td.scrollHeight) || NESTED_MIN_ROW);
+                });
+                return Math.max(NESTED_MIN_ROW, contentH);
+            });
+            if (heights.some((h, i) => h !== (config.rowHeights[i] || 0))) {
+                config.rowHeights = heights;
+                applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
+            }
+            hydrateNestedLatexSpans(node);
+        });
+
+        // Nested latex outside rebuilt path (if any)
+        tempContainer.querySelectorAll('.workspace-nested-latex').forEach(span => {
+            const latexValue = normalizeWorkspaceLatexInput(span.getAttribute('data-value') || '');
+            const mathSpan = document.createElement('span');
+            mathSpan.className = 'preview-static-latex';
+            mathSpan.textContent = latexValue;
+            span.parentNode.replaceChild(mathSpan, span);
         });
 
         tempContainer.querySelectorAll('.ql-align-right, .ql-align-center, .ql-align-justify').forEach(el => {
@@ -629,7 +699,14 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Prefer server/cached LaTeX; never treat valid latex "0" as missing
                     const isServerValueValid = displayVal !== undefined && displayVal !== null && displayVal !== '' && displayVal !== '???';
 
-                    if (baseArchetypeToken === 'formula' || baseArchetypeToken === 'matrix') {
+                    if (baseArchetypeToken === 'graph') {
+                        // Graph preview needs the JSON manifest (evaluated_output), not latex_output
+                        // which is only a placeholder like "[Graph Component]".
+                        if (card) {
+                            displayVal = card.getAttribute('data-simulated-value')
+                                || evaluateSingleCardOutput(card, cleanToken);
+                        }
+                    } else if (baseArchetypeToken === 'formula' || baseArchetypeToken === 'matrix') {
                         if (!isServerValueValid && card) {
                             displayVal = card.getAttribute('data-latex-output')
                                 || card.getAttribute('data-simulated-value')
@@ -664,7 +741,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         displayVal,
                         cleanToken,
                         card,
-                        renderGraphComponentCanvas
+                        renderGraphComponentCanvas,
+                        previewInstanceId: `live-preview-canvas-${cleanToken}-${++previewGraphSeq}`,
+                        registerPreviewGraph: (job) => {
+                            if (job) pendingGraphRenders.push(job);
+                        }
                     });
                     if (previewHtml) {
                         return previewHtml;
@@ -689,6 +770,37 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         renderTarget.innerHTML = simulatedHtml;
+        // Apply persisted table col/row sizes so preview images constrain like the editor
+        Array.from(renderTarget.querySelectorAll('table')).forEach(table => {
+            if (table.classList.contains('ql-nested-table-inner') || table.closest('.ql-workspace-nested-table')) {
+                const embed = table.closest('.ql-workspace-nested-table');
+                if (embed) {
+                    const cfg = parseNestedTableConfig(embed.getAttribute('data-value') || '');
+                    applyNestedInnerLayout(table, cfg.colWidths, cfg.rowHeights);
+                    if (cfg.expandEntities) {
+                        table.classList.add('ql-table-expand-entities');
+                        table.setAttribute('data-expand-entities', 'true');
+                    } else {
+                        table.classList.remove('ql-table-expand-entities');
+                        table.setAttribute('data-expand-entities', 'false');
+                    }
+                }
+                return;
+            }
+            reapplyWorkspaceTableLayout(table);
+            if (table.getAttribute('data-expand-entities') === 'false') {
+                table.classList.remove('ql-table-expand-entities');
+            } else {
+                table.classList.add('ql-table-expand-entities');
+                table.setAttribute('data-expand-entities', 'true');
+            }
+        });
+        renderTarget.querySelectorAll('table td img, table th img').forEach(img => {
+            img.style.maxWidth = '100%';
+            img.style.height = 'auto';
+            img.style.width = 'auto';
+            img.style.display = 'block';
+        });
 
         // 🎯 STEP 3: RUN KATEX DISPATCH OVER DYNAMIC HTML TARGETS
         if (typeof katex !== 'undefined') {
@@ -709,6 +821,417 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
         }
+
+        // Paint graphs only after preview DOM exists (setTimeout-from-replace races with tables)
+        flushPreviewGraphRenders(renderTarget, pendingGraphRenders);
+
+        // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
+        applyPreviewTableEntityFitModes(renderTarget);
+        // Remeasure once plot SVG layout settles
+        setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 40);
+        setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 200);
+    }
+
+    /**
+     * Paint deferred graph previews into the live simulation DOM, sizing to table cells
+     * when expand-entities is off, and using full plot size when expand is on.
+     */
+    function flushPreviewGraphRenders(root, jobs) {
+        if (!root || !Array.isArray(jobs) || jobs.length === 0) return;
+
+        jobs.forEach((job) => {
+            if (!job || !job.canvasId || !job.graphConfig) return;
+            const canvasEl = document.getElementById(job.canvasId);
+            if (!canvasEl) return;
+
+            const hostTd = canvasEl.closest('td, th');
+            const hostTable = hostTd ? hostTd.closest('table') : null;
+            const shouldExpand = hostTable ? previewTableShouldExpandEntities(hostTable) : true;
+            const container = canvasEl.closest('.simulated-live-graph-preview-container');
+
+            let width = 340;
+            if (hostTd) {
+                const cs = window.getComputedStyle(hostTd);
+                const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+                const avail = Math.floor((hostTd.clientWidth || 0) - padX - 12);
+                if (shouldExpand) {
+                    // Prefer full plot; cell will grow via expandPreviewTablesForEntities
+                    width = 340;
+                } else if (avail > 0) {
+                    width = Math.max(100, Math.min(340, avail));
+                }
+            }
+
+            const height = Math.max(100, Math.round(width * (240 / 340)));
+            canvasEl.style.width = '100%';
+            canvasEl.style.height = `${height}px`;
+            canvasEl.style.minHeight = `${height}px`;
+            canvasEl.innerHTML = '';
+            if (container) {
+                container.style.maxWidth = `${width + 8}px`;
+                container.style.width = '100%';
+            }
+
+            try {
+                renderGraphComponentCanvas(job.canvasId, job.graphConfig, { width, height });
+            } catch (err) {
+                console.error('Preview graph paint failed:', err);
+            }
+        });
+    }
+
+    function applyPreviewTableEntityFitModes(root) {
+        if (!root) return;
+        expandPreviewTablesForEntities(root);
+        shrinkFitFixedPreviewTableContents(root);
+    }
+
+    /** Expand is the default when the flag is unset; only explicit false disables it. */
+    function resolveExpandEntitiesFlag(raw, { hasOwnKey = null } = {}) {
+        if (raw === false || raw === 'false' || raw === 0 || raw === '0') return false;
+        if (raw === true || raw === 'true' || raw === 1 || raw === '1') return true;
+        if (hasOwnKey === false) return true; // key missing → default on
+        return true;
+    }
+
+    function previewTableShouldExpandEntities(table) {
+        if (!table) return false;
+        const attr = table.getAttribute('data-expand-entities');
+        if (attr === 'false') return false;
+        if (attr === 'true' || table.classList.contains('ql-table-expand-entities')) return true;
+        const embed = table.closest('.ql-workspace-nested-table');
+        if (embed) {
+            let parsed = {};
+            try {
+                parsed = JSON.parse(embed.getAttribute('data-value') || '{}') || {};
+            } catch (err) {
+                parsed = {};
+            }
+            return resolveExpandEntitiesFlag(parsed.expandEntities, {
+                hasOwnKey: Object.prototype.hasOwnProperty.call(parsed, 'expandEntities')
+            });
+        }
+        // Outer tables with no attribute yet → expand by default in preview
+        return true;
+    }
+
+    /**
+     * Preview-only (fixed / expand-off): scale each cell's content down uniformly
+     * so rendered entities fit inside the editor-locked cell box instead of clipping.
+     */
+    function shrinkFitFixedPreviewTableContents(root) {
+        if (!root) return;
+        const tables = Array.from(root.querySelectorAll('table')).filter(t => !previewTableShouldExpandEntities(t));
+        tables.forEach(table => {
+            table.classList.remove('ql-table-expand-entities');
+            table.setAttribute('data-expand-entities', 'false');
+            table.classList.add('ql-table-fixed-entities');
+
+            const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+            if (!rows.length) return;
+            const firstCells = Array.from(rows[0].children).filter(el => el.matches('td, th'));
+            const colCount = firstCells.length;
+            if (!colCount) return;
+
+            // Use editor-persisted sizes (not live client sizes bloated by KaTeX)
+            const widthAttr = (table.getAttribute('data-col-widths') || '').split(',').map(v => parseFloat(v));
+            const heightAttr = (table.getAttribute('data-row-heights') || '').split(',').map(v => parseFloat(v));
+            const lockedWidths = firstCells.map((cell, i) => {
+                const fromData = widthAttr[i];
+                const fromStyle = parseFloat(cell.style.width);
+                return Math.max(
+                    14,
+                    (!Number.isNaN(fromData) && fromData > 0) ? Math.round(fromData) : 0,
+                    (!Number.isNaN(fromStyle) && fromStyle > 0) ? Math.round(fromStyle) : 0,
+                    40
+                );
+            });
+            const lockedHeights = rows.map((tr, i) => {
+                const fromData = heightAttr[i];
+                const fromStyle = parseFloat(tr.style.height);
+                return Math.max(
+                    16,
+                    (!Number.isNaN(fromData) && fromData > 0) ? Math.round(fromData) : 0,
+                    (!Number.isNaN(fromStyle) && fromStyle > 0) ? Math.round(fromStyle) : 0,
+                    28
+                );
+            });
+
+            // Pull content out of table layout flow first so KaTeX cannot inflate rows
+            rows.forEach((tr, ri) => {
+                Array.from(tr.children).filter(el => el.matches('td, th')).forEach((td, ci) => {
+                    if (td.classList.contains('ql-has-nested-table') || td.querySelector('.ql-workspace-nested-table')) {
+                        return;
+                    }
+                    ensurePreviewFitViewport(td);
+                    td.style.overflow = 'hidden';
+                });
+            });
+
+            // Force locked geometry
+            const lockGeometry = () => {
+                if (table.classList.contains('ql-nested-table-inner') || table.closest('.ql-workspace-nested-table')) {
+                    applyNestedInnerLayout(table, lockedWidths, lockedHeights);
+                } else {
+                    applyColumnWidths(table, lockedWidths);
+                }
+                rows.forEach((tr, i) => {
+                    const h = lockedHeights[i];
+                    setRowHeightExclusive(tr, h, table);
+                    tr.style.maxHeight = `${h}px`;
+                    Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
+                        td.style.maxHeight = `${h}px`;
+                    });
+                });
+            };
+            lockGeometry();
+
+            rows.forEach((tr, ri) => {
+                Array.from(tr.children).filter(el => el.matches('td, th')).forEach((td, ci) => {
+                    if (td.classList.contains('ql-has-nested-table') || td.querySelector('.ql-workspace-nested-table')) {
+                        return;
+                    }
+                    shrinkFitPreviewCellContent(td, lockedWidths[ci], lockedHeights[ri]);
+                });
+            });
+
+            lockGeometry();
+        });
+    }
+
+    function ensurePreviewFitViewport(td) {
+        if (!td || td.querySelector(':scope > .ql-preview-fit-viewport')) return;
+        const viewport = document.createElement('div');
+        viewport.className = 'ql-preview-fit-viewport';
+        const wrap = document.createElement('div');
+        wrap.className = 'ql-preview-fit-scale';
+        const existingWrap = td.querySelector(':scope > .ql-preview-fit-scale');
+        if (existingWrap) {
+            while (existingWrap.firstChild) wrap.appendChild(existingWrap.firstChild);
+            existingWrap.remove();
+        } else {
+            while (td.firstChild) wrap.appendChild(td.firstChild);
+        }
+        wrap.style.position = 'absolute';
+        wrap.style.top = '0';
+        wrap.style.left = '0';
+        viewport.appendChild(wrap);
+        td.appendChild(viewport);
+    }
+
+    function getPreviewCellContentBox(td, lockedW = null, lockedH = null) {
+        const cs = window.getComputedStyle(td);
+        const padL = parseFloat(cs.paddingLeft) || 0;
+        const padR = parseFloat(cs.paddingRight) || 0;
+        const padT = parseFloat(cs.paddingTop) || 0;
+        const padB = parseFloat(cs.paddingBottom) || 0;
+        const borderL = parseFloat(cs.borderLeftWidth) || 0;
+        const borderR = parseFloat(cs.borderRightWidth) || 0;
+        const borderT = parseFloat(cs.borderTopWidth) || 0;
+        const borderB = parseFloat(cs.borderBottomWidth) || 0;
+
+        // Prefer live client box after geometry lock (clientWidth includes padding, excludes border)
+        let boxW;
+        let boxH;
+        if (td.clientWidth > 0 && td.clientHeight > 0) {
+            boxW = td.clientWidth - padL - padR;
+            boxH = td.clientHeight - padT - padB;
+        } else {
+            // border-box locked sizes → subtract padding + border
+            const outerW = (lockedW != null && lockedW > 0)
+                ? lockedW
+                : (td.getBoundingClientRect().width || 40);
+            const outerH = (lockedH != null && lockedH > 0)
+                ? lockedH
+                : (td.getBoundingClientRect().height || 28);
+            boxW = outerW - padL - padR - borderL - borderR;
+            boxH = outerH - padT - padB - borderT - borderB;
+        }
+
+        // Small inset so scaled glyphs don't kiss the border
+        const inset = 1;
+        return {
+            width: Math.max(1, Math.floor(boxW) - inset),
+            height: Math.max(1, Math.floor(boxH) - inset),
+            padL,
+            padT
+        };
+    }
+
+    function shrinkFitPreviewCellContent(td, lockedW = null, lockedH = null) {
+        if (!td) return;
+        ensurePreviewFitViewport(td);
+
+        const box = getPreviewCellContentBox(td, lockedW, lockedH);
+        const targetW = box.width;
+        const targetH = box.height;
+        if (targetW < 2 || targetH < 2) return;
+
+        const viewport = td.querySelector(':scope > .ql-preview-fit-viewport');
+        const wrap = viewport && viewport.querySelector(':scope > .ql-preview-fit-scale');
+        if (!viewport || !wrap) return;
+
+        // Viewport fills only the content box (not the padding ring)
+        viewport.style.boxSizing = 'border-box';
+        viewport.style.width = `${targetW}px`;
+        viewport.style.height = `${targetH}px`;
+        viewport.style.maxWidth = '100%';
+        viewport.style.maxHeight = '100%';
+        viewport.style.overflow = 'hidden';
+        viewport.style.position = 'relative';
+        viewport.style.display = 'block';
+        viewport.style.margin = '0';
+
+        wrap.style.transform = 'none';
+        wrap.style.transformOrigin = 'top left';
+        wrap.style.width = 'max-content';
+        wrap.style.maxWidth = 'none';
+        wrap.style.height = 'auto';
+        wrap.style.display = 'inline-block';
+        wrap.style.verticalAlign = 'top';
+        wrap.style.margin = '0';
+        wrap.style.position = 'absolute';
+        wrap.style.top = '0';
+        wrap.style.left = '0';
+
+        const contentW = Math.max(wrap.scrollWidth || 0, wrap.offsetWidth || 0, 1);
+        const contentH = Math.max(wrap.scrollHeight || 0, wrap.offsetHeight || 0, 1);
+        const scale = Math.min(1, targetW / contentW, targetH / contentH);
+        wrap.style.transform = scale < 0.999 ? `scale(${scale})` : '';
+
+        td.style.overflow = 'hidden';
+        if (lockedW != null && lockedW > 0) {
+            td.style.width = `${lockedW}px`;
+            td.style.minWidth = `${lockedW}px`;
+            td.style.maxWidth = `${lockedW}px`;
+        }
+        if (lockedH != null && lockedH > 0) {
+            td.style.height = `${lockedH}px`;
+            td.style.minHeight = `${lockedH}px`;
+            td.style.maxHeight = `${lockedH}px`;
+        }
+    }
+
+    /**
+     * Preview-only: grow col/row sizes (never shrink below editor sizes) so
+     * rendered entities (KaTeX, matrix, graphs) are not clipped by overflow:hidden.
+     */
+    function expandPreviewTablesForEntities(root) {
+        if (!root) return;
+        const tables = Array.from(root.querySelectorAll('table')).filter(previewTableShouldExpandEntities);
+        tables.forEach(table => {
+            table.classList.add('ql-table-expand-entities');
+            table.classList.remove('ql-table-fixed-entities');
+            table.setAttribute('data-expand-entities', 'true');
+
+            const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+            if (!rows.length) return;
+            const firstCells = Array.from(rows[0].children).filter(el => el.matches('td, th'));
+            const colCount = firstCells.length;
+            if (!colCount) return;
+
+            const widthAttr = (table.getAttribute('data-col-widths') || '').split(',').map(v => parseFloat(v));
+            const heightAttr = (table.getAttribute('data-row-heights') || '').split(',').map(v => parseFloat(v));
+            const floorWidths = firstCells.map((cell, i) => {
+                const fromData = widthAttr[i];
+                const fromStyle = parseFloat(cell.style.width);
+                const live = Math.round(cell.getBoundingClientRect().width) || 40;
+                return Math.max(
+                    14,
+                    (!Number.isNaN(fromData) && fromData > 0) ? Math.round(fromData) : 0,
+                    (!Number.isNaN(fromStyle) && fromStyle > 0) ? Math.round(fromStyle) : 0,
+                    live
+                );
+            });
+            const floorHeights = rows.map((tr, i) => {
+                const fromData = heightAttr[i];
+                const fromStyle = parseFloat(tr.style.height);
+                const live = Math.round(tr.getBoundingClientRect().height) || 28;
+                return Math.max(
+                    16,
+                    (!Number.isNaN(fromData) && fromData > 0) ? Math.round(fromData) : 0,
+                    (!Number.isNaN(fromStyle) && fromStyle > 0) ? Math.round(fromStyle) : 0,
+                    live
+                );
+            });
+
+            // Temporarily release fixed heights so scroll metrics reflect rendered entities
+            rows.forEach(tr => {
+                tr.style.height = 'auto';
+                tr.style.minHeight = '';
+                Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
+                    td.style.overflow = 'visible';
+                    td.style.height = 'auto';
+                    td.style.minHeight = '';
+                    td.style.maxHeight = 'none';
+                });
+            });
+
+            const nextWidths = floorWidths.slice();
+            const nextHeights = floorHeights.slice();
+            rows.forEach((tr, ri) => {
+                let rowH = floorHeights[ri] || 16;
+                Array.from(tr.children).filter(el => el.matches('td, th')).forEach((td, ci) => {
+                    const neededW = Math.ceil(Math.max(td.scrollWidth || 0, td.getBoundingClientRect().width || 0));
+                    const neededH = Math.ceil(Math.max(td.scrollHeight || 0, td.getBoundingClientRect().height || 0));
+                    if (ci < nextWidths.length) {
+                        nextWidths[ci] = Math.max(nextWidths[ci], neededW);
+                    }
+                    rowH = Math.max(rowH, neededH);
+                });
+                nextHeights[ri] = rowH;
+            });
+
+            if (table.classList.contains('ql-nested-table-inner') || table.closest('.ql-workspace-nested-table')) {
+                applyNestedInnerLayout(table, nextWidths, nextHeights);
+                // If nested grew, also enlarge the outer host cell so the preview isn't clipped by the parent cell
+                const embed = table.closest('.ql-workspace-nested-table');
+                const host = embed ? embed.closest('td, th') : null;
+                const outerTable = host ? host.closest('table') : null;
+                if (host && outerTable && !isNestedTableElement(outerTable) && previewTableShouldExpandEntities(outerTable)) {
+                    const neededW = nextWidths.reduce((a, b) => a + b, 0);
+                    const neededH = nextHeights.reduce((a, b) => a + b, 0);
+                    const outerRows = Array.from(outerTable.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+                    const outerRow = host.parentElement;
+                    const outerRowIndex = outerRows.indexOf(outerRow);
+                    const outerCells = outerRow
+                        ? Array.from(outerRow.children).filter(el => el.matches('td, th'))
+                        : [];
+                    const outerColIndex = outerCells.indexOf(host);
+                    const outerWidths = readLiveColumnWidths(outerTable);
+                    const outerHeights = outerRows.map((tr, i) => {
+                        const fromStyle = parseFloat(tr.style.height);
+                        return Math.max(
+                            16,
+                            Math.round((!Number.isNaN(fromStyle) && fromStyle > 0)
+                                ? fromStyle
+                                : (tr.getBoundingClientRect().height || 28))
+                        );
+                    });
+                    if (outerColIndex >= 0) {
+                        while (outerWidths.length <= outerColIndex) outerWidths.push(40);
+                        outerWidths[outerColIndex] = Math.max(outerWidths[outerColIndex] || 0, neededW);
+                    }
+                    if (outerRowIndex >= 0) {
+                        while (outerHeights.length <= outerRowIndex) outerHeights.push(28);
+                        outerHeights[outerRowIndex] = Math.max(outerHeights[outerRowIndex] || 0, neededH);
+                    }
+                    applyColumnWidths(outerTable, outerWidths);
+                    outerRows.forEach((tr, i) => setRowHeightExclusive(tr, outerHeights[i], outerTable));
+                    host.style.overflow = 'visible';
+                }
+            } else {
+                applyColumnWidths(table, nextWidths);
+                rows.forEach((tr, i) => setRowHeightExclusive(tr, nextHeights[i], table));
+                // Preview-only attrs — do not write back through save path (this DOM is ephemeral)
+                table.setAttribute('data-col-widths', nextWidths.join(','));
+                table.setAttribute('data-row-heights', nextHeights.join(','));
+            }
+
+            table.querySelectorAll(':scope > tr > td, :scope > tr > th, :scope > tbody > tr > td, :scope > tbody > tr > th').forEach(td => {
+                td.style.overflow = 'visible';
+            });
+        });
     }
 
     // Serializes active layout properties into structural object dictionaries matching database specifications
@@ -1178,10 +1701,22 @@ document.addEventListener('DOMContentLoaded', function() {
         
         badge.addEventListener('click', function() {
             if (!workspaceQuillInstance) return;
+            const tokenText = `<${indexedTokenString}>`;
+            // Plain-text entity tags are fine inside nested cells (as typed text)
+            if (isFocusInsideNestedTable()) {
+                document.execCommand('insertText', false, tokenText);
+                const active = getActiveNestedEmbedAndCell();
+                if (active) {
+                    syncWorkspaceNestedTableNode(active.embed, { relayout: false });
+                    growNestedEmbedToContentAndFitOuter(active.embed);
+                }
+                scheduleNestedPreviewUpdate();
+                return;
+            }
             const range = workspaceQuillInstance.getSelection(true);
             if (range) {
-                workspaceQuillInstance.insertText(range.index, `<${indexedTokenString}>`, 'user');
-                workspaceQuillInstance.setSelection(range.index + indexedTokenString.length + 2, 'user');
+                workspaceQuillInstance.insertText(range.index, tokenText, 'user');
+                workspaceQuillInstance.setSelection(range.index + tokenText.length, 'user');
             }
         });
 
@@ -1339,18 +1874,282 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Lazy-Initialize Quill text frame securely
             if (!workspaceQuillInstance && typeof Quill !== 'undefined' && htmlCanvasEditor) {
+                registerWorkspaceNestedTableBlot();
+                registerWorkspaceSoftBreakBlot();
                 workspaceQuillInstance = new Quill('#editor-html-insert-canvas', {
                     theme: 'snow',
-                    modules: { toolbar: '#workspace-quill-toolbar-container' }
+                    modules: {
+                        table: { operationMenu: true },
+                        keyboard: {
+                            bindings: {
+                                // Keep Enter inside Quill table cells (native Enter splits the table)
+                                'workspace-table-enter': {
+                                    key: 'Enter',
+                                    handler(range) {
+                                        if (isSelectionInsideQuillTableCell()) {
+                                            insertSoftBreakInQuillTableCell(range);
+                                            return false;
+                                        }
+                                        return true;
+                                    }
+                                }
+                            }
+                        },
+                        toolbar: {
+                            container: '#workspace-quill-toolbar-container',
+                            handlers: {
+                                // Nested-table contenteditable supports basic rich text via execCommand
+                                bold() {
+                                    if (applyNestedInlineFormat('bold')) return;
+                                    workspaceQuillInstance.format('bold', !workspaceQuillInstance.getFormat().bold);
+                                },
+                                italic() {
+                                    if (applyNestedInlineFormat('italic')) return;
+                                    workspaceQuillInstance.format('italic', !workspaceQuillInstance.getFormat().italic);
+                                },
+                                underline() {
+                                    if (applyNestedInlineFormat('underline')) return;
+                                    workspaceQuillInstance.format('underline', !workspaceQuillInstance.getFormat().underline);
+                                },
+                                strike() {
+                                    if (applyNestedInlineFormat('strikeThrough')) return;
+                                    workspaceQuillInstance.format('strike', !workspaceQuillInstance.getFormat().strike);
+                                },
+                                size(value) {
+                                    if (applyNestedFontSize(value)) return;
+                                    workspaceQuillInstance.format('size', value);
+                                },
+                                font(value) {
+                                    if (applyNestedFontFamily(value)) return;
+                                    workspaceQuillInstance.format('font', value);
+                                },
+                                // Custom handler: accept any LaTeX string (default Quill tooltip
+                                // is often clipped inside the overlay scroll containers).
+                                formula() {
+                                    openWorkspaceLatexInputModal();
+                                },
+                                // Nested cells use a DOM <img> (Quill image embeds freeze there)
+                                image() {
+                                    promptAndInsertWorkspaceImage();
+                                },
+                                table() {
+                                    if (isFocusInsideNestedTable()) return; // no table-in-nested-table
+                                    openWorkspaceTableSizePicker(this);
+                                },
+                                // Pseudo-lists inside table cells (real Quill lists would escape the table)
+                                list(value) {
+                                    if (applyNestedListFormat(value)) return;
+                                    if (applyListFormattingInsideTableCell(value)) return;
+                                    workspaceQuillInstance.format('list', value);
+                                },
+                                // Cell align when editing a cell; whole-table align only when table object is selected.
+                                align(value) {
+                                    if (isFocusInsideNestedTable()) {
+                                        applyNestedInlineFormat(value === 'center' ? 'justifyCenter'
+                                            : value === 'right' ? 'justifyRight'
+                                            : value === 'justify' ? 'justifyFull'
+                                            : 'justifyLeft');
+                                        return;
+                                    }
+                                    if (selectedWorkspaceTable && document.contains(selectedWorkspaceTable)) {
+                                        applyWorkspaceTableAlignment(value, selectedWorkspaceTable);
+                                        return;
+                                    }
+                                    workspaceQuillInstance.format('align', value);
+                                }
+                            }
+                        },
+                        clipboard: {
+                            matchers: [
+                                ['BR', function(node, delta) {
+                                    const cell = node.closest && node.closest('td, th');
+                                    if (!cell || (node.closest && node.closest('.ql-workspace-nested-table'))) {
+                                        return delta;
+                                    }
+                                    // Mid-cell soft newlines only. Quill empty cells and
+                                    // trailing <br> after text must NOT become softBreak embeds
+                                    // — those are contenteditable=false and block caret entry on reload.
+                                    let hasFollowingContent = false;
+                                    for (let sib = node.nextSibling; sib; sib = sib.nextSibling) {
+                                        if (sib.nodeType === Node.TEXT_NODE) {
+                                            if ((sib.textContent || '').replace(/[\u200B\uFEFF]/g, '').length) {
+                                                hasFollowingContent = true;
+                                                break;
+                                            }
+                                            continue;
+                                        }
+                                        if (sib.nodeType === Node.ELEMENT_NODE) {
+                                            hasFollowingContent = true;
+                                            break;
+                                        }
+                                    }
+                                    const Delta = Quill.import('delta');
+                                    if (!hasFollowingContent) {
+                                        return new Delta();
+                                    }
+                                    return new Delta().insert({ softBreak: true });
+                                }],
+                                ['.ql-soft-break', function(node, delta) {
+                                    const Delta = Quill.import('delta');
+                                    const cell = node.closest && node.closest('td, th');
+                                    if (cell && !(node.closest && node.closest('.ql-workspace-nested-table'))) {
+                                        // Orphan soft-break left alone in an empty cell (bad save/reload) — drop it
+                                        const hasOther = Array.from(cell.childNodes).some(child => {
+                                            if (child === node) return false;
+                                            if (child.nodeType === Node.TEXT_NODE) {
+                                                return !!(child.textContent || '').replace(/[\u200B\uFEFF]/g, '').length;
+                                            }
+                                            if (child.nodeType === Node.ELEMENT_NODE) {
+                                                return true;
+                                            }
+                                            return false;
+                                        });
+                                        if (!hasOther) {
+                                            return new Delta();
+                                        }
+                                    }
+                                    return new Delta().insert({ softBreak: true });
+                                }],
+                                ['TD, TH', function(node, delta) {
+                                    if (node.closest && (
+                                        node.closest('.ql-workspace-nested-table') ||
+                                        node.closest('.ql-nested-table-inner')
+                                    )) {
+                                        return delta;
+                                    }
+                                    // Repair corrupted Quill row ids before they flatten the grid
+                                    const raw = node.getAttribute('data-row');
+                                    if (!raw || raw === '[object Object]' || raw === 'true' || raw.startsWith('{')) {
+                                        const tr = node.parentElement;
+                                        const table = node.closest('table');
+                                        const rows = table ? Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr')) : [];
+                                        const rowIndex = tr ? rows.indexOf(tr) : 0;
+                                        node.setAttribute('data-row', `row-${rowIndex}-${Math.random().toString(36).slice(2, 6)}`);
+                                    }
+                                    return delta;
+                                }],
+                                // Force each HTML <tr> onto a unique Quill table-format id (fixes 5x5 → 1x25 reload).
+                                ['tr', function(node, delta) {
+                                    if (node.closest && node.closest('.ql-workspace-nested-table')) {
+                                        return delta;
+                                    }
+                                    const table = node.parentElement?.tagName === 'TABLE'
+                                        ? node.parentElement
+                                        : node.parentElement?.parentElement;
+                                    const rows = table ? Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr')) : [];
+                                    const rowIndex = rows.indexOf(node);
+                                    let rowId = null;
+                                    const firstCell = node.querySelector && node.querySelector('td, th');
+                                    if (firstCell) {
+                                        const existing = firstCell.getAttribute('data-row');
+                                        if (existing && existing !== '[object Object]' && existing !== 'true' && !existing.startsWith('{')) {
+                                            rowId = existing;
+                                        }
+                                    }
+                                    if (!rowId) {
+                                        rowId = `row-${Math.max(0, rowIndex)}-${Math.random().toString(36).slice(2, 6)}`;
+                                    }
+                                    if (delta && Array.isArray(delta.ops)) {
+                                        delta.ops.forEach(op => {
+                                            if (!op.insert) return;
+                                            op.attributes = { ...(op.attributes || {}), table: rowId };
+                                        });
+                                    }
+                                    return delta;
+                                }],
+                                ['table', function(node, delta) {
+                                    // Persist layout markers Quill otherwise drops from TABLE nodes
+                                    if (node && node.classList && node.classList.contains('no-border')) {
+                                        node.setAttribute('data-no-border', 'true');
+                                    }
+                                    if (node && node.classList && node.classList.contains('ql-table-expand-entities')) {
+                                        node.setAttribute('data-expand-entities', 'true');
+                                    }
+                                    // IMPORTANT: never rewrite attributes.table (row id) into an object —
+                                    // that becomes "[object Object]" and collapses every row into one.
+                                    return delta;
+                                }]
+                            ]
+                        }
+                    }
                 });
-                workspaceQuillInstance.on('text-change', () => {
+                workspaceQuillInstance.on('text-change', (delta, oldDelta, source) => {
+                    if (window.__workspaceTableLayoutQuiet) return;
+                    // Re-applying nested/outer layouts on every keystroke mutates the DOM and can
+                    // retrigger Quill optimize/text-change (freeze). Only re-layout when table ops
+                    // are involved.
+                    const touchesTable = !!(delta && Array.isArray(delta.ops) && delta.ops.some(op =>
+                        (op.attributes && op.attributes.table != null)
+                        || (op.insert && typeof op.insert === 'object' && op.insert.workspaceNestedTable)
+                    ));
+                    if (source === 'user' && touchesTable) {
+                        window.__workspaceTableLayoutQuiet = true;
+                        try {
+                            reapplyAllWorkspaceTableLayouts();
+                            lockOuterCellsThatContainNestedTables();
+                        } finally {
+                            requestAnimationFrame(() => { window.__workspaceTableLayoutQuiet = false; });
+                        }
+                    } else if (source === 'user') {
+                        lockOuterCellsThatContainNestedTables();
+                    }
                     updateWorkspaceSimulationPreview();
                     if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
                 });
+                setupWorkspaceTableCellPasteHandler();
+                setupWorkspaceTableContextMenu();
+                setupEmptyOuterTableCellClick();
+                setupWorkspaceTableResize();
+                setupWorkspaceTableObjectSelection();
+                setupWorkspaceTableHoverTip();
+                setupNestedExclusiveCellGuards();
+                const toolbarEl = document.getElementById('workspace-quill-toolbar-container');
+                if (toolbarEl && toolbarEl.dataset.nestedGuardBound !== '1') {
+                    toolbarEl.dataset.nestedGuardBound = '1';
+                    toolbarEl.addEventListener('mousedown', function(e) {
+                        if (!isFocusInsideNestedTable()) return;
+                        // Block embeds that freeze Quill when targeted at nested contenteditable cells
+                        if (e.target.closest('.ql-table, .ql-video')) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            return;
+                        }
+                        // Image / formula use custom handlers — preserve nested selection
+                        if (e.target.closest('.ql-image, .ql-formula')) {
+                            e.preventDefault();
+                            return;
+                        }
+                        // Keep nested selection alive so bold/italic/size/etc still apply
+                        if (e.target.closest('button, .ql-picker, .ql-picker-label, .ql-picker-item')) {
+                            e.preventDefault();
+                        }
+                    }, true);
+                }
+                // Ensure Enter soft-breaks win over Quill's default table-splitting Enter
+                try {
+                    const keyboard = workspaceQuillInstance.getModule('keyboard');
+                    if (keyboard && keyboard.bindings) {
+                        const enterKey = keyboard.bindings.Enter || keyboard.bindings[13];
+                        if (Array.isArray(enterKey)) {
+                            enterKey.unshift({
+                                key: 'Enter',
+                                handler(range) {
+                                    if (isSelectionInsideQuillTableCell()) {
+                                        insertSoftBreakInQuillTableCell(range);
+                                        return false;
+                                    }
+                                    return true;
+                                }
+                            });
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Could not prioritize table Enter binding:', err);
+                }
             }
 
             if (workspaceQuillInstance) {
-                workspaceQuillInstance.root.innerHTML = data.body_html || '<p><br></p>';
+                loadWorkspaceQuillHtml(data.body_html || '<p><br></p>');
             }
 
             // Restore active workspace variables configuration blocks columns rows items
@@ -1396,6 +2195,3219 @@ document.addEventListener('DOMContentLoaded', function() {
         if (inputsContainer) inputsContainer.innerHTML = '<p style="color:#94a3b8; font-size:0.85rem; font-style:italic;">No answer forms attached.</p>';
     }
 
+    // 🎯 4b. WORKSPACE LATEX INSERT MODAL (Quill formula toolbar)
+    const latexInputModal = document.getElementById('workspace-latex-input-modal');
+    const latexInputField = document.getElementById('workspace-latex-input-field');
+    const latexInsertBtn = document.getElementById('btn-insert-workspace-latex');
+    const latexCancelBtn = document.getElementById('btn-cancel-workspace-latex');
+    let nestedLatexInsertTarget = null;
+
+    function hideWorkspaceLatexInputModal() {
+        nestedLatexInsertTarget = null;
+        if (latexInputModal) {
+            latexInputModal.classList.remove('is-visible');
+            latexInputModal.style.display = 'none';
+            latexInputModal.style.visibility = 'hidden';
+            latexInputModal.style.opacity = '0';
+        }
+        if (latexInputField) latexInputField.value = '';
+    }
+
+    function openWorkspaceLatexInputModal() {
+        if (!latexInputModal || !latexInputField) return;
+        nestedLatexInsertTarget = null;
+        if (isFocusInsideNestedTable()) {
+            const active = getActiveNestedEmbedAndCell();
+            const sel = window.getSelection();
+            if (active && sel && sel.rangeCount) {
+                nestedLatexInsertTarget = {
+                    embed: active.embed,
+                    cell: active.cell,
+                    range: sel.getRangeAt(0).cloneRange()
+                };
+            }
+        }
+        latexInputField.value = '';
+        latexInputModal.style.display = 'flex';
+        latexInputModal.style.visibility = 'visible';
+        latexInputModal.style.opacity = '1';
+        latexInputModal.classList.add('is-visible');
+        setTimeout(() => latexInputField.focus(), 0);
+    }
+
+    function insertNestedLatexFormula(latex) {
+        const target = nestedLatexInsertTarget;
+        nestedLatexInsertTarget = null;
+        if (!target || !target.cell || !target.embed) return false;
+
+        const span = document.createElement('span');
+        span.className = 'workspace-nested-latex';
+        span.setAttribute('contenteditable', 'false');
+        span.setAttribute('data-value', latex);
+        if (typeof katex !== 'undefined') {
+            try {
+                katex.render(latex, span, { displayMode: false, throwOnError: false });
+            } catch (err) {
+                span.textContent = latex;
+            }
+        } else {
+            span.textContent = latex;
+        }
+
+        try {
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(target.range);
+            target.range.deleteContents();
+            target.range.insertNode(span);
+            // Place caret after the formula
+            const after = document.createRange();
+            after.setStartAfter(span);
+            after.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(after);
+        } catch (err) {
+            target.cell.appendChild(span);
+        }
+
+        syncWorkspaceNestedTableNode(target.embed, { relayout: false });
+        growNestedEmbedToContentAndFitOuter(target.embed);
+        scheduleNestedPreviewUpdate();
+        if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+        return true;
+    }
+
+    function isSafeNestedImageSrc(src) {
+        const value = String(src || '').trim();
+        if (!value) return false;
+        if (/^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,/i.test(value)) return true;
+        if (/^https?:\/\//i.test(value)) return true;
+        if (value.startsWith('/') && !value.startsWith('//')) return true;
+        return false;
+    }
+
+    function createWorkspaceNestedImage(src) {
+        const img = document.createElement('img');
+        img.className = 'workspace-nested-image';
+        img.setAttribute('src', src);
+        img.setAttribute('alt', '');
+        img.setAttribute('contenteditable', 'false');
+        img.draggable = false;
+        return img;
+    }
+
+    function insertNestedImageAt(embed, cell, range, src) {
+        if (!embed || !cell || !isSafeNestedImageSrc(src)) return false;
+        const img = createWorkspaceNestedImage(src);
+        const onReady = () => {
+            syncWorkspaceNestedTableNode(embed, { relayout: false });
+            growNestedEmbedToContentAndFitOuter(embed);
+            scheduleNestedPreviewUpdate();
+            if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+        };
+        img.addEventListener('load', onReady, { once: true });
+        img.addEventListener('error', onReady, { once: true });
+
+        try {
+            const sel = window.getSelection();
+            if (range) {
+                sel.removeAllRanges();
+                sel.addRange(range);
+                range.deleteContents();
+                range.insertNode(img);
+                const after = document.createRange();
+                after.setStartAfter(img);
+                after.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(after);
+            } else {
+                cell.appendChild(img);
+            }
+        } catch (err) {
+            cell.appendChild(img);
+        }
+
+        // If already cached/complete, grow immediately
+        if (img.complete) onReady();
+        return true;
+    }
+
+    function promptAndInsertWorkspaceImage() {
+        if (!workspaceQuillInstance) return;
+
+        // Capture nested target before the file dialog steals focus
+        let nestedTarget = null;
+        const active = getActiveNestedEmbedAndCell();
+        if (active) {
+            let range = null;
+            try {
+                const sel = window.getSelection();
+                if (sel && sel.rangeCount && active.cell.contains(sel.anchorNode)) {
+                    range = sel.getRangeAt(0).cloneRange();
+                }
+            } catch (err) {
+                range = null;
+            }
+            nestedTarget = { embed: active.embed, cell: active.cell, range };
+        }
+
+        const input = document.createElement('input');
+        input.setAttribute('type', 'file');
+        input.setAttribute('accept', 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml');
+        input.style.display = 'none';
+        document.body.appendChild(input);
+        input.addEventListener('change', function() {
+            const file = input.files && input.files[0];
+            input.remove();
+            if (!file || !String(file.type || '').startsWith('image/')) return;
+            const reader = new FileReader();
+            reader.onload = function() {
+                const src = reader.result;
+                if (!isSafeNestedImageSrc(src)) return;
+                if (nestedTarget) {
+                    insertNestedImageAt(nestedTarget.embed, nestedTarget.cell, nestedTarget.range, src);
+                    return;
+                }
+                try {
+                    const range = workspaceQuillInstance.getSelection(true)
+                        || { index: workspaceQuillInstance.getLength(), length: 0 };
+                    if (range.length > 0) {
+                        workspaceQuillInstance.deleteText(range.index, range.length, Quill.sources.USER);
+                    }
+                    workspaceQuillInstance.insertEmbed(range.index, 'image', src, Quill.sources.USER);
+                    workspaceQuillInstance.setSelection(range.index + 1, 0, Quill.sources.USER);
+                    updateWorkspaceSimulationPreview();
+                    if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+                } catch (err) {
+                    console.error('Failed inserting workspace image:', err);
+                }
+            };
+            reader.readAsDataURL(file);
+        });
+        input.click();
+    }
+
+    function insertWorkspaceLatexFormula() {
+        if (!workspaceQuillInstance || typeof Quill === 'undefined') {
+            hideWorkspaceLatexInputModal();
+            return;
+        }
+
+        const latex = normalizeWorkspaceLatexInput(latexInputField ? latexInputField.value : '');
+        const nestedTarget = nestedLatexInsertTarget;
+        nestedLatexInsertTarget = null;
+        hideWorkspaceLatexInputModal();
+        if (!latex) return;
+
+        if (typeof katex === 'undefined') {
+            console.error('KaTeX is required to insert LaTeX formulas.');
+            return;
+        }
+
+        // Nested cells use a DOM KaTeX span — Quill formula embeds freeze the editor there
+        if (nestedTarget) {
+            nestedLatexInsertTarget = nestedTarget;
+            insertNestedLatexFormula(latex);
+            return;
+        }
+
+        const range = workspaceQuillInstance.getSelection(true) || { index: workspaceQuillInstance.getLength(), length: 0 };
+        if (range.length > 0) {
+            workspaceQuillInstance.deleteText(range.index, range.length, Quill.sources.USER);
+        }
+        workspaceQuillInstance.insertEmbed(range.index, 'formula', latex, Quill.sources.USER);
+        workspaceQuillInstance.insertText(range.index + 1, ' ', Quill.sources.USER);
+        workspaceQuillInstance.setSelection(range.index + 2, Quill.sources.USER);
+        updateWorkspaceSimulationPreview();
+    }
+
+    if (latexInsertBtn) {
+        latexInsertBtn.addEventListener('click', insertWorkspaceLatexFormula);
+    }
+    if (latexCancelBtn) {
+        latexCancelBtn.addEventListener('click', hideWorkspaceLatexInputModal);
+    }
+    if (latexInputModal) {
+        latexInputModal.addEventListener('click', function(e) {
+            if (e.target === latexInputModal) {
+                hideWorkspaceLatexInputModal();
+            }
+        });
+    }
+    if (latexInputField) {
+        latexInputField.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                hideWorkspaceLatexInputModal();
+            } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                insertWorkspaceLatexFormula();
+            }
+        });
+    }
+
+    // 🎯 4c. WORKSPACE TABLE INSERT / EDIT / RESIZE
+    const TABLE_SIZE_MAX = 5;
+    const NESTED_TABLE_SOFT_MAX = 20;
+    const NESTED_MIN_COL = 14;
+    const NESTED_MIN_ROW = 16;
+    const tableSizePicker = document.getElementById('workspace-table-size-picker');
+    const tableSizeGrid = document.getElementById('workspace-table-size-grid');
+    const tableSizeLabel = document.getElementById('workspace-table-size-label');
+    let tableSizeHover = { rows: 1, cols: 1 };
+    let tableResizeState = null;
+    let tableContextMenuBound = false;
+    let tableResizeBound = false;
+    let tableObjectSelectionBound = false;
+    let selectedWorkspaceTable = null;
+
+    function isNestedTableElement(table) {
+        return !!(table && (
+            table.classList.contains('ql-nested-table-inner') ||
+            table.closest('.ql-workspace-nested-table')
+        ));
+    }
+
+    function queryWorkspaceQuillTables(root) {
+        if (!root) return [];
+        return Array.from(root.querySelectorAll('table')).filter(t => !isNestedTableElement(t));
+    }
+
+    function registerWorkspaceNestedTableBlot() {
+        if (typeof Quill === 'undefined' || window.__workspaceNestedTableRegistered) return;
+        const Embed = Quill.import('blots/embed');
+
+        class WorkspaceNestedTable extends Embed {
+            static blotName = 'workspaceNestedTable';
+            static className = 'ql-workspace-nested-table';
+            static tagName = 'SPAN';
+
+            static create(value) {
+                const node = super.create(value);
+                node.setAttribute('contenteditable', 'false');
+                const config = parseNestedTableConfig(value);
+                node.setAttribute('data-value', JSON.stringify(config));
+                renderNestedTableIntoNode(node, config);
+                return node;
+            }
+
+            static value(domNode) {
+                return domNode.getAttribute('data-value') || '';
+            }
+
+            static syncFromDom(node) {
+                syncWorkspaceNestedTableNode(node);
+            }
+        }
+
+        Quill.register(WorkspaceNestedTable, true);
+        window.__workspaceNestedTableRegistered = true;
+    }
+
+    function parseNestedTableConfig(value) {
+        let config = { rows: 2, cols: 2, cells: [], colWidths: [], rowHeights: [] };
+        try {
+            if (typeof value === 'string' && value.trim()) {
+                config = { ...config, ...JSON.parse(value) };
+            } else if (value && typeof value === 'object') {
+                config = { ...config, ...value };
+            }
+        } catch (err) {
+            // keep defaults
+        }
+        const rows = Math.max(1, Math.min(NESTED_TABLE_SOFT_MAX, parseInt(config.rows, 10) || 2));
+        const cols = Math.max(1, Math.min(NESTED_TABLE_SOFT_MAX, parseInt(config.cols, 10) || 2));
+        const cells = Array.from({ length: rows }, (_, r) => (
+            Array.from({ length: cols }, (_, c) => {
+                const row = Array.isArray(config.cells) ? config.cells[r] : null;
+                return (row && row[c] != null) ? String(row[c]) : '';
+            })
+        ));
+        let colWidths = Array.isArray(config.colWidths)
+            ? config.colWidths.map(w => Math.max(NESTED_MIN_COL, Math.round(parseFloat(w) || NESTED_MIN_COL)))
+            : [];
+        while (colWidths.length < cols) colWidths.push(Math.max(NESTED_MIN_COL, 48));
+        colWidths = colWidths.slice(0, cols);
+
+        let rowHeights = Array.isArray(config.rowHeights)
+            ? config.rowHeights.map(h => Math.max(NESTED_MIN_ROW, Math.round(parseFloat(h) || NESTED_MIN_ROW)))
+            : [];
+        while (rowHeights.length < rows) rowHeights.push(Math.max(NESTED_MIN_ROW, 28));
+        rowHeights = rowHeights.slice(0, rows);
+
+        const expandOwn = Object.prototype.hasOwnProperty.call(config, 'expandEntities');
+        return {
+            rows,
+            cols,
+            cells,
+            colWidths,
+            rowHeights,
+            noBorder: !!config.noBorder,
+            expandEntities: resolveExpandEntitiesFlag(config.expandEntities, { hasOwnKey: expandOwn })
+        };
+    }
+
+    function nestedCellTextFromTd(td) {
+        if (!td) return '';
+        const clone = td.cloneNode(true);
+        clone.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+        return clone.textContent || '';
+    }
+
+    function htmlFragmentToPlainText(html) {
+        const div = document.createElement('div');
+        div.innerHTML = html == null ? '' : String(html);
+        return div.textContent || '';
+    }
+
+    function escapeNestedPlainText(text) {
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
+
+    function getNestedLineIndexAtPoint(td, container, offset) {
+        if (!td || !container) return 0;
+        try {
+            const r = document.createRange();
+            r.selectNodeContents(td);
+            r.setEnd(container, offset);
+            const div = document.createElement('div');
+            div.appendChild(r.cloneContents());
+            return div.querySelectorAll('br').length;
+        } catch (err) {
+            return 0;
+        }
+    }
+
+    function getNestedSelectedLineIndices(td) {
+        if (!td) return [0];
+        const parts = (td.innerHTML || '').split(/<br\s*\/?>/i);
+        const last = Math.max(0, parts.length - 1);
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return [0];
+        const anchor = sel.anchorNode;
+        if (!anchor || !td.contains(anchor)) return [0];
+        const range = sel.getRangeAt(0);
+        let startL = getNestedLineIndexAtPoint(td, range.startContainer, range.startOffset);
+        let endL = range.collapsed
+            ? startL
+            : getNestedLineIndexAtPoint(td, range.endContainer, range.endOffset);
+        startL = Math.max(0, Math.min(last, startL));
+        endL = Math.max(0, Math.min(last, endL));
+        if (endL < startL) {
+            const tmp = startL;
+            startL = endL;
+            endL = tmp;
+        }
+        const indices = [];
+        for (let i = startL; i <= endL; i++) indices.push(i);
+        return indices.length ? indices : [0];
+    }
+
+    function insertNestedLineBreak(td) {
+        if (!td) return false;
+        const sel = window.getSelection();
+        if (!sel) return false;
+        try {
+            td.focus();
+            let range;
+            if (sel.rangeCount && td.contains(sel.anchorNode)) {
+                range = sel.getRangeAt(0);
+            } else {
+                range = document.createRange();
+                range.selectNodeContents(td);
+                range.collapse(false);
+            }
+            range.deleteContents();
+            const br = document.createElement('br');
+            const zwsp = document.createTextNode('\u200B');
+            range.insertNode(br);
+            if (br.nextSibling) {
+                br.parentNode.insertBefore(zwsp, br.nextSibling);
+            } else {
+                br.parentNode.appendChild(zwsp);
+            }
+            const after = document.createRange();
+            after.setStart(zwsp, 1);
+            after.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(after);
+            return true;
+        } catch (err) {
+            try {
+                document.execCommand('insertHTML', false, '<br>\u200B');
+                return true;
+            } catch (err2) {
+                return false;
+            }
+        }
+    }
+
+    function getLeadingListPrefix(plain) {
+        const text = String(plain == null ? '' : plain).replace(/^\u200B+/, '');
+        const bullet = text.match(/^•\s/);
+        if (bullet) return bullet[0];
+        const ordered = text.match(/^\d+\.\s/);
+        if (ordered) return ordered[0];
+        return '';
+    }
+
+    function parseLeadingOrderedNumber(plain) {
+        const text = String(plain == null ? '' : plain).replace(/^\u200B+/, '');
+        const m = text.match(/^(\d+)\.\s/);
+        return m ? parseInt(m[1], 10) : null;
+    }
+
+    /** Continue numbering from the line above the first targeted line when it is already ordered. */
+    function resolveOrderedStartNumber(plains, targetIndices) {
+        const sorted = [...targetIndices].filter(i => i >= 0).sort((a, b) => a - b);
+        if (!sorted.length) return 1;
+        const first = sorted[0];
+        if (first <= 0) return 1;
+        const prevNum = parseLeadingOrderedNumber(plains[first - 1]);
+        return prevNum != null ? prevNum + 1 : 1;
+    }
+
+    function stripLeadingPlainFromHtml(html, prefixLen) {
+        if (!prefixLen) return html == null ? '' : String(html);
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html == null ? '' : String(html);
+        let remaining = prefixLen;
+        const walker = document.createTreeWalker(wrap, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node && remaining > 0) {
+            const t = node.textContent || '';
+            if (!t.length) {
+                node = walker.nextNode();
+                continue;
+            }
+            if (t.length <= remaining) {
+                remaining -= t.length;
+                node.textContent = '';
+            } else {
+                node.textContent = t.slice(remaining);
+                remaining = 0;
+            }
+            node = walker.nextNode();
+        }
+        return wrap.innerHTML;
+    }
+
+    function applyListToggleToHtmlFragments(parts, value, onlyIndices = null) {
+        const targetIdx = onlyIndices && onlyIndices.length
+            ? new Set(onlyIndices)
+            : null;
+        const plains = parts.map(htmlFragmentToPlainText);
+        const targetPlains = plains
+            .map((l, i) => ({ l, i }))
+            .filter(({ l, i }) => (!targetIdx || targetIdx.has(i)) && String(l).replace(/^\u200B+/, '').trim().length)
+            .map(({ l }) => l.replace(/^\u200B+/, ''));
+        const isBullet = targetPlains.length > 0 && targetPlains.every(l => /^•\s/.test(l));
+        const isOrdered = targetPlains.length > 0 && targetPlains.every(l => /^\d+\.\s/.test(l));
+
+        const targetIndices = plains
+            .map((l, i) => i)
+            .filter(i => (!targetIdx || targetIdx.has(i)) && String(plains[i] || '').replace(/^\u200B+/, '').trim().length);
+        let n = resolveOrderedStartNumber(plains, targetIndices);
+
+        return parts.map((html, i) => {
+            if (targetIdx && !targetIdx.has(i)) return html;
+            const plain = (plains[i] || '').replace(/^\u200B+/, '');
+            if (!plain.trim()) return html;
+            const existing = getLeadingListPrefix(plain);
+            let next = html;
+            if (existing) next = stripLeadingPlainFromHtml(next, existing.length);
+
+            if (value === 'bullet') {
+                if (isBullet) return next; // already stripped
+                return `• ${next}`;
+            }
+            if (value === 'ordered') {
+                if (isOrdered) return next;
+                return `${n++}. ${next}`;
+            }
+            return next; // clear any list prefix
+        });
+    }
+
+    function applyListToggleToPlainLines(lines, value, onlyIndices = null) {
+        const targetIdx = onlyIndices && onlyIndices.length
+            ? new Set(onlyIndices)
+            : null;
+        const targetLines = lines
+            .map((l, i) => ({ l, i }))
+            .filter(({ l, i }) => (!targetIdx || targetIdx.has(i)) && String(l).trim().length);
+        const nonEmpty = targetLines.map(({ l }) => l);
+        const isBullet = nonEmpty.length > 0 && nonEmpty.every(l => /^•\s/.test(l));
+        const isOrdered = nonEmpty.length > 0 && nonEmpty.every(l => /^\d+\.\s/.test(l));
+
+        const targetIndices = targetLines.map(({ i }) => i);
+        let n = resolveOrderedStartNumber(lines, targetIndices);
+        return lines.map((line, i) => {
+            if (targetIdx && !targetIdx.has(i)) return line;
+            if (!String(line).trim()) return line;
+            if (value === 'bullet') {
+                return isBullet
+                    ? line.replace(/^•\s/, '')
+                    : `• ${line.replace(/^•\s/, '').replace(/^\d+\.\s/, '')}`;
+            }
+            if (value === 'ordered') {
+                if (isOrdered) return line.replace(/^\d+\.\s/, '');
+                const cleaned = line.replace(/^•\s/, '').replace(/^\d+\.\s/, '');
+                return `${n++}. ${cleaned}`;
+            }
+            return line.replace(/^•\s/, '').replace(/^\d+\.\s/, '');
+        });
+    }
+
+    function sanitizeNestedCellHtml(html) {
+        const wrap = document.createElement('div');
+        wrap.innerHTML = html == null ? '' : String(html);
+        const allowed = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'BR', 'SPAN', 'FONT', 'IMG']);
+        const walk = (parent) => {
+            Array.from(parent.childNodes).forEach(node => {
+                if (node.nodeType === Node.TEXT_NODE) return;
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                    node.remove();
+                    return;
+                }
+                const tag = node.tagName;
+                if (tag === 'IMG') {
+                    const src = node.getAttribute('src') || '';
+                    if (!isSafeNestedImageSrc(src)) {
+                        node.remove();
+                        return;
+                    }
+                    node.className = 'workspace-nested-image';
+                    node.setAttribute('src', src);
+                    node.setAttribute('alt', node.getAttribute('alt') || '');
+                    node.setAttribute('contenteditable', 'false');
+                    [...node.attributes].forEach(attr => {
+                        if (!['src', 'alt', 'class', 'style', 'contenteditable', 'width', 'height'].includes(attr.name)) {
+                            node.removeAttribute(attr.name);
+                        }
+                    });
+                    // Keep only sizing styles that constrain within the cell
+                    const style = node.getAttribute('style') || '';
+                    const cleaned = style
+                        .split(';')
+                        .map(s => s.trim())
+                        .filter(s => /^(max-width|width|height|max-height|object-fit|display|vertical-align)\s*:/i.test(s))
+                        .join('; ');
+                    if (cleaned) node.setAttribute('style', cleaned);
+                    else node.removeAttribute('style');
+                    return;
+                }
+                if (!allowed.has(tag) || tag === 'TABLE' || tag === 'VIDEO' || tag === 'IFRAME') {
+                    // unwrap text children, drop the element
+                    while (node.firstChild) parent.insertBefore(node.firstChild, node);
+                    node.remove();
+                    return;
+                }
+                // Drop Quill embed chrome / nested tables (keep nested latex spans)
+                if (node.classList && (
+                    node.classList.contains('ql-formula')
+                    || node.classList.contains('ql-workspace-nested-table')
+                    || node.classList.contains('ql-cursor')
+                )) {
+                    node.remove();
+                    return;
+                }
+                if (node.classList && node.classList.contains('workspace-nested-latex')) {
+                    // Keep latex marker + data-value; drop heavy KaTeX child chrome for storage
+                    const latex = node.getAttribute('data-value') || node.textContent || '';
+                    node.setAttribute('data-value', latex);
+                    node.setAttribute('contenteditable', 'false');
+                    node.className = 'workspace-nested-latex';
+                    [...node.attributes].forEach(attr => {
+                        if (!['style', 'class', 'data-value', 'contenteditable'].includes(attr.name)) {
+                            node.removeAttribute(attr.name);
+                        }
+                    });
+                    node.innerHTML = '';
+                    node.textContent = latex;
+                    return;
+                }
+                // Keep only style/class attrs we care about
+                [...node.attributes].forEach(attr => {
+                    if (!['style', 'class'].includes(attr.name)) node.removeAttribute(attr.name);
+                });
+                // Keep Quill size classes; strip other noisy classes
+                if (node.classList && node.classList.length) {
+                    const keep = ['ql-size-small', 'ql-size-large', 'ql-size-huge', 'workspace-nested-latex'];
+                    Array.from(node.classList).forEach(cls => {
+                        if (!keep.includes(cls)) node.classList.remove(cls);
+                    });
+                }
+                walk(node);
+            });
+        };
+        walk(wrap);
+        wrap.querySelectorAll('table, video, iframe, script, style').forEach(n => n.remove());
+        wrap.querySelectorAll('img:not(.workspace-nested-image)').forEach(n => {
+            if (!isSafeNestedImageSrc(n.getAttribute('src') || '')) {
+                n.remove();
+                return;
+            }
+            n.className = 'workspace-nested-image';
+            n.setAttribute('contenteditable', 'false');
+        });
+        return wrap.innerHTML;
+    }
+
+    function fillNestedTdFromText(td, text) {
+        if (!td) return;
+        // Legacy plain-text path (newlines → br)
+        td.innerHTML = '';
+        const parts = String(text == null ? '' : text).split('\n');
+        parts.forEach((part, i) => {
+            if (i > 0) td.appendChild(document.createElement('br'));
+            td.appendChild(document.createTextNode(part));
+        });
+    }
+
+    function hydrateNestedLatexSpans(root) {
+        if (!root) return;
+        root.querySelectorAll('.workspace-nested-latex').forEach(span => {
+            const latex = normalizeWorkspaceLatexInput(span.getAttribute('data-value') || span.textContent || '');
+            span.setAttribute('data-value', latex);
+            span.setAttribute('contenteditable', 'false');
+            span.className = 'workspace-nested-latex';
+            if (typeof katex !== 'undefined' && latex) {
+                try {
+                    katex.render(latex, span, { displayMode: false, throwOnError: false });
+                } catch (err) {
+                    span.textContent = latex;
+                }
+            } else {
+                span.textContent = latex;
+            }
+        });
+    }
+
+    function ensureNestedCellHtmlLineBreaks(html) {
+        let raw = html == null ? '' : String(html);
+        if (!raw) return '';
+        // Legacy plain cells may store \n instead of <br>
+        if (raw.includes('\n') && !/<br\s*\/?>/i.test(raw)) {
+            raw = raw
+                .split('\n')
+                .map((part, i) => (i ? '<br>' : '') + part)
+                .join('');
+        }
+        return raw;
+    }
+
+    function fillNestedTdFromHtml(td, htmlOrText) {
+        if (!td) return;
+        let raw = ensureNestedCellHtmlLineBreaks(htmlOrText == null ? '' : String(htmlOrText));
+        if (!raw) {
+            td.innerHTML = '';
+            return;
+        }
+        // Entity tokens must never be parsed as HTML tags. Allow formatting + nested image tags only.
+        // (sanitizeNestedCellHtml still validates img src / strips unsafe attributes.)
+        const allowedOpen = /^(b|strong|i|em|u|s|strike|br|span|font|img)$/i;
+        raw = raw.replace(/<\/?([a-zA-Z][a-zA-Z0-9_]*)(\s[^>]*)?>/g, (match, tag) => {
+            if (allowedOpen.test(tag)) return match;
+            return match.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        });
+        // Escaped tokens (&lt;matrix1&gt;) must use HTML path once so they become text "<matrix1>"
+        if (raw.includes('<') || raw.includes('&lt;') || raw.includes('&amp;')) {
+            td.innerHTML = sanitizeNestedCellHtml(raw);
+            hydrateNestedLatexSpans(td);
+            return;
+        }
+        fillNestedTdFromText(td, raw);
+    }
+
+    function nestedCellHtmlFromTd(td) {
+        if (!td) return '';
+        return ensureNestedCellHtmlLineBreaks(sanitizeNestedCellHtml(td.innerHTML || ''));
+    }
+
+    function isFocusInsideNestedTable() {
+        const ae = document.activeElement;
+        if (ae && ae.closest && ae.closest('.ql-workspace-nested-table')) return true;
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount) {
+            let node = sel.anchorNode;
+            if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+            if (node && node.closest && node.closest('.ql-workspace-nested-table')) return true;
+        }
+        return false;
+    }
+
+
+    function getActiveNestedEmbedAndCell() {
+        if (!isFocusInsideNestedTable()) return null;
+        const sel = window.getSelection();
+        let node = sel && sel.anchorNode;
+        if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+        if (!node || !node.closest) return null;
+        const embed = node.closest('.ql-workspace-nested-table');
+        const cell = node.closest('.ql-nested-table-inner td, .ql-nested-table-inner th');
+        if (!embed || !cell) return null;
+        return { embed, cell };
+    }
+
+    function applyNestedInlineFormat(command) {
+        const active = getActiveNestedEmbedAndCell();
+        if (!active) return false;
+        document.execCommand(command);
+        syncWorkspaceNestedTableNode(active.embed, { relayout: false });
+        growNestedEmbedToContentAndFitOuter(active.embed);
+        scheduleNestedPreviewUpdate();
+        return true;
+    }
+
+    function applyNestedFontSize(value) {
+        const active = getActiveNestedEmbedAndCell();
+        if (!active) return false;
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return true;
+
+        const classMap = {
+            small: 'ql-size-small',
+            large: 'ql-size-large',
+            huge: 'ql-size-huge'
+        };
+        const sizeClass = value ? classMap[value] : '';
+
+        // Avoid execCommand('fontSize', 7) — with styleWithCSS it leaves xxx-large ("huge") forever.
+        // Use the legacy font size command to mark the selection, then normalize to Quill classes.
+        document.execCommand('styleWithCSS', false, false);
+        document.execCommand('fontSize', false, '3');
+
+        active.cell.querySelectorAll('font[size]').forEach(fontEl => {
+            if (!sel.containsNode(fontEl, true) && fontEl !== active.cell) {
+                // Still convert if selection collapsed inside this font
+                const inSel = (() => {
+                    try { return sel.containsNode(fontEl, true); } catch (err) { return false; }
+                })();
+                if (!inSel) return;
+            }
+            const span = document.createElement('span');
+            // Strip prior size classes from wrapped content
+            fontEl.querySelectorAll('span.ql-size-small, span.ql-size-large, span.ql-size-huge').forEach(s => {
+                s.classList.remove('ql-size-small', 'ql-size-large', 'ql-size-huge');
+            });
+            while (fontEl.firstChild) span.appendChild(fontEl.firstChild);
+            if (sizeClass) {
+                span.classList.add(sizeClass);
+            }
+            // Also clear inline font-size leftovers
+            span.style.fontSize = '';
+            fontEl.replaceWith(span);
+            if (!sizeClass) {
+                // Normal size — unwrap empty class span
+                const parent = span.parentNode;
+                if (parent) {
+                    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+                    span.remove();
+                }
+            }
+        });
+
+        // Clean any leftover size classes / inline sizes still selected
+        if (!sizeClass && sel.rangeCount) {
+            active.cell.querySelectorAll('span.ql-size-small, span.ql-size-large, span.ql-size-huge, span[style*="font-size"]').forEach(el => {
+                try {
+                    if (!sel.containsNode(el, true)) return;
+                } catch (err) {
+                    return;
+                }
+                el.classList.remove('ql-size-small', 'ql-size-large', 'ql-size-huge');
+                el.style.fontSize = '';
+                if (!el.classList.length && !el.getAttribute('style')) {
+                    const parent = el.parentNode;
+                    if (!parent) return;
+                    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+                    el.remove();
+                }
+            });
+        }
+
+        syncWorkspaceNestedTableNode(active.embed, { relayout: false });
+        growNestedEmbedToContentAndFitOuter(active.embed);
+        scheduleNestedPreviewUpdate();
+        return true;
+    }
+
+    function applyNestedFontFamily(value) {
+        const active = getActiveNestedEmbedAndCell();
+        if (!active) return false;
+        document.execCommand('styleWithCSS', false, true);
+        document.execCommand('fontName', false, value || 'sans-serif');
+        syncWorkspaceNestedTableNode(active.embed, { relayout: false });
+        scheduleNestedPreviewUpdate();
+        return true;
+    }
+
+    function applyNestedListFormat(value) {
+        const active = getActiveNestedEmbedAndCell();
+        if (!active) return false;
+        const parts = (active.cell.innerHTML || '').split(/<br\s*\/?>/i);
+        const indices = getNestedSelectedLineIndices(active.cell);
+        const nextParts = applyListToggleToHtmlFragments(parts, value, indices);
+        active.cell.innerHTML = nextParts.join('<br>');
+        try {
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(active.cell);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        } catch (err) {
+            // ignore
+        }
+        syncWorkspaceNestedTableNode(active.embed, { relayout: false });
+        growNestedEmbedToContentAndFitOuter(active.embed);
+        scheduleNestedPreviewUpdate();
+        return true;
+    }
+
+    function tidyHostCellAroundNestedEmbed(embed) {
+        const host = getHostOuterCellForNested(embed);
+        if (!host || !embed) return;
+        // Nested tables exclusively own their host cell — remove siblings that cause the downward shift
+        Array.from(host.childNodes).forEach(node => {
+            if (node !== embed) node.remove();
+        });
+        if (!host.contains(embed)) host.appendChild(embed);
+        host.classList.add('ql-has-nested-table');
+        // Clear inline offsets so CSS absolute-fill can pin the embed flush
+        embed.style.margin = '0';
+        embed.style.top = '';
+        embed.style.left = '';
+        embed.style.position = '';
+
+        // Also prune parchment siblings when possible so Quill delta matches the DOM
+        try {
+            if (typeof Quill !== 'undefined') {
+                const blot = Quill.find(embed, true) || Quill.find(embed);
+                if (blot && blot.parent && blot.parent.children) {
+                    let child = blot.parent.children.head;
+                    while (child) {
+                        const next = child.next;
+                        if (child !== blot) {
+                            try { child.remove(); } catch (err) { /* ignore */ }
+                        }
+                        child = next;
+                    }
+                }
+            }
+        } catch (err) {
+            // DOM-only cleanup is still enough for visual alignment
+        }
+    }
+
+    function scheduleNestedHostRealign(embed) {
+        if (!embed) return;
+        const run = () => {
+            if (!embed.isConnected) return;
+            window.__workspaceTableLayoutQuiet = true;
+            try {
+                tidyHostCellAroundNestedEmbed(embed);
+                growNestedEmbedToContentAndFitOuter(embed);
+                tidyHostCellAroundNestedEmbed(embed);
+            } finally {
+                requestAnimationFrame(() => { window.__workspaceTableLayoutQuiet = false; });
+            }
+        };
+        run();
+        requestAnimationFrame(() => {
+            run();
+            setTimeout(run, 50);
+            setTimeout(run, 150);
+        });
+    }
+
+    function lockOuterCellsThatContainNestedTables() {
+        if (!workspaceQuillInstance) return;
+        workspaceQuillInstance.root.querySelectorAll('td, th').forEach(cell => {
+            if (cell.closest('.ql-workspace-nested-table')) return;
+            const embed = cell.querySelector('.ql-workspace-nested-table');
+            if (embed && getHostOuterCellForNested(embed) === cell) {
+                tidyHostCellAroundNestedEmbed(embed);
+            } else {
+                cell.classList.remove('ql-has-nested-table');
+            }
+        });
+    }
+
+    function isOuterCellExclusiveNestedHost(cell) {
+        return !!(cell && cell.classList.contains('ql-has-nested-table')
+            && cell.querySelector('.ql-workspace-nested-table')
+            && !cell.closest('.ql-workspace-nested-table'));
+    }
+
+    function setupNestedExclusiveCellGuards() {
+        if (!htmlCanvasEditor || htmlCanvasEditor.dataset.nestedExclusiveGuard === '1') return;
+        htmlCanvasEditor.dataset.nestedExclusiveGuard = '1';
+        htmlCanvasEditor.addEventListener('beforeinput', function(e) {
+            if (isFocusInsideNestedTable()) return;
+            const cell = getOuterQuillTableCellAtSelection();
+            if (isOuterCellExclusiveNestedHost(cell)) {
+                e.preventDefault();
+            }
+        }, true);
+        htmlCanvasEditor.addEventListener('keydown', function(e) {
+            if (isFocusInsideNestedTable()) return;
+            const cell = getOuterQuillTableCellAtSelection();
+            if (!isOuterCellExclusiveNestedHost(cell)) return;
+            // Allow navigation / modifiers; block typing and Enter/paste content changes
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Escape', 'Tab', 'Shift'].includes(e.key)) return;
+            e.preventDefault();
+            e.stopPropagation();
+        }, true);
+        htmlCanvasEditor.addEventListener('paste', function(e) {
+            if (isFocusInsideNestedTable()) return;
+            const cell = getOuterQuillTableCellAtSelection();
+            if (isOuterCellExclusiveNestedHost(cell)) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+    }
+
+    let nestedPreviewTimer = null;
+    function scheduleNestedPreviewUpdate() {
+        if (nestedPreviewTimer) clearTimeout(nestedPreviewTimer);
+        nestedPreviewTimer = setTimeout(() => {
+            nestedPreviewTimer = null;
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+            }
+            updateWorkspaceSimulationPreview();
+        }, 180);
+    }
+
+    function bindNestedTableCellEvents(node, td) {
+        if (!td || td.dataset.nestedBound === '1') return;
+        td.dataset.nestedBound = '1';
+        td.contentEditable = 'true';
+        td.addEventListener('mousedown', (e) => e.stopPropagation());
+        td.addEventListener('click', (e) => e.stopPropagation());
+        td.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); });
+        td.addEventListener('drop', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const file = e.dataTransfer && e.dataTransfer.files && Array.from(e.dataTransfer.files).find(f =>
+                String(f.type || '').startsWith('image/')
+            );
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = () => {
+                insertNestedImageAt(node, td, null, reader.result);
+            };
+            reader.readAsDataURL(file);
+        });
+        td.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            // Formatting shortcuts inside nested cells
+            if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+                const key = (e.key || '').toLowerCase();
+                const map = { b: 'bold', i: 'italic', u: 'underline' };
+                if (map[key]) {
+                    e.preventDefault();
+                    document.execCommand(map[key]);
+                    syncWorkspaceNestedTableNode(node, { relayout: false });
+                    scheduleNestedPreviewUpdate();
+                    return;
+                }
+            }
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                insertNestedLineBreak(td);
+                syncWorkspaceNestedTableNode(node, { relayout: false });
+                growNestedEmbedToContentAndFitOuter(node);
+                scheduleNestedPreviewUpdate();
+            }
+        });
+        td.addEventListener('paste', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Prefer clipboard image files (screenshots, etc.)
+            const items = e.clipboardData && e.clipboardData.items
+                ? Array.from(e.clipboardData.items)
+                : [];
+            const imageItem = items.find(item => item && item.type && item.type.startsWith('image/'));
+            if (imageItem) {
+                const file = imageItem.getAsFile();
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = () => insertNestedImageAt(node, td, null, reader.result);
+                    reader.readAsDataURL(file);
+                    return;
+                }
+            }
+
+            const html = (e.clipboardData || window.clipboardData)?.getData('text/html');
+            const text = (e.clipboardData || window.clipboardData)?.getData('text/plain') || '';
+            if (html && /<(table|video|iframe)\b/i.test(html) && !/<img\b/i.test(html)) {
+                const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                document.execCommand('insertText', false, normalized);
+            } else if (html) {
+                const clean = sanitizeNestedCellHtml(html);
+                document.execCommand('insertHTML', false, clean || text);
+            } else {
+                const normalized = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                // Prefer HTML with BRs for newlines
+                const withBreaks = normalized.split('\n').map((p, i) =>
+                    (i ? '<br>' : '') + p.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                ).join('');
+                document.execCommand('insertHTML', false, withBreaks);
+            }
+            setTimeout(() => {
+                // Strip nested-table and media nodes that freeze Quill; keep nested latex + images
+                td.querySelectorAll('table, video, iframe, .ql-formula, .ql-workspace-nested-table').forEach(n => n.remove());
+                td.querySelectorAll('img:not(.workspace-nested-image)').forEach(n => {
+                    if (isSafeNestedImageSrc(n.getAttribute('src') || '')) {
+                        n.className = 'workspace-nested-image';
+                        n.setAttribute('contenteditable', 'false');
+                    } else {
+                        n.remove();
+                    }
+                });
+                syncWorkspaceNestedTableNode(node, { relayout: false });
+                growNestedEmbedToContentAndFitOuter(node);
+                scheduleNestedPreviewUpdate();
+            }, 0);
+        });
+        td.addEventListener('input', () => {
+            td.querySelectorAll('table, video, iframe, .ql-formula, .ql-workspace-nested-table').forEach(n => n.remove());
+            td.querySelectorAll('img:not(.workspace-nested-image)').forEach(n => {
+                if (isSafeNestedImageSrc(n.getAttribute('src') || '')) {
+                    n.className = 'workspace-nested-image';
+                    n.setAttribute('contenteditable', 'false');
+                } else {
+                    n.remove();
+                }
+            });
+            syncWorkspaceNestedTableNode(node, { relayout: false });
+            if (node.__growFitTimer) clearTimeout(node.__growFitTimer);
+            node.__growFitTimer = setTimeout(() => {
+                growNestedEmbedToContentAndFitOuter(node);
+                scheduleNestedPreviewUpdate();
+            }, 60);
+        });
+        // Grow outer host when nested images finish loading (after hydrate/reload)
+        td.querySelectorAll('img.workspace-nested-image').forEach(img => {
+            if (img.dataset.growBound === '1') return;
+            img.dataset.growBound = '1';
+            const kick = () => {
+                growNestedEmbedToContentAndFitOuter(node);
+                scheduleNestedPreviewUpdate();
+            };
+            if (img.complete) {
+                // defer so layout has settled after hydrate
+                requestAnimationFrame(kick);
+            } else {
+                img.addEventListener('load', kick, { once: true });
+            }
+        });
+    }
+
+    function markWorkspaceUnsavedAndPreview() {
+        if (saveStatusSpan) {
+            saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+        }
+        updateWorkspaceSimulationPreview();
+    }
+
+    function applyNestedInnerLayout(table, colWidths, rowHeights) {
+        if (!table) return;
+        const widths = (colWidths || []).map(w => Math.max(NESTED_MIN_COL, Math.round(w)));
+        const heights = (rowHeights || []).map(h => Math.max(NESTED_MIN_ROW, Math.round(h)));
+        const totalW = widths.reduce((a, b) => a + b, 0);
+        const totalH = heights.reduce((a, b) => a + b, 0);
+        table.style.tableLayout = 'fixed';
+        table.style.width = `${totalW}px`;
+        table.style.minWidth = `${totalW}px`;
+        table.style.height = `${totalH}px`;
+        table.style.minHeight = `${totalH}px`;
+
+        let colgroup = table.querySelector(':scope > colgroup');
+        if (!colgroup) {
+            colgroup = document.createElement('colgroup');
+            table.insertBefore(colgroup, table.firstChild);
+        }
+        while (colgroup.children.length < widths.length) {
+            colgroup.appendChild(document.createElement('col'));
+        }
+        while (colgroup.children.length > widths.length) {
+            colgroup.lastElementChild.remove();
+        }
+        widths.forEach((w, i) => {
+            if (colgroup.children[i]) {
+                colgroup.children[i].style.width = `${w}px`;
+                colgroup.children[i].style.minWidth = `${w}px`;
+            }
+        });
+
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        rows.forEach((tr, r) => {
+            const h = heights[r] || NESTED_MIN_ROW;
+            tr.style.height = `${h}px`;
+            tr.style.minHeight = `${h}px`;
+            Array.from(tr.children).filter(el => el.matches('td, th')).forEach((td, c) => {
+                const w = widths[c] || NESTED_MIN_COL;
+                td.style.width = `${w}px`;
+                td.style.minWidth = `${w}px`;
+                td.style.height = `${h}px`;
+                td.style.minHeight = `${h}px`;
+            });
+        });
+
+        const embed = table.closest('.ql-workspace-nested-table');
+        if (embed) {
+            embed.style.display = 'block';
+            embed.style.verticalAlign = 'top';
+            embed.style.margin = '0';
+            embed.style.width = `${totalW}px`;
+            embed.style.minWidth = `${totalW}px`;
+            embed.style.height = `${totalH}px`;
+            embed.style.minHeight = `${totalH}px`;
+            embed.setAttribute('data-col-widths', widths.join(','));
+            embed.setAttribute('data-row-heights', heights.join(','));
+        }
+    }
+
+    function renderNestedTableIntoNode(node, config) {
+        node.innerHTML = '';
+        const table = document.createElement('table');
+        table.className = 'ql-nested-table-inner';
+        if (config.noBorder) table.classList.add('no-border');
+        if (config.expandEntities) {
+            table.classList.add('ql-table-expand-entities');
+            table.setAttribute('data-expand-entities', 'true');
+        } else {
+            table.classList.remove('ql-table-expand-entities');
+            table.setAttribute('data-expand-entities', 'false');
+        }
+        for (let r = 0; r < config.rows; r++) {
+            const tr = document.createElement('tr');
+            for (let c = 0; c < config.cols; c++) {
+                const td = document.createElement('td');
+                fillNestedTdFromHtml(td, config.cells[r][c] || '');
+                bindNestedTableCellEvents(node, td);
+                tr.appendChild(td);
+            }
+            table.appendChild(tr);
+        }
+        node.appendChild(table);
+        applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
+    }
+
+    function readNestedLayoutFromDom(table) {
+        if (!table) return { colWidths: [], rowHeights: [] };
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        const first = rows[0];
+        const cells = first ? Array.from(first.children).filter(el => el.matches('td, th')) : [];
+        const colgroup = table.querySelector(':scope > colgroup');
+        const colWidths = cells.map((cell, i) => {
+            const fromCol = colgroup && colgroup.children[i]
+                ? parseFloat(colgroup.children[i].style.width)
+                : NaN;
+            const fromStyle = parseFloat(cell.style.width);
+            const w = (!Number.isNaN(fromCol) && fromCol > 0 ? fromCol : null)
+                || (!Number.isNaN(fromStyle) && fromStyle > 0 ? fromStyle : null)
+                || cell.getBoundingClientRect().width
+                || NESTED_MIN_COL;
+            return Math.max(NESTED_MIN_COL, Math.round(w));
+        });
+        const rowHeights = rows.map(tr => {
+            const fromStyle = parseFloat(tr.style.height);
+            const h = (!Number.isNaN(fromStyle) && fromStyle > 0)
+                ? fromStyle
+                : (tr.getBoundingClientRect().height || NESTED_MIN_ROW);
+            return Math.max(NESTED_MIN_ROW, Math.round(h));
+        });
+        return { colWidths, rowHeights };
+    }
+
+    function syncWorkspaceNestedTableNode(node, options = {}) {
+        if (!node) return;
+        let table = node.querySelector('table.ql-nested-table-inner');
+        if (!table) {
+            const config = parseNestedTableConfig(node.getAttribute('data-value') || '');
+            renderNestedTableIntoNode(node, config);
+            node.setAttribute('data-value', JSON.stringify(config));
+            return;
+        }
+        const cells = [];
+        table.querySelectorAll(':scope > tr, :scope > tbody > tr').forEach(tr => {
+            const row = [];
+            tr.querySelectorAll(':scope > td, :scope > th').forEach(td => row.push(nestedCellHtmlFromTd(td)));
+            cells.push(row);
+        });
+        const layout = readNestedLayoutFromDom(table);
+        const config = {
+            rows: cells.length,
+            cols: cells[0] ? cells[0].length : 0,
+            cells,
+            colWidths: layout.colWidths,
+            rowHeights: layout.rowHeights,
+            noBorder: table.classList.contains('no-border'),
+            expandEntities: (() => {
+                if (table.getAttribute('data-expand-entities') === 'false') return false;
+                if (
+                    table.classList.contains('ql-table-expand-entities')
+                    || table.getAttribute('data-expand-entities') === 'true'
+                ) return true;
+                return parseNestedTableConfig(node.getAttribute('data-value') || '').expandEntities;
+            })()
+        };
+        node.setAttribute('data-value', JSON.stringify(config));
+        if (options.relayout) {
+            applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
+        }
+    }
+
+    function hydrateWorkspaceNestedTableEmbed(node) {
+        if (!node) return;
+        const config = parseNestedTableConfig(node.getAttribute('data-value') || '');
+        const existing = node.querySelector('table.ql-nested-table-inner');
+        if (existing) {
+            if (config.noBorder) existing.classList.add('no-border');
+            if (config.expandEntities) {
+                existing.classList.add('ql-table-expand-entities');
+                existing.setAttribute('data-expand-entities', 'true');
+            } else {
+                existing.classList.remove('ql-table-expand-entities');
+                existing.setAttribute('data-expand-entities', 'false');
+            }
+            syncWorkspaceNestedTableNode(node, { relayout: true });
+        } else {
+            renderNestedTableIntoNode(node, config);
+            node.setAttribute('data-value', JSON.stringify(config));
+        }
+        const table = node.querySelector('table.ql-nested-table-inner');
+        if (!table) return;
+        const latest = parseNestedTableConfig(node.getAttribute('data-value') || '');
+        table.classList.toggle('no-border', !!latest.noBorder);
+        table.classList.toggle('ql-table-expand-entities', !!latest.expandEntities);
+        table.setAttribute('data-expand-entities', latest.expandEntities ? 'true' : 'false');
+        table.querySelectorAll('td').forEach(td => bindNestedTableCellEvents(node, td));
+        scheduleNestedHostRealign(node);
+    }
+
+    function getHostOuterCellForNested(embed) {
+        return embed ? embed.closest('td, th') : null;
+    }
+
+    function getOuterTableCellCoords(cell) {
+        if (!cell) return null;
+        const table = cell.closest('table');
+        if (!table || isNestedTableElement(table)) return null;
+        const row = cell.parentElement;
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        const rowIndex = rows.indexOf(row);
+        const cells = Array.from(row.children).filter(el => el.matches('td, th'));
+        const colIndex = cells.indexOf(cell);
+        if (rowIndex < 0 || colIndex < 0) return null;
+        return { table, row, rows, rowIndex, colIndex, cell };
+    }
+
+    function growNestedEmbedToContentAndFitOuter(embed) {
+        if (!embed) return;
+        const table = embed.querySelector('table.ql-nested-table-inner');
+        if (!table) return;
+        const config = parseNestedTableConfig(embed.getAttribute('data-value') || '');
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+
+        // Temporarily release fixed heights so scrollHeight reflects content (newlines, wrap)
+        rows.forEach(tr => {
+            tr.style.height = 'auto';
+            tr.style.minHeight = '';
+            Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
+                td.style.height = 'auto';
+                td.style.minHeight = '';
+            });
+        });
+
+        config.rowHeights = rows.map(tr => {
+            let contentH = NESTED_MIN_ROW;
+            Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
+                contentH = Math.max(contentH, Math.ceil(td.scrollHeight) || NESTED_MIN_ROW);
+            });
+            return Math.max(NESTED_MIN_ROW, contentH);
+        });
+
+        while (config.colWidths.length < config.cols) config.colWidths.push(Math.max(NESTED_MIN_COL, 48));
+        config.colWidths = config.colWidths.slice(0, config.cols);
+        config.rows = rows.length;
+        config.cols = config.colWidths.length;
+        nodeSetNestedConfig(embed, config);
+        applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
+        tidyHostCellAroundNestedEmbed(embed);
+        fitOuterCellToNestedEmbed(embed);
+        tidyHostCellAroundNestedEmbed(embed);
+    }
+
+    function fitOuterCellToNestedEmbed(embed) {
+        if (!embed || !workspaceQuillInstance) return;
+        syncWorkspaceNestedTableNode(embed, { relayout: true });
+        tidyHostCellAroundNestedEmbed(embed);
+        const host = getHostOuterCellForNested(embed);
+        const coords = getOuterTableCellCoords(host);
+        const inner = embed.querySelector('table.ql-nested-table-inner');
+        if (!coords || !inner) return;
+
+        const config = parseNestedTableConfig(embed.getAttribute('data-value') || '');
+        const sumW = config.colWidths.reduce((a, b) => a + b, 0);
+        const sumH = config.rowHeights.reduce((a, b) => a + b, 0);
+        // Use config content sizes only — absolute-fill makes live embed rect mirror the host
+        const limits = getTableSizeLimits(coords.table);
+        const neededW = Math.max(limits.minCol, sumW);
+        const neededH = Math.max(limits.minRow, sumH);
+
+        window.__workspaceTableLayoutQuiet = true;
+        try {
+            const widths = readLiveColumnWidths(coords.table);
+            while (widths.length <= coords.colIndex) widths.push(limits.minCol);
+            widths[coords.colIndex] = Math.max(limits.minCol, neededW);
+            applyColumnWidths(coords.table, widths);
+
+            const heights = coords.rows.map((tr, i) => {
+                if (i === coords.rowIndex) return Math.max(limits.minRow, neededH);
+                const fromStyle = parseFloat(tr.style.height);
+                return Math.max(
+                    limits.minRow,
+                    Math.round((!Number.isNaN(fromStyle) && fromStyle > 0) ? fromStyle : (tr.getBoundingClientRect().height || 36))
+                );
+            });
+            heights.forEach((h, i) => {
+                if (coords.rows[i]) setRowHeightExclusive(coords.rows[i], h, coords.table);
+            });
+            persistWorkspaceTableLayoutAttrs(coords.table, widths, heights);
+            tidyHostCellAroundNestedEmbed(embed);
+            // Re-apply after outer column pass so nested cells keep their own widths
+            applyNestedInnerLayout(inner, config.colWidths, config.rowHeights);
+            host.style.verticalAlign = 'top';
+        } finally {
+            requestAnimationFrame(() => { window.__workspaceTableLayoutQuiet = false; });
+        }
+    }
+
+    function scaleNestedTableToFillHost(embed) {
+        if (!embed) return;
+        const host = getHostOuterCellForNested(embed);
+        const inner = embed.querySelector('table.ql-nested-table-inner');
+        if (!host || !inner) return;
+
+        const config = parseNestedTableConfig(embed.getAttribute('data-value') || '');
+        const targetW = Math.max(NESTED_MIN_COL * config.cols, Math.round(host.clientWidth) || 0);
+        const targetH = Math.max(NESTED_MIN_ROW * config.rows, Math.round(host.clientHeight) || 0);
+        if (!targetW || !targetH) return;
+
+        const wSum = config.colWidths.reduce((a, b) => a + b, 0) || config.cols;
+        const hSum = config.rowHeights.reduce((a, b) => a + b, 0) || config.rows;
+        let colWidths = config.colWidths.map(w => Math.max(NESTED_MIN_COL, Math.round((w / wSum) * targetW)));
+        let rowHeights = config.rowHeights.map(h => Math.max(NESTED_MIN_ROW, Math.round((h / hSum) * targetH)));
+
+        // Fix rounding drift so nested exactly fills the host
+        const colDrift = targetW - colWidths.reduce((a, b) => a + b, 0);
+        if (colWidths.length) colWidths[colWidths.length - 1] = Math.max(NESTED_MIN_COL, colWidths[colWidths.length - 1] + colDrift);
+        const rowDrift = targetH - rowHeights.reduce((a, b) => a + b, 0);
+        if (rowHeights.length) rowHeights[rowHeights.length - 1] = Math.max(NESTED_MIN_ROW, rowHeights[rowHeights.length - 1] + rowDrift);
+
+        config.colWidths = colWidths;
+        config.rowHeights = rowHeights;
+        nodeSetNestedConfig(embed, config);
+        applyNestedInnerLayout(inner, colWidths, rowHeights);
+    }
+
+    function nodeSetNestedConfig(embed, config) {
+        embed.setAttribute('data-value', JSON.stringify(config));
+    }
+
+    function scaleNestedTablesInOuterTable(table, affectedColIndex = null, affectedRowIndex = null) {
+        if (!table || isNestedTableElement(table)) return;
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        rows.forEach((tr, rowIndex) => {
+            if (affectedRowIndex != null && rowIndex !== affectedRowIndex) {
+                // still scale nests in other rows if column changed
+            }
+            Array.from(tr.children).filter(el => el.matches('td, th')).forEach((cell, colIndex) => {
+                const colHit = affectedColIndex == null || colIndex === affectedColIndex;
+                const rowHit = affectedRowIndex == null || rowIndex === affectedRowIndex;
+                if (!colHit && !rowHit) return;
+                cell.querySelectorAll(':scope > .ql-workspace-nested-table, .ql-workspace-nested-table').forEach(embed => {
+                    // Only direct cell embeds — avoid accidental distant matches
+                    if (getHostOuterCellForNested(embed) !== cell) return;
+                    scaleNestedTableToFillHost(embed);
+                });
+            });
+        });
+    }
+
+    function mutateNestedTable(embed, cell, command, arg) {
+        if (!embed) return;
+        const config = parseNestedTableConfig(embed.getAttribute('data-value') || '');
+        const table = embed.querySelector('table.ql-nested-table-inner');
+        if (!table) return;
+
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        const rowEl = cell ? cell.parentElement : rows[0];
+        const rowIndex = Math.max(0, rows.indexOf(rowEl));
+        const colIndex = cell
+            ? Array.from(rowEl.children).filter(el => el.matches('td, th')).indexOf(cell)
+            : 0;
+
+        if (command === 'row') {
+            if (config.rows >= NESTED_TABLE_SOFT_MAX && (arg === 0 || arg === 1)) return;
+            const insertAt = arg === 0 ? rowIndex : rowIndex + 1;
+            const newRow = Array.from({ length: config.cols }, () => '');
+            config.cells.splice(insertAt, 0, newRow);
+            const seedH = config.rowHeights[rowIndex] || NESTED_MIN_ROW;
+            config.rowHeights.splice(insertAt, 0, seedH);
+            config.rows = config.cells.length;
+        } else if (command === 'col') {
+            if (config.cols >= NESTED_TABLE_SOFT_MAX && (arg === 0 || arg === 1)) return;
+            const insertAt = arg === 0 ? colIndex : colIndex + 1;
+            config.cells.forEach(row => row.splice(insertAt, 0, ''));
+            const seedW = config.colWidths[colIndex] || NESTED_MIN_COL;
+            config.colWidths.splice(insertAt, 0, seedW);
+            config.cols = config.cells[0] ? config.cells[0].length : 0;
+        } else if (command === 'delete-row') {
+            if (config.rows <= 1) return;
+            config.cells.splice(rowIndex, 1);
+            config.rowHeights.splice(rowIndex, 1);
+            config.rows = config.cells.length;
+        } else if (command === 'delete-col') {
+            if (config.cols <= 1) return;
+            config.cells.forEach(row => row.splice(colIndex, 1));
+            config.colWidths.splice(colIndex, 1);
+            config.cols = config.cells[0] ? config.cells[0].length : 0;
+        } else if (command === 'delete-table') {
+            const host = getHostOuterCellForNested(embed);
+            embed.remove();
+            if (host && workspaceQuillInstance) {
+                try {
+                    workspaceQuillInstance.update('user');
+                } catch (err) {
+                    // ignore
+                }
+            }
+            markWorkspaceUnsavedAndPreview();
+            return;
+        } else if (command === 'toggle-borders') {
+            const inner = embed.querySelector('table.ql-nested-table-inner');
+            if (!inner) return;
+            inner.classList.toggle('no-border');
+            config.noBorder = inner.classList.contains('no-border');
+            nodeSetNestedConfig(embed, config);
+            markWorkspaceUnsavedAndPreview();
+            return;
+        } else if (command === 'toggle-expand-entities') {
+            const inner = embed.querySelector('table.ql-nested-table-inner');
+            if (!inner) return;
+            const currentlyOn = resolveExpandEntitiesFlag(
+                config.expandEntities,
+                { hasOwnKey: Object.prototype.hasOwnProperty.call(config, 'expandEntities') }
+            ) || inner.classList.contains('ql-table-expand-entities')
+                || inner.getAttribute('data-expand-entities') === 'true';
+            const on = !currentlyOn;
+            inner.classList.toggle('ql-table-expand-entities', on);
+            inner.setAttribute('data-expand-entities', on ? 'true' : 'false');
+            config.expandEntities = on;
+            nodeSetNestedConfig(embed, config);
+            markWorkspaceUnsavedAndPreview();
+            return;
+        } else {
+            return;
+        }
+
+        nodeSetNestedConfig(embed, config);
+        renderNestedTableIntoNode(embed, config);
+        lockOuterCellsThatContainNestedTables();
+        scheduleNestedHostRealign(embed);
+        markWorkspaceUnsavedAndPreview();
+    }
+
+    function getOuterQuillTableCellAtSelection() {
+        if (!workspaceQuillInstance) return null;
+        const range = workspaceQuillInstance.getSelection(true);
+        if (!range) return null;
+        try {
+            const [leaf] = workspaceQuillInstance.getLeaf(range.index);
+            let node = leaf && leaf.domNode;
+            if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+            if (!node || !node.closest) return null;
+            const nested = node.closest('.ql-workspace-nested-table');
+            if (nested) return nested.closest('td, th');
+            const cell = node.closest('td, th');
+            if (cell && cell.closest('.ql-workspace-nested-table')) {
+                return cell.closest('.ql-workspace-nested-table')?.closest('td, th') || null;
+            }
+            return cell;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    function isSelectionInsideQuillTableCell() {
+        if (!workspaceQuillInstance) return false;
+        const range = workspaceQuillInstance.getSelection(true);
+        if (!range) return false;
+        try {
+            const [leaf] = workspaceQuillInstance.getLeaf(range.index);
+            let node = leaf && leaf.domNode;
+            if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+            if (!node || !node.closest) return false;
+            if (node.closest('.ql-workspace-nested-table')) return false;
+            const cell = node.closest('td, th');
+            return !!(cell && !isNestedTableElement(cell.closest('table')));
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function insertSoftBreakInQuillTableCell(range) {
+        if (!workspaceQuillInstance || !range) return false;
+        try {
+            // Soft break + ZWSP keeps a real caret target on the next visual line
+            workspaceQuillInstance.insertEmbed(range.index, 'softBreak', true, Quill.sources.USER);
+            workspaceQuillInstance.insertText(range.index + 1, '\u200b', Quill.sources.USER);
+            workspaceQuillInstance.setSelection(range.index + 2, 0, Quill.sources.SILENT);
+            return true;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function readQuillRangeAsLines(index, length) {
+        if (!workspaceQuillInstance || length <= 0) return [''];
+        const delta = workspaceQuillInstance.getContents(index, length);
+        const lines = [''];
+        (delta.ops || []).forEach(op => {
+            if (typeof op.insert === 'string') {
+                const parts = op.insert.replace(/\r/g, '').split('\n');
+                lines[lines.length - 1] += parts[0];
+                for (let i = 1; i < parts.length; i++) lines.push(parts[i]);
+            } else if (op.insert && (op.insert.softBreak || op.insert.break)) {
+                lines.push('');
+            }
+        });
+        if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+        return lines;
+    }
+
+    function applyListFormattingInsideTableCell(value) {
+        if (!workspaceQuillInstance || !isSelectionInsideQuillTableCell()) return false;
+        const cell = getOuterQuillTableCellAtSelection();
+        if (!cell) return false;
+
+        let blot;
+        try {
+            blot = Quill.find(cell, true) || Quill.find(cell);
+        } catch (err) {
+            blot = null;
+        }
+        if (!blot || typeof blot.offset !== 'function') return false;
+
+        const cellStart = blot.offset(workspaceQuillInstance.scroll);
+        const cellLength = Math.max(0, blot.length() - 1);
+        const lineInfos = [];
+        const delta = workspaceQuillInstance.getContents(cellStart, cellLength);
+        let offset = cellStart;
+        let lineStart = cellStart;
+        let lineText = '';
+        (delta.ops || []).forEach(op => {
+            if (typeof op.insert === 'string') {
+                lineText += op.insert.replace(/\r/g, '');
+                offset += op.insert.length;
+            } else if (op.insert && (op.insert.softBreak || op.insert.break)) {
+                lineInfos.push({ start: lineStart, end: offset, text: lineText });
+                offset += 1;
+                lineStart = offset;
+                lineText = '';
+            } else if (op.insert && typeof op.insert === 'object') {
+                offset += 1;
+            }
+        });
+        lineInfos.push({ start: lineStart, end: offset, text: lineText });
+
+        const sel = workspaceQuillInstance.getSelection(true) || { index: cellStart, length: 0 };
+        const selStart = Math.max(cellStart, sel.index);
+        const selEnd = Math.max(selStart, Math.min(cellStart + cellLength, sel.index + Math.max(sel.length, 0)));
+        const selectedIndices = [];
+        lineInfos.forEach((line, i) => {
+            if (sel.length === 0) {
+                if (selStart >= line.start && selStart <= line.end) selectedIndices.push(i);
+            } else if (selEnd > line.start && selStart < line.end) {
+                selectedIndices.push(i);
+            }
+        });
+        if (!selectedIndices.length) {
+            const idx = lineInfos.findIndex(line => selStart >= line.start && selStart <= line.end);
+            selectedIndices.push(idx >= 0 ? idx : 0);
+        }
+
+        const selectedPlains = selectedIndices
+            .map(i => (lineInfos[i]?.text || '').replace(/^\u200b+/g, ''))
+            .filter(l => l.trim().length);
+        const isBullet = selectedPlains.length > 0 && selectedPlains.every(l => /^•\s/.test(l));
+        const isOrdered = selectedPlains.length > 0 && selectedPlains.every(l => /^\d+\.\s/.test(l));
+
+        // Prefix-only edits (high → low) preserve inline formatting on each line
+        const selectedAsc = [...selectedIndices].sort((a, b) => a - b);
+        const orderedAssign = new Map();
+        if (value === 'ordered' && !isOrdered) {
+            const plains = lineInfos.map(line => (line.text || '').replace(/^\u200b+/g, ''));
+            let n = resolveOrderedStartNumber(plains, selectedAsc.filter(i => {
+                const plain = plains[i] || '';
+                return !!plain.trim();
+            }));
+            selectedAsc.forEach(i => {
+                const plain = plains[i] || '';
+                if (plain.trim()) orderedAssign.set(i, n++);
+            });
+        }
+
+        [...selectedIndices].sort((a, b) => b - a).forEach(i => {
+            const line = lineInfos[i];
+            if (!line) return;
+            const plain = (line.text || '').replace(/^\u200b+/g, '');
+            if (!plain.trim()) return;
+            const existing = getLeadingListPrefix(plain);
+            if (existing) {
+                workspaceQuillInstance.deleteText(line.start, existing.length, Quill.sources.USER);
+            }
+            if (value === 'bullet' && !isBullet) {
+                workspaceQuillInstance.insertText(line.start, '• ', Quill.sources.USER);
+            } else if (value === 'ordered' && !isOrdered) {
+                const n = orderedAssign.get(i) || 1;
+                workspaceQuillInstance.insertText(line.start, `${n}. `, Quill.sources.USER);
+            }
+        });
+
+        workspaceQuillInstance.setSelection(selStart, 0, Quill.sources.SILENT);
+        markWorkspaceUnsavedAndPreview();
+        return true;
+    }
+
+    function registerWorkspaceSoftBreakBlot() {
+        if (typeof Quill === 'undefined' || window.__workspaceSoftBreakRegistered) return;
+        const Embed = Quill.import('blots/embed');
+        class SoftBreak extends Embed {
+            static blotName = 'softBreak';
+            static className = 'ql-soft-break';
+            static tagName = 'SPAN';
+            static create() {
+                const node = super.create();
+                node.classList.add('ql-soft-break');
+                node.setAttribute('contenteditable', 'false');
+                return node;
+            }
+            static value() {
+                return true;
+            }
+            length() {
+                return 1;
+            }
+        }
+        Quill.register(SoftBreak, true);
+        window.__workspaceSoftBreakRegistered = true;
+    }
+
+    function setupWorkspaceTableCellPasteHandler() {
+        if (!workspaceQuillInstance || workspaceQuillInstance.root.dataset.tablePasteBound === '1') return;
+        workspaceQuillInstance.root.dataset.tablePasteBound = '1';
+        workspaceQuillInstance.root.addEventListener('paste', function(e) {
+            if (!isSelectionInsideQuillTableCell()) return;
+            const text = (e.clipboardData || window.clipboardData)?.getData('text/plain');
+            if (!text || (!text.includes('\n') && !text.includes('\r'))) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const range = workspaceQuillInstance.getSelection(true);
+            if (!range) return;
+            if (range.length) {
+                workspaceQuillInstance.deleteText(range.index, range.length, Quill.sources.USER);
+            }
+            const lines = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+            let cursor = range.index;
+            lines.forEach((line, i) => {
+                if (i > 0) {
+                    workspaceQuillInstance.insertEmbed(cursor, 'softBreak', true, Quill.sources.USER);
+                    cursor += 1;
+                }
+                if (line) {
+                    workspaceQuillInstance.insertText(cursor, line, Quill.sources.USER);
+                    cursor += line.length;
+                }
+            });
+            workspaceQuillInstance.setSelection(cursor, 0, Quill.sources.SILENT);
+            markWorkspaceUnsavedAndPreview();
+        }, true);
+    }
+
+    function makeQuillTableRowId(seed = '') {
+        return `row-${seed}${Math.random().toString(36).slice(2, 6)}`;
+    }
+
+    function isCorruptQuillRowId(value) {
+        return !value || value === '[object Object]' || value === 'true' || String(value).startsWith('{');
+    }
+
+    /**
+     * Quill groups cells by data-row. Identical / corrupted ids collapse a grid into one row.
+     * Normalize each HTML <tr> to a unique shared row id before paste/save.
+     */
+    function normalizeQuillTableHtml(rawHtml) {
+        let cleanHtml = (rawHtml || '').trim() || '<p><br></p>';
+        try {
+            const tempParser = new DOMParser();
+            const doc = tempParser.parseFromString(cleanHtml, 'text/html');
+
+            doc.querySelectorAll('.ql-formula').forEach(formula => {
+                formula.innerHTML = '';
+                let nextSibling = formula.nextSibling;
+                while (nextSibling && (
+                    (nextSibling.nodeType === Node.ELEMENT_NODE && (
+                        nextSibling.classList.contains('katex-html') ||
+                        nextSibling.classList.contains('katex')
+                    )) ||
+                    (nextSibling.nodeType === Node.TEXT_NODE && !nextSibling.textContent.trim())
+                )) {
+                    const toRemove = nextSibling;
+                    nextSibling = nextSibling.nextSibling;
+                    if (toRemove.nodeType === Node.ELEMENT_NODE) {
+                        toRemove.remove();
+                    }
+                }
+            });
+
+            doc.querySelectorAll('table').forEach(table => {
+                if (isNestedTableElement(table)) return;
+                if (table.getAttribute('data-no-border') === 'true' || table.classList.contains('no-border')) {
+                    table.classList.add('no-border');
+                    table.setAttribute('data-no-border', 'true');
+                }
+                if (table.getAttribute('data-compact-cells') === 'true' || table.classList.contains('ql-table-compact')) {
+                    table.classList.add('ql-table-compact');
+                    table.setAttribute('data-compact-cells', 'true');
+                }
+                if (table.getAttribute('data-expand-entities') === 'false') {
+                    table.classList.remove('ql-table-expand-entities');
+                    table.setAttribute('data-expand-entities', 'false');
+                } else {
+                    table.classList.add('ql-table-expand-entities');
+                    table.setAttribute('data-expand-entities', 'true');
+                }
+                const align = table.getAttribute('data-table-align');
+                if (align) {
+                    table.classList.remove('ql-table-align-left', 'ql-table-align-center', 'ql-table-align-right');
+                    table.classList.add(`ql-table-align-${align}`);
+                }
+
+                const usedIds = new Set();
+                table.querySelectorAll(':scope > tr, :scope > tbody > tr').forEach((tr, rowIndex) => {
+                    const cells = Array.from(tr.querySelectorAll(':scope > td, :scope > th'));
+                    if (!cells.length) return;
+
+                    let rowId = cells.map(c => c.getAttribute('data-row')).find(id => !isCorruptQuillRowId(id) && !usedIds.has(id));
+                    if (!rowId) {
+                        rowId = makeQuillTableRowId(`${rowIndex}-`);
+                    }
+                    usedIds.add(rowId);
+                    cells.forEach(td => td.setAttribute('data-row', rowId));
+                });
+
+                // Empty cells that only hold soft-break embeds are not clickable after
+                // reload — restore Quill's normal empty-cell <br>.
+                table.querySelectorAll(':scope > tr > td, :scope > tr > th, :scope > tbody > tr > td, :scope > tbody > tr > th').forEach(cell => {
+                    if (cell.classList.contains('ql-has-nested-table')) return;
+                    if (cell.querySelector('.ql-workspace-nested-table')) return;
+                    const plain = (cell.textContent || '').replace(/[\u200B\uFEFF]/g, '').trim();
+                    if (plain.length) return;
+                    const hasNonBreakEl = Array.from(cell.children).some(el =>
+                        !el.classList.contains('ql-soft-break') && el.tagName !== 'BR'
+                    );
+                    if (hasNonBreakEl) return;
+                    if (cell.querySelector('.ql-soft-break')) {
+                        cell.innerHTML = '<br>';
+                    }
+                });
+            });
+
+            // Keep nested-table embeds hydrated from data-value for save/preview HTML
+            doc.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+                syncWorkspaceNestedTableNode(node);
+            });
+
+            cleanHtml = doc.body.innerHTML || '<p><br></p>';
+        } catch (err) {
+            console.warn('Failed normalizing workspace Quill tables:', err);
+        }
+        return cleanHtml;
+    }
+
+    function loadWorkspaceQuillHtml(rawHtml) {
+        if (!workspaceQuillInstance) return;
+        const cleanHtml = normalizeQuillTableHtml(rawHtml);
+
+        // Quill rebuilds <table> nodes from deltas and drops custom attrs — capture first.
+        let tableMetas = [];
+        try {
+            const metaDoc = new DOMParser().parseFromString(cleanHtml, 'text/html');
+            tableMetas = queryWorkspaceQuillTables(metaDoc).map(t => ({
+                colWidths: t.getAttribute('data-col-widths'),
+                rowHeights: t.getAttribute('data-row-heights'),
+                align: t.getAttribute('data-table-align'),
+                noBorder: t.getAttribute('data-no-border') === 'true' || t.classList.contains('no-border'),
+                compact: t.getAttribute('data-compact-cells') === 'true' || t.classList.contains('ql-table-compact'),
+                expandEntities: t.getAttribute('data-expand-entities') !== 'false'
+            }));
+        } catch (err) {
+            tableMetas = [];
+        }
+
+        workspaceQuillInstance.setText('');
+        workspaceQuillInstance.clipboard.dangerouslyPasteHTML(0, cleanHtml);
+        setTimeout(() => {
+            if (!workspaceQuillInstance) return;
+            const tableModule = workspaceQuillInstance.getModule('table');
+            if (tableModule && typeof tableModule.balanceTables === 'function') {
+                tableModule.balanceTables();
+            }
+
+            const liveTables = queryWorkspaceQuillTables(workspaceQuillInstance.root);
+            liveTables.forEach((table, i) => {
+                const meta = tableMetas[i];
+                if (!meta) return;
+                if (meta.colWidths) table.setAttribute('data-col-widths', meta.colWidths);
+                if (meta.rowHeights) table.setAttribute('data-row-heights', meta.rowHeights);
+                if (meta.align) table.setAttribute('data-table-align', meta.align);
+                if (meta.noBorder) table.setAttribute('data-no-border', 'true');
+                if (meta.compact) table.setAttribute('data-compact-cells', 'true');
+                if (meta.expandEntities === false) {
+                    table.classList.remove('ql-table-expand-entities');
+                    table.setAttribute('data-expand-entities', 'false');
+                } else {
+                    table.classList.add('ql-table-expand-entities');
+                    table.setAttribute('data-expand-entities', 'true');
+                }
+                reapplyWorkspaceTableLayout(table);
+            });
+
+            // Restore interactive cells on nested embeds after Quill paste
+            workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+                hydrateWorkspaceNestedTableEmbed(node);
+            });
+
+            workspaceQuillInstance.update('user');
+            lockOuterCellsThatContainNestedTables();
+            repairOrphanSoftBreakEmptyOuterCells();
+            workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+                scheduleNestedHostRealign(node);
+            });
+            updateWorkspaceSimulationPreview();
+        }, 50);
+    }
+
+    /** Remove softBreak-only empty outer cells left from older saves / clipboard matchers. */
+    function repairOrphanSoftBreakEmptyOuterCells() {
+        if (!workspaceQuillInstance) return;
+        const cells = Array.from(workspaceQuillInstance.root.querySelectorAll('td, th')).filter(cell => {
+            if (cell.closest('.ql-workspace-nested-table')) return false;
+            if (cell.classList.contains('ql-has-nested-table')) return false;
+            if (!isEmptyOuterQuillCell(cell)) return false;
+            return !!cell.querySelector(':scope > .ql-soft-break, .ql-soft-break');
+        });
+        cells.forEach(cell => {
+            try {
+                let blot = Quill.find(cell, true) || Quill.find(cell);
+                if (!blot || typeof blot.offset !== 'function') return;
+                const start = blot.offset(workspaceQuillInstance.scroll);
+                const len = Math.max(0, blot.length() - 1);
+                if (len > 0) {
+                    workspaceQuillInstance.deleteText(start, len, Quill.sources.SILENT);
+                }
+            } catch (err) {
+                // Last resort: clear DOM and let Quill reconcile
+                cell.innerHTML = '<br>';
+            }
+        });
+        if (cells.length) {
+            try {
+                workspaceQuillInstance.update('silent');
+            } catch (err) {
+                // ignore
+            }
+        }
+    }
+
+    function getTableSizeLimits(table) {
+        const compact = !!(table && (
+            table.classList.contains('ql-table-compact') ||
+            table.getAttribute('data-compact-cells') === 'true'
+        ));
+        return compact
+            ? { minCol: 14, minRow: 16 }
+            : { minCol: 40, minRow: 28 };
+    }
+
+    function getWorkspaceQuillHtmlForSave() {
+        if (!workspaceQuillInstance) return '';
+        // Capture current layout markers onto the live DOM before serializing
+        queryWorkspaceQuillTables(workspaceQuillInstance.root).forEach(table => {
+            persistWorkspaceTableLayoutAttrs(table);
+        });
+        workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+            syncWorkspaceNestedTableNode(node);
+        });
+        return normalizeQuillTableHtml(workspaceQuillInstance.root.innerHTML.trim());
+    }
+
+    function persistWorkspaceTableLayoutAttrs(table, widthOverride = null, heightOverride = null) {
+        if (!table) return;
+        if (table.classList.contains('no-border')) {
+            table.setAttribute('data-no-border', 'true');
+        } else {
+            table.removeAttribute('data-no-border');
+        }
+
+        if (table.classList.contains('ql-table-compact')) {
+            table.setAttribute('data-compact-cells', 'true');
+        } else {
+            table.removeAttribute('data-compact-cells');
+        }
+
+        if (table.getAttribute('data-expand-entities') === 'false') {
+            table.classList.remove('ql-table-expand-entities');
+            table.setAttribute('data-expand-entities', 'false');
+        } else {
+            // Default on (missing attr or true)
+            table.classList.add('ql-table-expand-entities');
+            table.setAttribute('data-expand-entities', 'true');
+        }
+
+        ['left', 'center', 'right'].forEach(align => {
+            if (table.classList.contains(`ql-table-align-${align}`)) {
+                table.setAttribute('data-table-align', align);
+            }
+        });
+
+        const { minCol } = getTableSizeLimits(table);
+        const firstRow = table.querySelector('tr');
+        if (!firstRow) return;
+        const cells = Array.from(firstRow.children).filter(el => el.matches('td, th'));
+        const colCount = cells.length;
+        if (!colCount) return;
+
+        let widths = Array.isArray(widthOverride) ? widthOverride : null;
+        if (!widths || widths.length !== colCount) {
+            const colgroup = table.querySelector(':scope > colgroup');
+            widths = [];
+            for (let i = 0; i < colCount; i++) {
+                const col = colgroup ? colgroup.children[i] : null;
+                const cell = cells[i];
+                const fromCol = col ? parseFloat(col.style.width) : NaN;
+                const fromCellStyle = cell ? parseFloat(cell.style.width) : NaN;
+                const fromData = (table.getAttribute('data-col-widths') || '').split(',').map(v => parseFloat(v))[i];
+                const width = (!Number.isNaN(fromCol) && fromCol > 0 ? fromCol : null)
+                    || (!Number.isNaN(fromCellStyle) && fromCellStyle > 0 ? fromCellStyle : null)
+                    || (!Number.isNaN(fromData) && fromData > 0 ? fromData : null)
+                    || (cell && cell.getBoundingClientRect().width)
+                    || 100;
+                widths.push(Math.max(minCol, Math.round(width)));
+            }
+        } else {
+            widths = widths.map(w => Math.max(minCol, Math.round(w)));
+        }
+
+        table.setAttribute('data-col-widths', widths.join(','));
+        const total = widths.reduce((a, b) => a + b, 0);
+        table.style.width = `${total}px`;
+        table.style.minWidth = `${total}px`;
+        table.style.maxWidth = 'none';
+
+        const { minRow } = getTableSizeLimits(table);
+        let heights = Array.isArray(heightOverride) ? heightOverride : null;
+        if (!heights) {
+            heights = [];
+            table.querySelectorAll(':scope > tr, :scope > tbody > tr').forEach(tr => {
+                const fromStyle = parseFloat(tr.style.height);
+                const h = (!Number.isNaN(fromStyle) && fromStyle > 0)
+                    ? fromStyle
+                    : (tr.getBoundingClientRect().height || 36);
+                heights.push(Math.max(minRow, Math.round(h)));
+            });
+        } else {
+            heights = heights.map(h => Math.max(minRow, Math.round(h)));
+        }
+        if (heights.length) {
+            table.setAttribute('data-row-heights', heights.join(','));
+        }
+    }
+
+    function reapplyWorkspaceTableLayout(table) {
+        if (!table) return;
+
+        if (table.getAttribute('data-no-border') === 'true') {
+            table.classList.add('no-border');
+        }
+        if (table.getAttribute('data-compact-cells') === 'true') {
+            table.classList.add('ql-table-compact');
+        } else {
+            table.classList.remove('ql-table-compact');
+        }
+        if (table.getAttribute('data-expand-entities') === 'false') {
+            table.classList.remove('ql-table-expand-entities');
+        } else {
+            table.classList.add('ql-table-expand-entities');
+            if (table.getAttribute('data-expand-entities') !== 'false') {
+                table.setAttribute('data-expand-entities', 'true');
+            }
+        }
+
+        const align = table.getAttribute('data-table-align');
+        table.classList.remove('ql-table-align-left', 'ql-table-align-center', 'ql-table-align-right');
+        if (align) {
+            table.classList.add(`ql-table-align-${align}`);
+        }
+
+        const { minCol } = getTableSizeLimits(table);
+        const widthAttr = table.getAttribute('data-col-widths');
+        if (widthAttr) {
+            const widths = widthAttr.split(',').map(v => parseFloat(v)).filter(n => !Number.isNaN(n) && n > 0);
+            if (widths.length) {
+                applyColumnWidths(table, widths.map(w => Math.max(minCol, w)));
+            }
+        }
+
+        const heightAttr = table.getAttribute('data-row-heights');
+        if (heightAttr) {
+            const heights = heightAttr.split(',').map(v => parseFloat(v)).filter(n => !Number.isNaN(n) && n > 0);
+            const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+            heights.forEach((h, i) => {
+                if (rows[i]) setRowHeightExclusive(rows[i], h, table);
+            });
+        }
+    }
+
+    function reapplyAllWorkspaceTableLayouts() {
+        if (!workspaceQuillInstance) return;
+        queryWorkspaceQuillTables(workspaceQuillInstance.root).forEach(table => {
+            reapplyWorkspaceTableLayout(table);
+        });
+    }
+
+    function clearWorkspaceTableSelection() {
+        if (selectedWorkspaceTable) {
+            selectedWorkspaceTable.classList.remove('ql-table-object-selected');
+        }
+        selectedWorkspaceTable = null;
+        if (workspaceQuillInstance) {
+            workspaceQuillInstance.root.querySelectorAll('table.ql-table-object-selected').forEach(t => {
+                t.classList.remove('ql-table-object-selected');
+            });
+        }
+    }
+
+    function selectWorkspaceTable(table) {
+        if (!table || isNestedTableElement(table) || !workspaceQuillInstance || !workspaceQuillInstance.root.contains(table)) return;
+        clearWorkspaceTableSelection();
+        hideWorkspaceTableHoverTip();
+        selectedWorkspaceTable = table;
+        table.classList.add('ql-table-object-selected');
+        // Blur cell caret so toolbar align clearly targets the table object
+        try {
+            workspaceQuillInstance.setSelection(null);
+        } catch (err) {
+            // ignore
+        }
+    }
+
+    function isWorkspaceTableSelectHotspot(table, clientX, clientY) {
+        if (!table || isNestedTableElement(table)) return false;
+        const rect = table.getBoundingClientRect();
+        // Top-left of first cell (⧉ cue lives inside the cell to avoid table ::before)
+        return clientX >= rect.left
+            && clientX <= rect.left + 24
+            && clientY >= rect.top
+            && clientY <= rect.top + 24;
+    }
+
+    function ensureWorkspaceTableHoverTip() {
+        let tip = document.getElementById('workspace-quill-table-hover-tip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'workspace-quill-table-hover-tip';
+            tip.textContent = '🖱️ Right-click cells for row/column options';
+            document.body.appendChild(tip);
+        }
+        return tip;
+    }
+
+    function hideWorkspaceTableHoverTip() {
+        const tip = document.getElementById('workspace-quill-table-hover-tip');
+        if (tip) tip.style.display = 'none';
+    }
+
+    function showWorkspaceTableHoverTip(table) {
+        if (!table || isNestedTableElement(table) || table.classList.contains('ql-table-object-selected')) {
+            hideWorkspaceTableHoverTip();
+            return;
+        }
+        const tip = ensureWorkspaceTableHoverTip();
+        const rect = table.getBoundingClientRect();
+        tip.style.display = 'block';
+        // Prefer above the table; if clipped by viewport, place just inside top-left.
+        let top = rect.top - 24;
+        let left = rect.left + 28;
+        if (top < 8) top = rect.top + 4;
+        const tipWidth = tip.offsetWidth || 280;
+        if (left + tipWidth > window.innerWidth - 8) {
+            left = Math.max(8, window.innerWidth - tipWidth - 8);
+        }
+        tip.style.top = `${top}px`;
+        tip.style.left = `${left}px`;
+    }
+
+    function setupWorkspaceTableHoverTip() {
+        if (!htmlCanvasEditor || htmlCanvasEditor.dataset.tableHoverTipBound === '1') return;
+        htmlCanvasEditor.dataset.tableHoverTipBound = '1';
+        htmlCanvasEditor.addEventListener('mouseover', function(e) {
+            const table = e.target.closest && e.target.closest('table');
+            if (!table || !workspaceQuillInstance?.root.contains(table) || isNestedTableElement(table)) {
+                return;
+            }
+            showWorkspaceTableHoverTip(table);
+        });
+        htmlCanvasEditor.addEventListener('mouseout', function(e) {
+            const fromTable = e.target.closest && e.target.closest('table');
+            const toTable = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('table');
+            if (fromTable && fromTable !== toTable) {
+                hideWorkspaceTableHoverTip();
+            }
+        });
+        htmlCanvasEditor.addEventListener('scroll', hideWorkspaceTableHoverTip, true);
+        window.addEventListener('scroll', hideWorkspaceTableHoverTip, true);
+    }
+
+    function applyWorkspaceTableAlignment(value, tableArg = null) {
+        const table = tableArg || selectedWorkspaceTable;
+        if (!table || !workspaceQuillInstance || !workspaceQuillInstance.root.contains(table)) {
+            return false;
+        }
+
+        table.classList.remove('ql-table-align-left', 'ql-table-align-center', 'ql-table-align-right');
+        if (value) {
+            table.classList.add(`ql-table-align-${value}`);
+            table.setAttribute('data-table-align', value);
+        } else {
+            table.removeAttribute('data-table-align');
+        }
+        persistWorkspaceTableLayoutAttrs(table);
+        updateWorkspaceSimulationPreview();
+        if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+        return true;
+    }
+
+    function isEmptyOuterQuillCell(cell) {
+        if (!cell || cell.classList.contains('ql-has-nested-table')) return false;
+        if (cell.closest('.ql-workspace-nested-table')) return false;
+        const table = cell.closest('table');
+        if (!table || isNestedTableElement(table)) return false;
+        if (cell.querySelector('img, .ql-formula, video, iframe, .ql-workspace-nested-table')) return false;
+        const plain = (cell.textContent || '').replace(/[\u200B\uFEFF]/g, '').trim();
+        return plain.length === 0;
+    }
+
+    function getOuterQuillCellFromPoint(clientX, clientY) {
+        if (!workspaceQuillInstance) return null;
+        const stack = (typeof document.elementsFromPoint === 'function')
+            ? document.elementsFromPoint(clientX, clientY)
+            : [document.elementFromPoint(clientX, clientY)].filter(Boolean);
+        for (const el of stack) {
+            if (!(el && el.closest)) continue;
+            if (el.closest('.ql-workspace-nested-table')) continue;
+            const cell = el.closest('td, th');
+            if (!cell || !workspaceQuillInstance.root.contains(cell)) continue;
+            if (cell.classList.contains('ql-has-nested-table')) continue;
+            const table = cell.closest('table');
+            if (!table || isNestedTableElement(table)) continue;
+            return cell;
+        }
+        return null;
+    }
+
+    function distanceToCellEdges(clientX, clientY, cell) {
+        const r = cell.getBoundingClientRect();
+        return Math.min(
+            clientX - r.left,
+            r.right - clientX,
+            clientY - r.top,
+            r.bottom - clientY
+        );
+    }
+
+    function placeCaretInOuterTableCell(cell) {
+        if (!workspaceQuillInstance || !cell) return false;
+        try {
+            // Loaded empty cells may only contain softBreak embeds — clear them so Quill
+            // can host a real caret (same as a fresh `<br>` empty cell).
+            if (
+                isEmptyOuterQuillCell(cell) &&
+                cell.querySelector('.ql-soft-break')
+            ) {
+                let blotClear = Quill.find(cell, true) || Quill.find(cell);
+                if (blotClear && typeof blotClear.offset === 'function') {
+                    const start = blotClear.offset(workspaceQuillInstance.scroll);
+                    const len = Math.max(0, blotClear.length() - 1);
+                    if (len > 0) {
+                        workspaceQuillInstance.deleteText(start, len, Quill.sources.SILENT);
+                    }
+                }
+            }
+
+            workspaceQuillInstance.focus();
+            let blot = null;
+            const br = cell.querySelector(':scope > br, br');
+            if (br) blot = Quill.find(br, true) || Quill.find(br);
+            if (!blot) blot = Quill.find(cell, true) || Quill.find(cell);
+            if (blot && typeof blot.offset === 'function') {
+                const index = blot.offset(workspaceQuillInstance.scroll);
+                workspaceQuillInstance.setSelection(index, 0, Quill.sources.USER);
+                return true;
+            }
+            // Fallback when Quill blot lookup fails on sparse empty cells
+            const sel = window.getSelection();
+            if (!sel) return false;
+            const range = document.createRange();
+            range.selectNodeContents(cell);
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            return true;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    function setupEmptyOuterTableCellClick() {
+        if (!htmlCanvasEditor || htmlCanvasEditor.dataset.emptyOuterCellClick === '1') return;
+        htmlCanvasEditor.dataset.emptyOuterCellClick = '1';
+
+        const RESIZE_EDGE_RESERVE = 4;
+
+        function tryPlaceCaretFromPointer(e) {
+            if (!workspaceQuillInstance || e.button !== 0 || e.altKey) return false;
+            if (e.target.closest && e.target.closest('.ql-workspace-nested-table')) return false;
+
+            const cell = getOuterQuillCellFromPoint(e.clientX, e.clientY)
+                || (e.target.closest && e.target.closest('td, th'));
+            if (!cell || !workspaceQuillInstance.root.contains(cell)) return false;
+            if (!isEmptyOuterQuillCell(cell)) return false;
+
+            // Leave a thin strip for column/row resize handles
+            if (distanceToCellEdges(e.clientX, e.clientY, cell) <= RESIZE_EDGE_RESERVE) return false;
+
+            // Do not stop/prevent the event — letting it reach the cell keeps
+            // contenteditable + Quill caret placement working. Resize skips these
+            // clicks via the deep-inside-outer-cell guard. We only reinforce the caret.
+            clearWorkspaceTableSelection();
+            hideWorkspaceTableHoverTip();
+
+            const placed = placeCaretInOuterTableCell(cell);
+            if (!placed) {
+                requestAnimationFrame(() => placeCaretInOuterTableCell(cell));
+            } else {
+                requestAnimationFrame(() => {
+                    placeCaretInOuterTableCell(cell);
+                });
+            }
+            return true;
+        }
+
+        // Capture before resize so caret placement runs even if a false resize
+        // claim later calls stopImmediatePropagation (guarded separately below).
+        htmlCanvasEditor.addEventListener('mousedown', tryPlaceCaretFromPointer, true);
+        // Backup: some empty cells only settle a caret on click
+        htmlCanvasEditor.addEventListener('click', function(e) {
+            if (!workspaceQuillInstance || e.button !== 0 || e.altKey) return;
+            if (e.target.closest && e.target.closest('.ql-workspace-nested-table')) return;
+            const cell = getOuterQuillCellFromPoint(e.clientX, e.clientY)
+                || (e.target.closest && e.target.closest('td, th'));
+            if (!isEmptyOuterQuillCell(cell)) return;
+            if (distanceToCellEdges(e.clientX, e.clientY, cell) <= RESIZE_EDGE_RESERVE) return;
+            const range = workspaceQuillInstance.getSelection(true);
+            if (range) {
+                try {
+                    const [leaf] = workspaceQuillInstance.getLeaf(range.index);
+                    let node = leaf && leaf.domNode;
+                    if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+                    if (node && cell.contains(node)) return; // already in this cell
+                } catch (err) {
+                    // fall through and place
+                }
+            }
+            placeCaretInOuterTableCell(cell);
+        }, true);
+    }
+
+    function setupWorkspaceTableObjectSelection() {
+        if (tableObjectSelectionBound || !htmlCanvasEditor) return;
+        tableObjectSelectionBound = true;
+
+        htmlCanvasEditor.addEventListener('mousedown', function(e) {
+            if (!workspaceQuillInstance || e.button !== 0) return;
+            if (e.target.closest && e.target.closest('.ql-workspace-nested-table')) return;
+            const table = e.target.closest && e.target.closest('table');
+            if (table && isNestedTableElement(table)) return;
+
+            // Alt/Option-click anywhere on a table selects the whole table object
+            if (table && e.altKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                selectWorkspaceTable(table);
+                return;
+            }
+
+            if (table && isWorkspaceTableSelectHotspot(table, e.clientX, e.clientY)) {
+                e.preventDefault();
+                e.stopPropagation();
+                selectWorkspaceTable(table);
+                return;
+            }
+
+            // Clicking inside a cell edits that cell — clear whole-table selection
+            if (e.target.closest && e.target.closest('td, th')) {
+                clearWorkspaceTableSelection();
+                hideWorkspaceTableHoverTip();
+                return;
+            }
+
+            // Click outside tables clears selection
+            if (!table) {
+                clearWorkspaceTableSelection();
+                hideWorkspaceTableHoverTip();
+            }
+        }, true);
+
+        if (workspaceQuillInstance) {
+            workspaceQuillInstance.on('selection-change', function(range) {
+                if (!range || !selectedWorkspaceTable) return;
+                // If the user places a caret inside any cell, drop table-object selection
+                try {
+                    const [leaf] = workspaceQuillInstance.getLeaf(range.index);
+                    let node = leaf && leaf.domNode ? leaf.domNode : null;
+                    if (node && node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+                    if (node && node.closest && node.closest('td, th')) {
+                        clearWorkspaceTableSelection();
+                    }
+                } catch (err) {
+                    // ignore
+                }
+            });
+        }
+    }
+
+    function hideWorkspaceTableSizePicker() {
+        if (!tableSizePicker) return;
+        tableSizePicker.style.display = 'none';
+        tableSizePicker.setAttribute('aria-hidden', 'true');
+    }
+
+    function updateTableSizePickerHighlight(rows, cols) {
+        tableSizeHover = {
+            rows: Math.max(1, Math.min(TABLE_SIZE_MAX, rows)),
+            cols: Math.max(1, Math.min(TABLE_SIZE_MAX, cols))
+        };
+        if (tableSizeLabel) {
+            tableSizeLabel.textContent = `${tableSizeHover.rows} × ${tableSizeHover.cols}`;
+        }
+        if (!tableSizeGrid) return;
+        tableSizeGrid.querySelectorAll('.table-size-cell').forEach(cell => {
+            const r = parseInt(cell.getAttribute('data-row'), 10);
+            const c = parseInt(cell.getAttribute('data-col'), 10);
+            cell.classList.toggle('is-active', r <= tableSizeHover.rows && c <= tableSizeHover.cols);
+        });
+    }
+
+    function ensureTableSizePickerGrid() {
+        if (!tableSizeGrid || tableSizeGrid.childElementCount > 0) return;
+        for (let r = 1; r <= TABLE_SIZE_MAX; r++) {
+            for (let c = 1; c <= TABLE_SIZE_MAX; c++) {
+                const cell = document.createElement('div');
+                cell.className = 'table-size-cell';
+                cell.setAttribute('data-row', String(r));
+                cell.setAttribute('data-col', String(c));
+                cell.addEventListener('mouseenter', () => updateTableSizePickerHighlight(r, c));
+                cell.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    insertWorkspaceTable(r, c);
+                    hideWorkspaceTableSizePicker();
+                });
+                tableSizeGrid.appendChild(cell);
+            }
+        }
+    }
+
+    function openWorkspaceTableSizePicker(toolbarModule) {
+        if (isFocusInsideNestedTable()) return;
+        if (!tableSizePicker) return;
+        ensureTableSizePickerGrid();
+        updateTableSizePickerHighlight(1, 1);
+
+        const anchorBtn = (toolbarModule && toolbarModule.container)
+            ? toolbarModule.container.querySelector('.ql-table')
+            : document.querySelector('#workspace-quill-toolbar-container .ql-table');
+        const rect = anchorBtn ? anchorBtn.getBoundingClientRect() : { left: 24, bottom: 80, right: 64 };
+        const pickerWidth = 168;
+        let left = rect.left;
+        if (left + pickerWidth > window.innerWidth - 12) {
+            left = Math.max(12, window.innerWidth - pickerWidth - 12);
+        }
+        tableSizePicker.style.left = `${left}px`;
+        tableSizePicker.style.top = `${rect.bottom + 6}px`;
+        tableSizePicker.style.display = 'block';
+        tableSizePicker.setAttribute('aria-hidden', 'false');
+    }
+
+    function insertWorkspaceTable(rows, cols) {
+        if (!workspaceQuillInstance) return;
+        // Nested-in-nested tables break layout — disable entirely
+        if (isFocusInsideNestedTable()) return;
+        workspaceQuillInstance.focus();
+        let range = workspaceQuillInstance.getSelection(true);
+        if (!range) {
+            workspaceQuillInstance.setSelection(workspaceQuillInstance.getLength(), 0, Quill.sources.SILENT);
+            range = workspaceQuillInstance.getSelection(true);
+        }
+
+        const safeRows = Math.max(1, Math.min(TABLE_SIZE_MAX, rows));
+        const safeCols = Math.max(1, Math.min(TABLE_SIZE_MAX, cols));
+
+        // Quill cannot nest native tables — embed an editable nested grid inside a cell
+        if (getOuterQuillTableCellAtSelection()) {
+            const cells = Array.from({ length: safeRows }, () => Array.from({ length: safeCols }, () => ''));
+            const colWidths = Array.from({ length: safeCols }, () => Math.max(NESTED_MIN_COL, 48));
+            const rowHeights = Array.from({ length: safeRows }, () => Math.max(NESTED_MIN_ROW, 28));
+            const payload = JSON.stringify({
+                rows: safeRows,
+                cols: safeCols,
+                cells,
+                colWidths,
+                rowHeights,
+                expandEntities: true
+            });
+            workspaceQuillInstance.insertEmbed(range.index, 'workspaceNestedTable', payload, Quill.sources.USER);
+            workspaceQuillInstance.setSelection(range.index + 1, 0, Quill.sources.SILENT);
+            setTimeout(() => {
+                lockOuterCellsThatContainNestedTables();
+                workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+                    hydrateWorkspaceNestedTableEmbed(node);
+                });
+                lockOuterCellsThatContainNestedTables();
+                updateWorkspaceSimulationPreview();
+            }, 0);
+            if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+            return;
+        }
+
+        const tableModule = workspaceQuillInstance.getModule('table');
+        if (!tableModule || typeof tableModule.insertTable !== 'function') {
+            console.error('Quill table module is unavailable.');
+            return;
+        }
+        tableModule.insertTable(safeRows, safeCols);
+        setTimeout(() => {
+            // Default to left float so following/prev text wraps beside the table (image-like).
+            const tables = queryWorkspaceQuillTables(workspaceQuillInstance.root);
+            const newest = tables[tables.length - 1];
+            if (newest && !newest.getAttribute('data-table-align')) {
+                newest.classList.add('ql-table-align-left');
+                newest.setAttribute('data-table-align', 'left');
+            }
+            if (newest && newest.getAttribute('data-expand-entities') == null) {
+                newest.classList.add('ql-table-expand-entities');
+                newest.setAttribute('data-expand-entities', 'true');
+            }
+            if (newest) persistWorkspaceTableLayoutAttrs(newest);
+            reapplyAllWorkspaceTableLayouts();
+            updateWorkspaceSimulationPreview();
+        }, 0);
+        if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+    }
+
+    function setupWorkspaceTableContextMenu() {
+        if (tableContextMenuBound || !htmlCanvasEditor) return;
+        tableContextMenuBound = true;
+
+        let menu = document.getElementById('workspace-quill-table-menu');
+        if (!menu) {
+            menu = document.createElement('div');
+            menu.id = 'workspace-quill-table-menu';
+            menu.className = 'custom-ql-context-menu';
+            document.body.appendChild(menu);
+        }
+
+        document.addEventListener('click', function() {
+            menu.style.display = 'none';
+        });
+
+        htmlCanvasEditor.addEventListener('contextmenu', function(e) {
+            const cell = e.target.closest('td, th');
+            if (!cell || !workspaceQuillInstance) return;
+
+            const nestedEmbed = cell.closest('.ql-workspace-nested-table');
+            if (nestedEmbed) {
+                e.preventDefault();
+                e.stopPropagation();
+                const nestedTable = nestedEmbed.querySelector('table.ql-nested-table-inner');
+                const hasHiddenBorders = nestedTable ? nestedTable.classList.contains('no-border') : false;
+                const expandsEntities = nestedTable
+                    ? previewTableShouldExpandEntities(nestedTable)
+                    : true;
+                menu.innerHTML = `
+                    <div class="menu-item" data-command="toggle-borders" style="font-weight: 600; color: #2563eb;">
+                        ${hasHiddenBorders ? '👁️ Show Inner Table Borders' : '🙈 Hide Inner Table Borders'}
+                    </div>
+                    <div class="menu-item" data-command="toggle-expand-entities" style="font-weight: 600; color: #2563eb;">
+                        ${expandsEntities ? '🔒 Shrink Content to Fixed Preview Size' : '🧩 Expand Preview Cells for Entities'}
+                    </div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" data-command="row" data-arg="0">🔺 Insert Inner Row Above</div>
+                    <div class="menu-item" data-command="row" data-arg="1">🔻 Insert Inner Row Below</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item" data-command="col" data-arg="0">⏪ Insert Inner Column Left</div>
+                    <div class="menu-item" data-command="col" data-arg="1">⏩ Insert Inner Column Right</div>
+                    <div class="menu-divider"></div>
+                    <div class="menu-item menu-item-danger" data-command="delete-row">🗑️ Delete Inner Row</div>
+                    <div class="menu-item menu-item-danger" data-command="delete-col">🗑️ Delete Inner Column</div>
+                    <div class="menu-item menu-item-danger" data-command="delete-table">❌ Delete Inner Table</div>
+                `;
+                menu.style.left = `${e.pageX}px`;
+                menu.style.top = `${e.pageY}px`;
+                menu.style.display = 'block';
+                menu.querySelectorAll('.menu-item').forEach(item => {
+                    item.onclick = function(ev) {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        mutateNestedTable(
+                            nestedEmbed,
+                            cell,
+                            item.getAttribute('data-command'),
+                            parseInt(item.getAttribute('data-arg'), 10)
+                        );
+                        menu.style.display = 'none';
+                    };
+                });
+                return;
+            }
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const tableModule = workspaceQuillInstance.getModule('table');
+            if (!tableModule) return;
+
+            try {
+                const blot = Quill.find(cell);
+                if (blot && typeof blot.offset === 'function') {
+                    const index = blot.offset(workspaceQuillInstance.scroll);
+                    workspaceQuillInstance.setSelection(index, 0, Quill.sources.SILENT);
+                }
+            } catch (err) {
+                // Selection sync is best-effort
+            }
+
+            const parentTable = cell.closest('table');
+            if (!parentTable || isNestedTableElement(parentTable)) return;
+            const hasHiddenBorders = parentTable ? parentTable.classList.contains('no-border') : false;
+            const isCompact = parentTable ? parentTable.classList.contains('ql-table-compact') : false;
+            const expandsEntities = parentTable ? previewTableShouldExpandEntities(parentTable) : true;
+
+            menu.innerHTML = `
+                <div class="menu-item" data-command="select-table" style="font-weight: 600; color: #2563eb;">
+                    ⧉ Select Entire Table
+                </div>
+                <div class="menu-divider"></div>
+                <div class="menu-item" data-command="align-table" data-align="left">⬅️ Align Table Left (wrap text)</div>
+                <div class="menu-item" data-command="align-table" data-align="center">↔️ Align Table Center</div>
+                <div class="menu-item" data-command="align-table" data-align="right">➡️ Align Table Right (wrap text)</div>
+                <div class="menu-divider"></div>
+                <div class="menu-item" data-command="toggle-borders" style="font-weight: 600; color: #2563eb;">
+                    ${hasHiddenBorders ? '👁️ Show Table Borders' : '🙈 Hide Table Borders'}
+                </div>
+                <div class="menu-item" data-command="toggle-compact" style="font-weight: 600; color: #2563eb;">
+                    ${isCompact ? '📏 Use Standard Cell Minimum' : '📐 Use Compact Cell Minimum'}
+                </div>
+                <div class="menu-item" data-command="toggle-expand-entities" style="font-weight: 600; color: #2563eb;">
+                    ${expandsEntities ? '🔒 Shrink Content to Fixed Preview Size' : '🧩 Expand Preview Cells for Entities'}
+                </div>
+                <div class="menu-divider"></div>
+                <div class="menu-item" data-command="row" data-arg="0">🔺 Insert Row Above</div>
+                <div class="menu-item" data-command="row" data-arg="1">🔻 Insert Row Below</div>
+                <div class="menu-divider"></div>
+                <div class="menu-item" data-command="col" data-arg="0">⏪ Insert Column Left</div>
+                <div class="menu-item" data-command="col" data-arg="1">⏩ Insert Column Right</div>
+                <div class="menu-divider"></div>
+                <div class="menu-item menu-item-danger" data-command="delete-row">🗑️ Delete Current Row</div>
+                <div class="menu-item menu-item-danger" data-command="delete-col">🗑️ Delete Current Column</div>
+                <div class="menu-item menu-item-danger" data-command="delete-table">❌ Delete Entire Table</div>
+            `;
+
+            menu.style.left = `${e.pageX}px`;
+            menu.style.top = `${e.pageY}px`;
+            menu.style.display = 'block';
+
+            menu.querySelectorAll('.menu-item').forEach(item => {
+                item.onclick = function(ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    const command = item.getAttribute('data-command');
+                    const arg = parseInt(item.getAttribute('data-arg'), 10);
+
+                    if (command === 'select-table') {
+                        if (parentTable) selectWorkspaceTable(parentTable);
+                    } else if (command === 'align-table') {
+                        if (parentTable) {
+                            selectWorkspaceTable(parentTable);
+                            applyWorkspaceTableAlignment(item.getAttribute('data-align'), parentTable);
+                        }
+                    } else if (command === 'toggle-borders') {
+                        if (parentTable) {
+                            parentTable.classList.toggle('no-border');
+                            if (parentTable.classList.contains('no-border')) {
+                                parentTable.setAttribute('data-no-border', 'true');
+                            } else {
+                                parentTable.removeAttribute('data-no-border');
+                            }
+                            persistWorkspaceTableLayoutAttrs(parentTable);
+                            workspaceQuillInstance.update('user');
+                        }
+                    } else if (command === 'toggle-compact') {
+                        if (parentTable) {
+                            parentTable.classList.toggle('ql-table-compact');
+                            if (parentTable.classList.contains('ql-table-compact')) {
+                                parentTable.setAttribute('data-compact-cells', 'true');
+                            } else {
+                                parentTable.removeAttribute('data-compact-cells');
+                            }
+                            persistWorkspaceTableLayoutAttrs(parentTable);
+                            reapplyWorkspaceTableLayout(parentTable);
+                            workspaceQuillInstance.update('user');
+                        }
+                    } else if (command === 'toggle-expand-entities') {
+                        if (parentTable) {
+                            const currentlyOn = previewTableShouldExpandEntities(parentTable);
+                            const on = !currentlyOn;
+                            parentTable.classList.toggle('ql-table-expand-entities', on);
+                            parentTable.setAttribute('data-expand-entities', on ? 'true' : 'false');
+                            persistWorkspaceTableLayoutAttrs(parentTable);
+                            workspaceQuillInstance.update('user');
+                        }
+                    } else if (command === 'row') {
+                        if (arg === 0 && typeof tableModule.insertRowAbove === 'function') {
+                            tableModule.insertRowAbove();
+                        } else if (arg === 1 && typeof tableModule.insertRowBelow === 'function') {
+                            tableModule.insertRowBelow();
+                        } else if (typeof tableModule.insertRow === 'function') {
+                            tableModule.insertRow(arg);
+                        }
+                    } else if (command === 'col') {
+                        if (arg === 0 && typeof tableModule.insertColumnLeft === 'function') {
+                            tableModule.insertColumnLeft();
+                        } else if (arg === 1 && typeof tableModule.insertColumnRight === 'function') {
+                            tableModule.insertColumnRight();
+                        } else if (typeof tableModule.insertColumn === 'function') {
+                            tableModule.insertColumn(arg);
+                        }
+                    } else if (command === 'delete-row' && typeof tableModule.deleteRow === 'function') {
+                        tableModule.deleteRow();
+                    } else if (command === 'delete-col' && typeof tableModule.deleteColumn === 'function') {
+                        tableModule.deleteColumn();
+                    } else if (command === 'delete-table' && typeof tableModule.deleteTable === 'function') {
+                        tableModule.deleteTable();
+                    }
+
+                    menu.style.display = 'none';
+                    setTimeout(() => {
+                        reapplyAllWorkspaceTableLayouts();
+                        updateWorkspaceSimulationPreview();
+                    }, 0);
+                    if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+                };
+            });
+        });
+    }
+
+    function ensureTableColgroup(table, seedFromCells = true) {
+        if (!table) return null;
+        const firstRow = table.querySelector(':scope > tr, :scope > tbody > tr');
+        if (!firstRow) return null;
+        const cells = Array.from(firstRow.children).filter(el => el.matches('td, th'));
+        const colCount = cells.length;
+        if (!colCount) return null;
+        const { minCol } = getTableSizeLimits(table);
+
+        let colgroup = table.querySelector(':scope > colgroup');
+        if (!colgroup) {
+            colgroup = document.createElement('colgroup');
+            table.insertBefore(colgroup, table.firstChild);
+        }
+
+        while (colgroup.children.length < colCount) {
+            const col = document.createElement('col');
+            const idx = colgroup.children.length;
+            const width = seedFromCells && cells[idx]
+                ? Math.max(minCol, Math.round(cells[idx].getBoundingClientRect().width) || 100)
+                : Math.max(minCol, 100);
+            col.style.width = `${width}px`;
+            col.style.minWidth = `${width}px`;
+            colgroup.appendChild(col);
+        }
+        while (colgroup.children.length > colCount) {
+            colgroup.lastElementChild.remove();
+        }
+
+        if (seedFromCells) {
+            for (let i = 0; i < colCount; i++) {
+                const col = colgroup.children[i];
+                if (!col) continue;
+                const current = parseFloat(col.style.width);
+                if (!current || Number.isNaN(current)) {
+                    const measured = cells[i]
+                        ? Math.max(minCol, Math.round(cells[i].getBoundingClientRect().width) || 100)
+                        : Math.max(minCol, 100);
+                    col.style.width = `${measured}px`;
+                    col.style.minWidth = `${measured}px`;
+                } else {
+                    col.style.minWidth = `${Math.round(current)}px`;
+                }
+            }
+        }
+
+        table.style.tableLayout = 'fixed';
+        table.style.maxWidth = 'none';
+        return colgroup;
+    }
+
+    function readLiveColumnWidths(table) {
+        const { minCol } = getTableSizeLimits(table);
+        const firstRow = table.querySelector(':scope > tr, :scope > tbody > tr');
+        if (!firstRow) return [];
+        const cells = Array.from(firstRow.children).filter(el => el.matches('td, th'));
+        const colgroup = table.querySelector(':scope > colgroup');
+        const fromData = (table.getAttribute('data-col-widths') || '')
+            .split(',')
+            .map(v => parseFloat(v));
+
+        return cells.map((cell, i) => {
+            const fromCol = colgroup && colgroup.children[i]
+                ? parseFloat(colgroup.children[i].style.width)
+                : NaN;
+            const fromCellStyle = parseFloat(cell.style.width);
+            const width = (!Number.isNaN(fromCol) && fromCol > 0 ? fromCol : null)
+                || (!Number.isNaN(fromCellStyle) && fromCellStyle > 0 ? fromCellStyle : null)
+                || (!Number.isNaN(fromData[i]) && fromData[i] > 0 ? fromData[i] : null)
+                || cell.getBoundingClientRect().width
+                || 100;
+            return Math.max(minCol, Math.round(width));
+        });
+    }
+
+    function applyColumnWidths(table, widths) {
+        if (!table || !widths || !widths.length) return;
+        const { minCol } = getTableSizeLimits(table);
+        const normalized = widths.map(w => Math.max(minCol, Math.round(w)));
+        ensureTableColgroup(table, true);
+        const colgroup = table.querySelector(':scope > colgroup');
+        // Only direct table rows — never walk into nested ql-nested-table-inner rows
+        const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        normalized.forEach((width, i) => {
+            if (colgroup && colgroup.children[i]) {
+                colgroup.children[i].style.width = `${width}px`;
+                colgroup.children[i].style.minWidth = `${width}px`;
+            }
+            rows.forEach(tr => {
+                const cell = Array.from(tr.children).filter(el => el.matches('td, th'))[i];
+                if (cell) {
+                    cell.style.width = `${width}px`;
+                    cell.style.minWidth = `${width}px`;
+                }
+            });
+        });
+        const total = normalized.reduce((a, b) => a + b, 0);
+        table.style.tableLayout = 'fixed';
+        table.style.width = `${total}px`;
+        table.style.minWidth = `${total}px`;
+        table.style.maxWidth = 'none';
+        table.setAttribute('data-col-widths', normalized.join(','));
+    }
+
+    function setRowHeightExclusive(row, heightPx, table = null) {
+        if (!row) return;
+        const hostTable = table || row.closest('table');
+        const { minRow } = getTableSizeLimits(hostTable);
+        const height = Math.max(minRow, Math.round(heightPx));
+        row.style.height = `${height}px`;
+        row.style.minHeight = `${height}px`;
+        Array.from(row.children).forEach(td => {
+            if (!td.matches('td, th')) return;
+            td.style.height = `${height}px`;
+            td.style.minHeight = `${height}px`;
+        });
+    }
+
+    function setupWorkspaceTableResize() {
+        if (tableResizeBound || !htmlCanvasEditor) return;
+        tableResizeBound = true;
+
+        const EDGE_PX = 4;
+        const SELECT_INSET_PX = 4;
+
+        function pointerDeepInsideOuterCell(clientX, clientY) {
+            const cell = getOuterQuillCellFromPoint(clientX, clientY);
+            if (!cell) return null;
+            if (distanceToCellEdges(clientX, clientY, cell) <= SELECT_INSET_PX) return null;
+            return cell;
+        }
+
+        function hitTestTableGrid(table, clientX, clientY, extras = {}) {
+            const tableRect = table.getBoundingClientRect();
+            if (
+                clientX < tableRect.left - EDGE_PX ||
+                clientX > tableRect.right + EDGE_PX ||
+                clientY < tableRect.top - EDGE_PX ||
+                clientY > tableRect.bottom + EDGE_PX
+            ) {
+                return null;
+            }
+
+            const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+            if (!rows.length) return null;
+            const firstRowCells = Array.from(rows[0].children).filter(el => el.matches('td, th'));
+            if (!firstRowCells.length) return null;
+
+            for (let colIndex = 0; colIndex < firstRowCells.length; colIndex++) {
+                const boundaryX = firstRowCells[colIndex].getBoundingClientRect().right;
+                if (
+                    Math.abs(clientX - boundaryX) <= EDGE_PX &&
+                    clientY >= tableRect.top - EDGE_PX &&
+                    clientY <= tableRect.bottom + EDGE_PX
+                ) {
+                    return {
+                        type: 'col',
+                        table,
+                        row: rows[0],
+                        rowIndex: 0,
+                        colIndex,
+                        cell: firstRowCells[colIndex],
+                        ...extras
+                    };
+                }
+            }
+
+            for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+                const row = rows[rowIndex];
+                const rowCells = Array.from(row.children).filter(el => el.matches('td, th'));
+                if (!rowCells.length) continue;
+                const boundaryY = Math.max(...rowCells.map(c => c.getBoundingClientRect().bottom));
+                if (
+                    Math.abs(clientY - boundaryY) <= EDGE_PX &&
+                    clientX >= tableRect.left - EDGE_PX &&
+                    clientX <= tableRect.right + EDGE_PX
+                ) {
+                    return {
+                        type: 'row',
+                        table,
+                        row,
+                        rowIndex,
+                        colIndex: 0,
+                        cell: rowCells[0],
+                        ...extras
+                    };
+                }
+            }
+            return null;
+        }
+
+        function findResizeTarget(clientX, clientY) {
+            if (!workspaceQuillInstance) return null;
+
+            // Clicks deep inside a normal outer cell (esp. empty ones) must never
+            // start a resize — Quill only places a caret there if default isn't canceled.
+            const outerCell = getOuterQuillCellFromPoint(clientX, clientY);
+            if (
+                outerCell &&
+                !outerCell.classList.contains('ql-has-nested-table') &&
+                distanceToCellEdges(clientX, clientY, outerCell) > SELECT_INSET_PX
+            ) {
+                return null;
+            }
+
+            // Prefer nested edges when the pointer is over/near nested, so coinciding
+            // outer walls don't steal nested resize — but only after the empty-cell guard.
+            const nestedTables = Array.from(
+                workspaceQuillInstance.root.querySelectorAll('table.ql-nested-table-inner')
+            );
+            for (const table of nestedTables) {
+                const embed = table.closest('.ql-workspace-nested-table');
+                const tableRect = table.getBoundingClientRect();
+                const nearNested = (
+                    clientX >= tableRect.left - EDGE_PX &&
+                    clientX <= tableRect.right + EDGE_PX &&
+                    clientY >= tableRect.top - EDGE_PX &&
+                    clientY <= tableRect.bottom + EDGE_PX
+                );
+                if (!nearNested) continue;
+
+                // If the top hit is another outer cell (not the nested embed), skip nest prefer
+                const stack = (typeof document.elementsFromPoint === 'function')
+                    ? document.elementsFromPoint(clientX, clientY)
+                    : [document.elementFromPoint(clientX, clientY)].filter(Boolean);
+                const overNested = stack.some(el =>
+                    el && el.closest && el.closest('.ql-workspace-nested-table') === embed
+                );
+                if (!overNested && outerCell && !outerCell.classList.contains('ql-has-nested-table')) {
+                    continue;
+                }
+
+                const hit = hitTestTableGrid(table, clientX, clientY, {
+                    isNested: true,
+                    nestedEmbed: embed
+                });
+                if (hit) return hit;
+            }
+
+            // Empty/short outer cells: don't steal clicks that are clearly inside a cell
+            if (pointerDeepInsideOuterCell(clientX, clientY)) return null;
+
+            const tables = queryWorkspaceQuillTables(workspaceQuillInstance.root);
+            for (const table of tables) {
+                const hit = hitTestTableGrid(table, clientX, clientY, { isNested: false });
+                if (hit) return hit;
+            }
+            return null;
+        }
+
+        function clearResizeHoverCursor() {
+            const root = workspaceQuillInstance?.root;
+            if (!root) return;
+            root.classList.remove('workspace-col-resize', 'workspace-row-resize');
+            root.style.cursor = '';
+            if (htmlCanvasEditor) htmlCanvasEditor.style.cursor = '';
+        }
+
+        function setResizeHoverCursor(type) {
+            const root = workspaceQuillInstance?.root;
+            if (!root) return;
+            root.classList.remove('workspace-col-resize', 'workspace-row-resize');
+            if (type === 'col') root.classList.add('workspace-col-resize');
+            if (type === 'row') root.classList.add('workspace-row-resize');
+        }
+
+        htmlCanvasEditor.addEventListener('mousemove', function(e) {
+            if (tableResizeState) return;
+            const hit = findResizeTarget(e.clientX, e.clientY);
+            if (hit) setResizeHoverCursor(hit.type);
+            else clearResizeHoverCursor();
+        }, true);
+
+        htmlCanvasEditor.addEventListener('mousedown', function(e) {
+            if (e.button !== 0) return;
+            const hit = findResizeTarget(e.clientX, e.clientY);
+            if (!hit) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+
+            if (hit.isNested) {
+                const embed = hit.nestedEmbed;
+                const config = parseNestedTableConfig(embed?.getAttribute('data-value') || '');
+                applyNestedInnerLayout(hit.table, config.colWidths, config.rowHeights);
+                if (hit.type === 'col') {
+                    tableResizeState = {
+                        type: 'col',
+                        isNested: true,
+                        nestedEmbed: embed,
+                        table: hit.table,
+                        colIndex: hit.colIndex,
+                        startX: e.clientX,
+                        startWidth: config.colWidths[hit.colIndex],
+                        widths: config.colWidths.slice(),
+                        heights: config.rowHeights.slice()
+                    };
+                } else {
+                    tableResizeState = {
+                        type: 'row',
+                        isNested: true,
+                        nestedEmbed: embed,
+                        table: hit.table,
+                        row: hit.row,
+                        rowIndex: hit.rowIndex,
+                        startY: e.clientY,
+                        startHeight: config.rowHeights[hit.rowIndex],
+                        widths: config.colWidths.slice(),
+                        heights: config.rowHeights.slice()
+                    };
+                }
+                setResizeHoverCursor(hit.type);
+            } else if (hit.type === 'col') {
+                const widths = readLiveColumnWidths(hit.table);
+                applyColumnWidths(hit.table, widths);
+                tableResizeState = {
+                    type: 'col',
+                    isNested: false,
+                    table: hit.table,
+                    colIndex: hit.colIndex,
+                    startX: e.clientX,
+                    startWidth: widths[hit.colIndex],
+                    widths: widths.slice()
+                };
+                setResizeHoverCursor('col');
+            } else {
+                const heights = Array.from(hit.table.querySelectorAll(':scope > tr, :scope > tbody > tr')).map(tr => {
+                    const h = Math.max(
+                        getTableSizeLimits(hit.table).minRow,
+                        Math.round(tr.getBoundingClientRect().height) || 36
+                    );
+                    setRowHeightExclusive(tr, h, hit.table);
+                    return h;
+                });
+                tableResizeState = {
+                    type: 'row',
+                    isNested: false,
+                    table: hit.table,
+                    row: hit.row,
+                    rowIndex: hit.rowIndex,
+                    startY: e.clientY,
+                    startHeight: heights[hit.rowIndex] || hit.row.getBoundingClientRect().height,
+                    heights: heights.slice()
+                };
+                setResizeHoverCursor('row');
+            }
+
+            workspaceQuillInstance?.root?.classList.add('workspace-table-resizing');
+        }, true);
+
+        document.addEventListener('mousemove', function(e) {
+            if (!tableResizeState) return;
+            e.preventDefault();
+
+            if (tableResizeState.isNested) {
+                if (tableResizeState.type === 'col') {
+                    const dx = e.clientX - tableResizeState.startX;
+                    const newWidth = Math.max(NESTED_MIN_COL, Math.round(tableResizeState.startWidth + dx));
+                    tableResizeState.widths[tableResizeState.colIndex] = newWidth;
+                    applyNestedInnerLayout(tableResizeState.table, tableResizeState.widths, tableResizeState.heights);
+                    const config = parseNestedTableConfig(tableResizeState.nestedEmbed.getAttribute('data-value') || '');
+                    config.colWidths = tableResizeState.widths.slice();
+                    config.rowHeights = tableResizeState.heights.slice();
+                    nodeSetNestedConfig(tableResizeState.nestedEmbed, config);
+                    fitOuterCellToNestedEmbed(tableResizeState.nestedEmbed);
+                } else {
+                    const dy = e.clientY - tableResizeState.startY;
+                    const newHeight = Math.max(NESTED_MIN_ROW, Math.round(tableResizeState.startHeight + dy));
+                    tableResizeState.heights[tableResizeState.rowIndex] = newHeight;
+                    applyNestedInnerLayout(tableResizeState.table, tableResizeState.widths, tableResizeState.heights);
+                    const config = parseNestedTableConfig(tableResizeState.nestedEmbed.getAttribute('data-value') || '');
+                    config.colWidths = tableResizeState.widths.slice();
+                    config.rowHeights = tableResizeState.heights.slice();
+                    nodeSetNestedConfig(tableResizeState.nestedEmbed, config);
+                    fitOuterCellToNestedEmbed(tableResizeState.nestedEmbed);
+                }
+                return;
+            }
+
+            if (tableResizeState.type === 'col') {
+                const { minCol } = getTableSizeLimits(tableResizeState.table);
+                const dx = e.clientX - tableResizeState.startX;
+                const newWidth = Math.max(minCol, Math.round(tableResizeState.startWidth + dx));
+                tableResizeState.widths[tableResizeState.colIndex] = newWidth;
+                applyColumnWidths(tableResizeState.table, tableResizeState.widths);
+                scaleNestedTablesInOuterTable(tableResizeState.table, tableResizeState.colIndex, null);
+            } else if (tableResizeState.type === 'row') {
+                const dy = e.clientY - tableResizeState.startY;
+                const newHeight = Math.max(
+                    getTableSizeLimits(tableResizeState.table).minRow,
+                    Math.round(tableResizeState.startHeight + dy)
+                );
+                tableResizeState.heights[tableResizeState.rowIndex] = newHeight;
+                setRowHeightExclusive(tableResizeState.row, newHeight, tableResizeState.table);
+                scaleNestedTablesInOuterTable(tableResizeState.table, null, tableResizeState.rowIndex);
+            }
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (!tableResizeState) return;
+            const state = tableResizeState;
+            const table = state.table;
+
+            if (state.isNested) {
+                const config = parseNestedTableConfig(state.nestedEmbed.getAttribute('data-value') || '');
+                config.colWidths = state.widths.slice();
+                config.rowHeights = state.heights.slice();
+                nodeSetNestedConfig(state.nestedEmbed, config);
+                applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
+                fitOuterCellToNestedEmbed(state.nestedEmbed);
+                workspaceQuillInstance?.root?.classList.remove('workspace-table-resizing');
+                tableResizeState = null;
+                clearResizeHoverCursor();
+                updateWorkspaceSimulationPreview();
+                if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+                return;
+            }
+
+            const finalWidths = state.type === 'col' ? state.widths.slice() : null;
+            const finalHeights = state.type === 'row' ? state.heights.slice() : null;
+            const affectedCol = state.type === 'col' ? state.colIndex : null;
+            const affectedRow = state.type === 'row' ? state.rowIndex : null;
+
+            persistWorkspaceTableLayoutAttrs(table, finalWidths, finalHeights);
+            if (finalWidths) applyColumnWidths(table, finalWidths);
+            if (finalHeights) {
+                const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+                finalHeights.forEach((h, i) => {
+                    if (rows[i]) setRowHeightExclusive(rows[i], h, table);
+                });
+            }
+            scaleNestedTablesInOuterTable(table, affectedCol, affectedRow);
+
+            workspaceQuillInstance?.root?.classList.remove('workspace-table-resizing');
+            tableResizeState = null;
+            clearResizeHoverCursor();
+
+            requestAnimationFrame(() => {
+                if (finalWidths) {
+                    table.setAttribute('data-col-widths', finalWidths.join(','));
+                    applyColumnWidths(table, finalWidths);
+                }
+                if (finalHeights) {
+                    table.setAttribute('data-row-heights', finalHeights.join(','));
+                }
+                reapplyWorkspaceTableLayout(table);
+                scaleNestedTablesInOuterTable(table, affectedCol, affectedRow);
+                updateWorkspaceSimulationPreview();
+            });
+            if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+        });
+    }
+
+    document.addEventListener('click', function(e) {
+        if (!tableSizePicker || tableSizePicker.style.display === 'none') return;
+        if (tableSizePicker.contains(e.target)) return;
+        if (e.target.closest && e.target.closest('.ql-table')) return;
+        hideWorkspaceTableSizePicker();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') hideWorkspaceTableSizePicker();
+    });
+
     // 🎯 5. DRAFT PROGRESS SAVE ACTION HANDLER
     const draftConfirmModal = document.getElementById('draft-save-confirm-modal');
     const draftConfirmReasonsList = document.getElementById('draft-save-confirm-reasons');
@@ -1406,7 +5418,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function collectWorkspaceSavePayload() {
         const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
         const titleValue = overlayTitleField ? overlayTitleField.value.trim() : '';
-        const canvasHtml = workspaceQuillInstance ? workspaceQuillInstance.root.innerHTML.trim() : '';
+        const canvasHtml = getWorkspaceQuillHtmlForSave();
         const inputsPayloadList = [];
         const activeCards = Array.from(document.querySelectorAll('.workspace-block-card'));
 
@@ -2182,12 +6194,22 @@ document.addEventListener('DOMContentLoaded', function() {
      * @param {string} targetCanvasId - The absolute DOM selector ID of the target canvas div
      * @param {Object} graphConfig - The structured backend JSON configuration packet
      */
-    function renderGraphComponentCanvas(targetCanvasId, graphConfig) {
+    function renderGraphComponentCanvas(targetCanvasId, graphConfig, sizeOptions = {}) {
         if (!graphConfig || graphConfig.archetype !== 'graph') return;
 
         // 1. Grab the direct, native browser-compiled instance from window scope
         const activePlotEngine = window.functionPlot || (typeof functionPlot !== 'undefined' ? functionPlot : null);
         if (!activePlotEngine) return;
+
+        const targetEl = typeof targetCanvasId === 'string'
+            ? document.getElementById(targetCanvasId)
+            : null;
+        if (!targetEl) return;
+        // Clear prior SVG so re-paints inside tables don't stack / miss the node
+        targetEl.innerHTML = '';
+
+        const plotWidth = Math.max(80, Math.round(sizeOptions.width || 340));
+        const plotHeight = Math.max(80, Math.round(sizeOptions.height || 240));
 
         const xMin = graphConfig.bounds?.x_range?.min ?? -5;
         const xMax = graphConfig.bounds?.x_range?.max ?? 5;
@@ -2213,11 +6235,11 @@ document.addEventListener('DOMContentLoaded', function() {
             nSamples: 250
         }));
 
-        // 🚀 Step 1: Initialize/Update the plot
+        // 🚀 Step 1: Initialize/Update the plot (use element target — safer than #id in nested tables)
         const chartInstance = activePlotEngine({
-            target: `#${targetCanvasId}`,
-            width: 340,
-            height: 240,
+            target: targetEl,
+            width: plotWidth,
+            height: plotHeight,
             disableZoom: true,
             grid: showGrid,
             xAxis: {

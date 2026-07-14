@@ -73,14 +73,11 @@ function toggleIntroEditor(showEditor) {
                                 return delta;
                             }],
                             ['table', function(node, delta) {
+                                // Keep border visibility on the TABLE node only.
+                                // Never rewrite attributes.table (Quill row id) into an object —
+                                // that serializes as "[object Object]" and collapses all rows.
                                 if (node && node.classList && node.classList.contains('no-border')) {
-                                    if (delta && typeof delta.forEach === 'function') {
-                                        delta.forEach(op => {
-                                            if (op && op.attributes && op.attributes.table) {
-                                                op.attributes.table = { ...op.attributes.table, className: 'no-border' };
-                                            }
-                                        });
-                                    }
+                                    node.setAttribute('data-no-border', 'true');
                                 }
                                 return delta;
                             }]
@@ -136,9 +133,9 @@ function toggleIntroEditor(showEditor) {
                 }
             }
 
-            // Sanitize literal "[object Object]" instances in the string code
+            // Sanitize corrupted Quill table row ids that flatten multi-row tables on reload
             if (cleanHtml) {
-                cleanHtml = cleanHtml.replace(/data-row="\[object Object\]"/g, 'data-row="true"');
+                cleanHtml = cleanHtml.replace(/data-row="\[object Object\]"/g, '');
             }
 
             // 🎯 FIXED STRATEGY: Parse HTML string into an isolated DOM tree to prune KaTeX remnants perfectly

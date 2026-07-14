@@ -164,6 +164,694 @@
     visibility: visible;
     opacity: 1;
 }
+
+/* ==========================================================================
+   Workspace Quill tables (editor + simulation preview)
+   ========================================================================== */
+#problem-workspace-overlay .ql-editor table,
+#simulation-render-target table {
+    width: auto;
+    max-width: none; /* allow a column widen without squeezing siblings */
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    table-layout: fixed;
+    position: relative;
+    display: table;
+}
+
+/* Floated tables wrap surrounding paragraph text like images */
+#problem-workspace-overlay .ql-editor table.ql-table-align-left,
+#simulation-render-target table.ql-table-align-left {
+    float: left;
+    clear: none;
+    display: table;
+    margin: 0.25rem 12px 0.25rem 0;
+    vertical-align: top;
+}
+
+#problem-workspace-overlay .ql-editor table.ql-table-align-center,
+#simulation-render-target table.ql-table-align-center {
+    float: none;
+    display: table;
+    margin-left: auto;
+    margin-right: auto;
+    clear: none;
+}
+
+#problem-workspace-overlay .ql-editor table.ql-table-align-right,
+#simulation-render-target table.ql-table-align-right {
+    float: right;
+    clear: none;
+    display: table;
+    margin: 0.25rem 0 0.25rem 12px;
+    vertical-align: top;
+}
+
+/* Allow paragraphs to share horizontal space with floated tables */
+#problem-workspace-overlay .ql-editor > p,
+#simulation-render-target > p {
+    clear: none;
+}
+
+/* Match Quill image float wrappers so the editor grows past floated tables */
+#problem-workspace-overlay .ql-editor::after,
+#simulation-render-target::after {
+    content: "";
+    display: table;
+    clear: both;
+}
+
+#editor-html-insert-canvas.ql-container,
+#editor-html-insert-canvas .ql-editor {
+    overflow-x: auto;
+}
+
+/* Per-cell text alignment (Quill puts ql-align-* on the TD) */
+#problem-workspace-overlay .ql-editor td.ql-align-left,
+#problem-workspace-overlay .ql-editor th.ql-align-left,
+#problem-workspace-overlay .ql-editor .ql-align-left,
+#simulation-render-target td.ql-align-left,
+#simulation-render-target th.ql-align-left,
+#simulation-render-target .ql-align-left {
+    text-align: left !important;
+}
+
+#problem-workspace-overlay .ql-editor td.ql-align-center,
+#problem-workspace-overlay .ql-editor th.ql-align-center,
+#problem-workspace-overlay .ql-editor .ql-align-center,
+#simulation-render-target td.ql-align-center,
+#simulation-render-target th.ql-align-center,
+#simulation-render-target .ql-align-center {
+    text-align: center !important;
+}
+
+#problem-workspace-overlay .ql-editor td.ql-align-right,
+#problem-workspace-overlay .ql-editor th.ql-align-right,
+#problem-workspace-overlay .ql-editor .ql-align-right,
+#simulation-render-target td.ql-align-right,
+#simulation-render-target th.ql-align-right,
+#simulation-render-target .ql-align-right {
+    text-align: right !important;
+}
+
+#problem-workspace-overlay .ql-editor td.ql-align-justify,
+#problem-workspace-overlay .ql-editor th.ql-align-justify,
+#problem-workspace-overlay .ql-editor .ql-align-justify,
+#simulation-render-target td.ql-align-justify,
+#simulation-render-target th.ql-align-justify,
+#simulation-render-target .ql-align-justify {
+    text-align: justify !important;
+}
+
+/* Whole-table object selection chrome (outline only — never table ::before/::after) */
+#problem-workspace-overlay .ql-editor table.ql-table-object-selected {
+    outline: 2px solid #2563eb;
+    outline-offset: 3px;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+}
+
+/*
+ * Hover cue + tips live on the first cell — table ::before/::after create
+ * anonymous table boxes and force equal column widths in Chromium.
+ */
+#problem-workspace-overlay .ql-editor table:not(.ql-nested-table-inner) > tr:first-child > td:first-child,
+#problem-workspace-overlay .ql-editor table:not(.ql-nested-table-inner) > tbody > tr:first-child > td:first-child {
+    position: relative;
+}
+
+#problem-workspace-overlay .ql-editor table:not(.ql-table-object-selected):not(.ql-nested-table-inner):hover > tr:first-child > td:first-child::before,
+#problem-workspace-overlay .ql-editor table:not(.ql-table-object-selected):not(.ql-nested-table-inner):hover > tbody > tr:first-child > td:first-child::before {
+    content: "⧉";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 18px;
+    line-height: 18px;
+    text-align: center;
+    background: #1e293b;
+    color: #f8fafc;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 30;
+}
+
+#problem-workspace-overlay .ql-editor table.ql-table-object-selected > tr:first-child > td:first-child::before,
+#problem-workspace-overlay .ql-editor table.ql-table-object-selected > tbody > tr:first-child > td:first-child::before {
+    content: "Table selected — align moves whole table";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    background: #1d4ed8;
+    color: #f8fafc;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 30;
+    white-space: nowrap;
+    width: max-content;
+    max-width: none;
+}
+
+#problem-workspace-overlay .ql-editor table td,
+#problem-workspace-overlay .ql-editor table th,
+#simulation-render-target table td,
+#simulation-render-target table th {
+    border: 1px solid #cbd5e1;
+    padding: 8px 10px;
+    min-width: 40px;
+    min-height: 1.75em;
+    vertical-align: top;
+    box-sizing: border-box;
+    overflow: hidden;
+    cursor: text;
+}
+
+/* Preview-only: when expand-for-entities is on, allow rendered entities to show */
+#simulation-render-target table.ql-table-expand-entities > tr > td,
+#simulation-render-target table.ql-table-expand-entities > tr > th,
+#simulation-render-target table.ql-table-expand-entities > tbody > tr > td,
+#simulation-render-target table.ql-table-expand-entities > tbody > tr > th,
+#simulation-render-target table.ql-nested-table-inner.ql-table-expand-entities > tr > td,
+#simulation-render-target table.ql-nested-table-inner.ql-table-expand-entities > tr > th,
+#simulation-render-target table.ql-nested-table-inner.ql-table-expand-entities > tbody > tr > td,
+#simulation-render-target table.ql-nested-table-inner.ql-table-expand-entities > tbody > tr > th {
+    overflow: visible !important;
+}
+
+/* Fixed-mode preview: scale wrapper shrinks large entity markup into the locked cell */
+#simulation-render-target table.ql-table-fixed-entities > tr > td,
+#simulation-render-target table.ql-table-fixed-entities > tr > th,
+#simulation-render-target table.ql-table-fixed-entities > tbody > tr > td,
+#simulation-render-target table.ql-table-fixed-entities > tbody > tr > th,
+#simulation-render-target table.ql-nested-table-inner.ql-table-fixed-entities > tr > td,
+#simulation-render-target table.ql-nested-table-inner.ql-table-fixed-entities > tr > th,
+#simulation-render-target table.ql-nested-table-inner.ql-table-fixed-entities > tbody > tr > td,
+#simulation-render-target table.ql-nested-table-inner.ql-table-fixed-entities > tbody > tr > th {
+    overflow: hidden !important;
+}
+
+#simulation-render-target .ql-preview-fit-viewport {
+    box-sizing: border-box;
+    overflow: hidden;
+    position: relative;
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+#simulation-render-target .ql-preview-fit-scale {
+    transform-origin: top left;
+    max-width: none;
+}
+
+#problem-workspace-overlay .ql-editor table.ql-table-compact td,
+#problem-workspace-overlay .ql-editor table.ql-table-compact th,
+#simulation-render-target table.ql-table-compact td,
+#simulation-render-target table.ql-table-compact th {
+    padding: 1px 2px;
+    min-width: 14px;
+}
+
+#problem-workspace-overlay .ql-editor.workspace-col-resize,
+#problem-workspace-overlay .ql-editor.workspace-col-resize * {
+    cursor: col-resize !important;
+}
+
+#problem-workspace-overlay .ql-editor.workspace-row-resize,
+#problem-workspace-overlay .ql-editor.workspace-row-resize * {
+    cursor: row-resize !important;
+}
+
+/* Outline (not border) so hover chrome never reflows column widths */
+#problem-workspace-overlay .ql-editor table:not(.ql-nested-table-inner):hover {
+    outline: 1px dashed #3b82f6;
+    outline-offset: 2px;
+}
+
+/* Floating tip is positioned in JS (fixed) so editor overflow never clips it */
+
+/* Nested table embeds: flush with host cell (absolute fill so Quill leftover nodes can't offset it) */
+#problem-workspace-overlay .ql-editor td:has(.ql-workspace-nested-table),
+#problem-workspace-overlay .ql-editor th:has(.ql-workspace-nested-table),
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table,
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table,
+#simulation-render-target td:has(.ql-workspace-nested-table),
+#simulation-render-target th:has(.ql-workspace-nested-table),
+#simulation-render-target td.ql-has-nested-table,
+#simulation-render-target th.ql-has-nested-table {
+    padding: 0 !important;
+    vertical-align: top !important;
+    position: relative !important;
+    overflow: visible !important;
+    /* Do not raise host z-index — that stacking context steals clicks from
+       neighboring empty outer cells in the same table. */
+    z-index: auto;
+}
+
+/*
+ * Host cells that contain a bordered nested table must not paint any border.
+ * With border-collapse on the outer table, the host/neighbor collapsed border
+ * paints on top of the nested table’s right/bottom edges and hides them —
+ * especially when the outer table is .no-border (dashed/none guides).
+ */
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tr > td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tr > th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#simulation-render-target td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#simulation-render-target th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#simulation-render-target table.no-border > tr > td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#simulation-render-target table.no-border > tr > th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#simulation-render-target table.no-border > tbody > tr > td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#simulation-render-target table.no-border > tbody > tr > th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)) {
+    border: none !important;
+    background-color: transparent !important;
+}
+
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table > .ql-workspace-nested-table,
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table > .ql-workspace-nested-table,
+#simulation-render-target td.ql-has-nested-table > .ql-workspace-nested-table,
+#simulation-render-target th.ql-has-nested-table > .ql-workspace-nested-table {
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-sizing: border-box !important;
+    /* Quill Embed inserts \uFEFF before/after content — kill their line box */
+    font-size: 0 !important;
+    line-height: 0 !important;
+    max-width: none !important;
+    overflow: visible !important;
+    z-index: 5 !important;
+}
+
+#problem-workspace-overlay .ql-editor .ql-workspace-nested-table > span,
+#simulation-render-target .ql-workspace-nested-table > span {
+    display: block !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    box-sizing: border-box !important;
+}
+
+#problem-workspace-overlay .ql-editor .ql-workspace-nested-table,
+#simulation-render-target .ql-workspace-nested-table {
+    display: block !important;
+    vertical-align: top !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    max-width: none;
+    box-sizing: border-box;
+    font-size: 0;
+    line-height: 0;
+}
+
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner,
+#simulation-render-target .ql-nested-table-inner {
+    width: 100% !important;
+    height: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin: 0 !important;
+    float: none !important;
+    border-collapse: separate !important;
+    border-spacing: 0 !important;
+    table-layout: fixed !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    background: transparent !important;
+    vertical-align: top;
+    font-size: 1rem;
+    line-height: 1.4;
+    z-index: 6 !important;
+    overflow: visible !important;
+}
+
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner td,
+#simulation-render-target .ql-nested-table-inner td {
+    border: none;
+    padding: 2px 4px !important;
+    min-width: 14px !important;
+    background: transparent !important;
+    vertical-align: top;
+    box-sizing: border-box;
+    word-break: break-word;
+    font-size: inherit;
+    line-height: 1.4;
+    white-space: normal;
+    position: relative;
+    z-index: 6;
+}
+
+/*
+ * Perimeter via inset outline (paints with the nested stacking context, above
+ * outer collapsed borders). Internal grid via cell right/bottom only.
+ */
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border),
+#simulation-render-target .ql-nested-table-inner:not(.no-border) {
+    border: none !important;
+    outline: 1px solid #94a3b8 !important;
+    outline-offset: -1px !important;
+}
+
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tr > td,
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tr > th,
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tbody > tr > td,
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tbody > tr > th,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tr > td,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tr > th,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tbody > tr > td,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tbody > tr > th {
+    border: none !important;
+}
+
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tr > td:not(:last-child),
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tr > th:not(:last-child),
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tbody > tr > td:not(:last-child),
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tbody > tr > th:not(:last-child),
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tr > td:not(:last-child),
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tr > th:not(:last-child),
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tbody > tr > td:not(:last-child),
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tbody > tr > th:not(:last-child) {
+    border-right: 1px solid #94a3b8 !important;
+}
+
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tr:not(:last-child) > td,
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tr:not(:last-child) > th,
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tbody > tr:not(:last-child) > td,
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner:not(.no-border) > tbody > tr:not(:last-child) > th,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tr:not(:last-child) > td,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tr:not(:last-child) > th,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tbody > tr:not(:last-child) > td,
+#simulation-render-target .ql-nested-table-inner:not(.no-border) > tbody > tr:not(:last-child) > th {
+    border-bottom: 1px solid #94a3b8 !important;
+}
+
+/* Quill size classes inside nested cells (must beat any parent font rules) */
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner .ql-size-small,
+#simulation-render-target .ql-nested-table-inner .ql-size-small {
+    font-size: 0.75em !important;
+}
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner .ql-size-large,
+#simulation-render-target .ql-nested-table-inner .ql-size-large {
+    font-size: 1.5em !important;
+}
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner .ql-size-huge,
+#simulation-render-target .ql-nested-table-inner .ql-size-huge {
+    font-size: 2.5em !important;
+}
+
+/* Preserve soft line breaks in nested cells (editor + preview) */
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner td br,
+#simulation-render-target .ql-nested-table-inner td br {
+    display: block;
+    line-height: 1.4;
+    min-height: 1.2em;
+}
+
+/* Nested KaTeX spans inserted into nested cells */
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner .workspace-nested-latex,
+#simulation-render-target .ql-nested-table-inner .workspace-nested-latex {
+    display: inline-block;
+    margin: 0 2px;
+    vertical-align: middle;
+    font-size: 1rem !important;
+    line-height: normal !important;
+}
+
+/* Nested images (DOM imgs — Quill image embeds are not used inside nested cells) */
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner .workspace-nested-image,
+#simulation-render-target .ql-nested-table-inner .workspace-nested-image {
+    max-width: 100% !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain;
+    display: inline-block;
+    vertical-align: middle;
+    margin: 2px 0;
+}
+
+/* Do not inherit outer-table hover outline chrome onto nested tables */
+#problem-workspace-overlay .ql-editor .ql-nested-table-inner.no-border:hover {
+    outline: 1px dashed #cbd5e1 !important;
+    outline-offset: -1px !important;
+}
+
+/* Soft line breaks — zero extra height (ZWSP after carries the caret) */
+#problem-workspace-overlay .ql-editor .ql-soft-break,
+#simulation-render-target .ql-soft-break {
+    display: block;
+    width: 100%;
+    height: 0;
+    line-height: 0;
+    font-size: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    user-select: none;
+    pointer-events: none;
+}
+
+/* Host cell with nested table: no padding gap / no other content chrome */
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table,
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table,
+#simulation-render-target td.ql-has-nested-table,
+#simulation-render-target th.ql-has-nested-table {
+    padding: 0 !important;
+    vertical-align: top !important;
+}
+
+/* Quill leftover break/zwsp in exclusive host cells must not occupy layout space */
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table > br,
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table > br,
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table > .ql-soft-break,
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table > .ql-soft-break {
+    display: none !important;
+}
+
+/* Images always fit their table cell (editor + preview) */
+#problem-workspace-overlay .ql-editor table td img,
+#problem-workspace-overlay .ql-editor table th img,
+#simulation-render-target table td img,
+#simulation-render-target table th img {
+    max-width: 100% !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain;
+    display: block;
+    vertical-align: top;
+}
+
+#workspace-quill-table-hover-tip {
+    position: fixed;
+    display: none;
+    background-color: #1e293b;
+    color: #f8fafc;
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 4px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    pointer-events: none;
+    z-index: 10050;
+    white-space: nowrap;
+}
+
+#problem-workspace-overlay .ql-editor table.no-border > tr > td,
+#problem-workspace-overlay .ql-editor table.no-border > tr > th,
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > td,
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > th,
+#simulation-render-target table.no-border > tr > td,
+#simulation-render-target table.no-border > tr > th,
+#simulation-render-target table.no-border > tbody > tr > td,
+#simulation-render-target table.no-border > tbody > tr > th {
+    border: none !important;
+}
+
+/* Editor-only dashed guides — direct cells only so nested tables stay independent */
+#problem-workspace-overlay .ql-editor table.no-border > tr > td,
+#problem-workspace-overlay .ql-editor table.no-border > tr > th,
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > td,
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > th {
+    border: 1px dashed #cbd5e1 !important;
+    background-color: rgba(248, 250, 252, 0.5) !important;
+}
+
+/* Re-assert: bordered nested hosts never take outer dashed/solid borders (would cover nested edges) */
+#problem-workspace-overlay .ql-editor td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tr > td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tr > th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > td.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)),
+#problem-workspace-overlay .ql-editor table.no-border > tbody > tr > th.ql-has-nested-table:has(.ql-nested-table-inner:not(.no-border)) {
+    border: none !important;
+    background-color: transparent !important;
+}
+
+/* Nested tables keep their own no-border treatment when toggled */
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border {
+    outline: 1px dashed #cbd5e1 !important;
+    outline-offset: -1px !important;
+    border: none !important;
+}
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tr > td,
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tr > th,
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tbody > tr > td,
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tbody > tr > th {
+    border: none !important;
+    background-color: rgba(248, 250, 252, 0.5) !important;
+}
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tr > td:not(:last-child),
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tr > th:not(:last-child),
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tbody > tr > td:not(:last-child),
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tbody > tr > th:not(:last-child) {
+    border-right: 1px dashed #cbd5e1 !important;
+}
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tr:not(:last-child) > td,
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tr:not(:last-child) > th,
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tbody > tr:not(:last-child) > td,
+#problem-workspace-overlay .ql-editor table.ql-nested-table-inner.no-border > tbody > tr:not(:last-child) > th {
+    border-bottom: 1px dashed #cbd5e1 !important;
+}
+
+#simulation-render-target table.ql-nested-table-inner.no-border {
+    outline: none !important;
+    border: none !important;
+}
+#simulation-render-target table.ql-nested-table-inner.no-border > tr > td,
+#simulation-render-target table.ql-nested-table-inner.no-border > tr > th,
+#simulation-render-target table.ql-nested-table-inner.no-border > tbody > tr > td,
+#simulation-render-target table.ql-nested-table-inner.no-border > tbody > tr > th {
+    border: none !important;
+    background-color: transparent !important;
+}
+
+#problem-workspace-overlay .ql-editor.workspace-table-resizing,
+#problem-workspace-overlay .ql-editor.workspace-table-resizing * {
+    user-select: none !important;
+}
+
+#workspace-table-size-picker {
+    position: fixed;
+    display: none;
+    z-index: 10020;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.12), 0 4px 6px -4px rgba(0, 0, 0, 0.08);
+    padding: 10px;
+    min-width: 148px;
+}
+
+#workspace-table-size-picker .table-size-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 22px);
+    grid-template-rows: repeat(5, 22px);
+    gap: 3px;
+}
+
+#workspace-table-size-picker .table-size-cell {
+    width: 22px;
+    height: 22px;
+    border: 1px solid #cbd5e1;
+    border-radius: 2px;
+    background: #f8fafc;
+    box-sizing: border-box;
+}
+
+#workspace-table-size-picker .table-size-cell.is-active {
+    background: #dbeafe;
+    border-color: #3b82f6;
+}
+
+#workspace-table-size-picker .table-size-label {
+    margin-top: 8px;
+    text-align: center;
+    font-size: 0.78rem;
+    color: #475569;
+    font-weight: 600;
+}
+
+#workspace-quill-table-menu.custom-ql-context-menu {
+    position: absolute;
+    display: none;
+    background: #ffffff !important;
+    border: 1px solid #cbd5e1 !important;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1) !important;
+    border-radius: 8px !important;
+    padding: 6px 0 !important;
+    z-index: 10030 !important;
+    min-width: 190px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+#workspace-quill-table-menu .menu-item {
+    padding: 8px 14px !important;
+    font-size: 0.85rem !important;
+    color: #334155 !important;
+    cursor: pointer;
+    user-select: none;
+}
+
+#workspace-quill-table-menu .menu-item:hover {
+    background-color: #f1f5f9 !important;
+    color: #0f172a !important;
+}
+
+#workspace-quill-table-menu .menu-item-danger {
+    color: #dc2626 !important;
+}
+
+#workspace-quill-table-menu .menu-item-danger:hover {
+    background-color: #fef2f2 !important;
+    color: #991b1b !important;
+}
+
+#workspace-quill-table-menu .menu-divider {
+    height: 1px;
+    background-color: #e2e8f0;
+    margin: 4px 0;
+}
+
+/* Fallback table glyph if Quill snow does not inject an SVG for ql-table */
+#workspace-quill-toolbar-container button.ql-table:not(:has(svg))::before {
+    content: "";
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Crect x='2' y='2' width='14' height='14' fill='none' stroke='black' stroke-width='1.4'/%3E%3Cpath d='M2 7h14M2 12h14M7 2v14M12 2v14' stroke='black' stroke-width='1.4' fill='none'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 18'%3E%3Crect x='2' y='2' width='14' height='14' fill='none' stroke='black' stroke-width='1.4'/%3E%3Cpath d='M2 7h14M2 12h14M7 2v14M12 2v14' stroke='black' stroke-width='1.4' fill='none'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 </style>
 
 <div id="problem-workspace-overlay" style="display: none; position: fixed; top: 20px; left: 20px; right: 20px; bottom: 20px; background: #ffffff; border-radius: 12px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); border: 1px solid #cbd5e1; z-index: 10000; flex-direction: column; overflow: hidden;" data-current-problem-id="">
@@ -233,9 +921,9 @@
             </div>
             
             <div id="overlay-workspace-body" style="flex-grow: 1; padding: 24px; overflow: auto; display: flex; flex-direction: column; gap: 20px;">
-                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; display: flex; flex-direction: column; min-height: 300px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); position: relative; overflow: visible;">
+                <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px; display: flex; flex-direction: column; min-height: 480px; flex: 1 1 auto; box-shadow: 0 1px 3px rgba(0,0,0,0.05); position: relative; overflow: visible;">
                     
-                    <div id="workspace-quill-toolbar-container" style="border-bottom: 1px solid #cbd5e1; background: #f8fafc; padding: 4px 8px;">
+                    <div id="workspace-quill-toolbar-container" style="border-bottom: 1px solid #cbd5e1; background: #f8fafc; padding: 4px 8px; flex-shrink: 0;">
                         <span class="ql-formats">
                             <select class="ql-font"></select>
                             <select class="ql-size"></select>
@@ -262,14 +950,15 @@
                         <span class="ql-formats">
                             <button class="ql-link"></button>
                             <button class="ql-image"></button>
-                            <button class="ql-formula"></button>
+                            <button class="ql-formula" title="Insert LaTeX"></button>
+                            <button class="ql-table" title="Insert Table"></button>
                         </span>
                         <span class="ql-formats">
                             <button class="ql-clean"></button>
                         </span>
                     </div>
                     
-                    <div id="editor-html-insert-canvas" style="flex-grow: 1; padding: 20px; outline: none; min-height: 250px; max-height: 400px; font-size: 1rem; line-height: 1.6; overflow-y: auto; background: #ffffff;"></div>
+                    <div id="editor-html-insert-canvas" style="flex-grow: 1; padding: 20px; outline: none; min-height: 420px; max-height: min(70vh, 900px); font-size: 1rem; line-height: 1.6; overflow-y: auto; background: #ffffff;"></div>
                 </div>
                 
                 <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px;">
@@ -278,6 +967,26 @@
                         <p style="color: #94a3b8; font-style: italic; margin: 0;">Interactive layout testing view builds dynamically here...</p>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="workspace-table-size-picker" aria-hidden="true">
+        <div class="table-size-grid" id="workspace-table-size-grid"></div>
+        <div class="table-size-label" id="workspace-table-size-label">1 × 1</div>
+    </div>
+
+    <div id="workspace-latex-input-modal" class="modal-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15, 23, 42, 0.45); z-index: 11000; align-items: center; justify-content: center; padding: 24px; visibility: hidden; opacity: 0;">
+        <div class="modal-card" style="background: #ffffff; border-radius: 10px; box-shadow: 0 20px 40px rgba(15, 23, 42, 0.2); border: 1px solid #e2e8f0; width: 100%; max-width: 520px; padding: 20px 22px; transform: scale(1);">
+            <h3 style="margin: 0 0 8px 0; color: #0f172a; font-size: 1.1rem;">Insert LaTeX</h3>
+            <p style="margin: 0 0 12px 0; color: #475569; font-size: 0.88rem; line-height: 1.45;">
+                Enter any LaTeX math string. It will render in the editor and in the Workspace Simulation Engine Preview.
+            </p>
+            <label for="workspace-latex-input-field" style="display: block; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #64748b; margin-bottom: 6px;">LaTeX</label>
+            <textarea id="workspace-latex-input-field" rows="3" placeholder="e.g. \frac{a}{b}, x^{2}, \sum_{i=1}^{n} i" style="width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.9rem; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 6px; resize: vertical; margin-bottom: 14px;"></textarea>
+            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                <button type="button" id="btn-cancel-workspace-latex" style="background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85rem;">Cancel</button>
+                <button type="button" id="btn-insert-workspace-latex" style="background: #2563eb; color: #ffffff; border: none; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85rem;">Insert</button>
             </div>
         </div>
     </div>

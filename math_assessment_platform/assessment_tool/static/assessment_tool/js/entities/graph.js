@@ -308,22 +308,63 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
     return true;
 }
 
-function renderPreviewToken({ displayVal, cleanToken, renderGraphComponentCanvas }) {
+function parseGraphConfigPayload(raw) {
+    if (raw == null || raw === '') return null;
+    if (typeof raw === 'object') return raw;
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    // Placeholder latex_output / invalid markers are not graph manifests
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
+    return JSON.parse(trimmed);
+}
+
+function renderPreviewToken({
+    displayVal,
+    cleanToken,
+    renderGraphComponentCanvas,
+    card,
+    registerPreviewGraph,
+    previewInstanceId
+}) {
     try {
-        const graphConfig = typeof displayVal === 'string' ? JSON.parse(displayVal) : displayVal;
-        const previewCanvasId = `live-preview-canvas-${cleanToken}`;
+        let graphConfig = null;
+        try {
+            graphConfig = parseGraphConfigPayload(displayVal);
+        } catch (_) {
+            graphConfig = null;
+        }
 
-        sanitizeFormulas(graphConfig);
-
-        setTimeout(() => {
-            if (typeof renderGraphComponentCanvas === 'function') {
-                renderGraphComponentCanvas(previewCanvasId, graphConfig);
+        // Fall back to the batch-sync JSON stored on the card (evaluated_output)
+        if (!graphConfig && card) {
+            try {
+                graphConfig = parseGraphConfigPayload(card.getAttribute('data-simulated-value'));
+            } catch (_) {
+                graphConfig = null;
             }
-        }, 0);
+        }
+
+        if (!graphConfig || graphConfig.archetype !== 'graph') {
+            throw new Error('Graph preview payload is missing a valid graph manifest');
+        }
+
+        // Unique per occurrence so duplicate tokens / nested+outer cells don't collide
+        const previewCanvasId = previewInstanceId
+            || `live-preview-canvas-${cleanToken}-${Math.random().toString(36).slice(2, 9)}`;
+
+        graphConfig = sanitizeFormulas(graphConfig);
+
+        if (typeof registerPreviewGraph === 'function') {
+            // Prefer deferred paint after preview HTML is inserted (needed for table cells)
+            registerPreviewGraph({ canvasId: previewCanvasId, graphConfig, cleanToken });
+        } else if (typeof renderGraphComponentCanvas === 'function') {
+            setTimeout(() => {
+                renderGraphComponentCanvas(previewCanvasId, graphConfig);
+            }, 0);
+        }
 
         return `
-            <div class="simulated-live-graph-preview-container" style="display: block; margin: 12px auto; max-width: 360px; padding: 8px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
-                <div id="${previewCanvasId}" style="display: flex; justify-content: center; width: 100%;"></div>
+            <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" style="display: block; margin: 8px auto; width: 100%; max-width: 360px; padding: 4px; box-sizing: border-box; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+                <div id="${previewCanvasId}" class="live-preview-graph-canvas" style="width: 100%; height: 240px; min-height: 120px; box-sizing: border-box;"></div>
             </div>
         `;
     } catch (jsonErr) {
