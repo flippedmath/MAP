@@ -310,12 +310,15 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
 
 function parseGraphConfigPayload(raw) {
     if (raw == null || raw === '') return null;
-    if (typeof raw === 'object') return raw;
+    if (typeof raw === 'object') {
+        return raw.archetype === 'graph' ? raw : null;
+    }
     if (typeof raw !== 'string') return null;
     const trimmed = raw.trim();
-    // Placeholder latex_output / invalid markers are not graph manifests
-    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return null;
-    return JSON.parse(trimmed);
+    // Placeholder latex_output / token names / legacy evaluate strings are not manifests
+    if (!trimmed.startsWith('{')) return null;
+    const parsed = JSON.parse(trimmed);
+    return (parsed && parsed.archetype === 'graph') ? parsed : null;
 }
 
 function renderPreviewToken({
@@ -326,51 +329,60 @@ function renderPreviewToken({
     registerPreviewGraph,
     previewInstanceId
 }) {
+    let sawJsonParseError = null;
+    let graphConfig = null;
+
     try {
-        let graphConfig = null;
+        graphConfig = parseGraphConfigPayload(displayVal);
+    } catch (err) {
+        sawJsonParseError = err;
+        graphConfig = null;
+    }
+
+    // Fall back to the batch-sync JSON stored on the card (evaluated_output)
+    if (!graphConfig && card) {
         try {
-            graphConfig = parseGraphConfigPayload(displayVal);
-        } catch (_) {
+            graphConfig = parseGraphConfigPayload(card.getAttribute('data-simulated-value'));
+        } catch (err) {
+            sawJsonParseError = sawJsonParseError || err;
             graphConfig = null;
         }
+    }
 
-        // Fall back to the batch-sync JSON stored on the card (evaluated_output)
-        if (!graphConfig && card) {
-            try {
-                graphConfig = parseGraphConfigPayload(card.getAttribute('data-simulated-value'));
-            } catch (_) {
-                graphConfig = null;
-            }
+    // Quill hydration / text-change often runs before batch sync lands the JSON.
+    // Treat that as a quiet pending state, not a hard failure.
+    if (!graphConfig) {
+        if (sawJsonParseError) {
+            console.error("Malformed graph JSON; cannot render preview:", sawJsonParseError);
+            return `<span style="color: #ef4444; font-family: monospace;">[Malformed Graph State Data]</span>`;
         }
-
-        if (!graphConfig || graphConfig.archetype !== 'graph') {
-            throw new Error('Graph preview payload is missing a valid graph manifest');
-        }
-
-        // Unique per occurrence so duplicate tokens / nested+outer cells don't collide
-        const previewCanvasId = previewInstanceId
-            || `live-preview-canvas-${cleanToken}-${Math.random().toString(36).slice(2, 9)}`;
-
-        graphConfig = sanitizeFormulas(graphConfig);
-
-        if (typeof registerPreviewGraph === 'function') {
-            // Prefer deferred paint after preview HTML is inserted (needed for table cells)
-            registerPreviewGraph({ canvasId: previewCanvasId, graphConfig, cleanToken });
-        } else if (typeof renderGraphComponentCanvas === 'function') {
-            setTimeout(() => {
-                renderGraphComponentCanvas(previewCanvasId, graphConfig);
-            }, 0);
-        }
-
         return `
-            <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" style="display: block; margin: 8px auto; width: 100%; max-width: 360px; padding: 4px; box-sizing: border-box; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
-                <div id="${previewCanvasId}" class="live-preview-graph-canvas" style="width: 100%; height: 240px; min-height: 120px; box-sizing: border-box;"></div>
+            <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" data-graph-pending="1" style="display: block; margin: 8px auto; width: 100%; max-width: 360px; padding: 12px 8px; box-sizing: border-box; background: #ffffff; border: 1px dashed #cbd5e1; border-radius: 8px; text-align: center;">
+                <span style="color: #94a3b8; font-size: 0.8rem; font-style: italic;">Graph preview loading…</span>
             </div>
         `;
-    } catch (jsonErr) {
-        console.error("Malformed graph JSON; cannot render preview:", jsonErr);
-        return `<span style="color: #ef4444; font-family: monospace;">[Malformed Graph State Data]</span>`;
     }
+
+    // Unique per occurrence so duplicate tokens / nested+outer cells don't collide
+    const previewCanvasId = previewInstanceId
+        || `live-preview-canvas-${cleanToken}-${Math.random().toString(36).slice(2, 9)}`;
+
+    graphConfig = sanitizeFormulas(graphConfig);
+
+    if (typeof registerPreviewGraph === 'function') {
+        // Prefer deferred paint after preview HTML is inserted (needed for table cells)
+        registerPreviewGraph({ canvasId: previewCanvasId, graphConfig, cleanToken });
+    } else if (typeof renderGraphComponentCanvas === 'function') {
+        setTimeout(() => {
+            renderGraphComponentCanvas(previewCanvasId, graphConfig);
+        }, 0);
+    }
+
+    return `
+        <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" style="display: block; margin: 8px auto; width: 100%; max-width: 360px; padding: 4px; box-sizing: border-box; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+            <div id="${previewCanvasId}" class="live-preview-graph-canvas" style="width: 100%; height: 240px; min-height: 120px; box-sizing: border-box;"></div>
+        </div>
+    `;
 }
 
 function isLinkCompatible({ inputKey, targetTypeAttr, derivedOutputs }) {
