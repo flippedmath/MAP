@@ -5,6 +5,10 @@ import { processEntity as formulaProcessor } from './entities/formula.js';
 import { processEntity as matrixProcessor } from './entities/matrix.js';
 import { processEntity as matrixResultByIndexProcessor } from './entities/matrixResultByIndex.js';
 import { processEntity as graphProcessor } from './entities/graph.js';
+import {
+    processEntity as slopeFieldGraphProcessor,
+    renderSlopeFieldCanvas
+} from './entities/slopeFieldGraph.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -16,6 +20,7 @@ const ENTITY_REGISTRY = {
     'matrix': matrixProcessor,
     'matrixResultByIndex': matrixResultByIndexProcessor,
     'graph': graphProcessor,
+    'slopeFieldGraph': slopeFieldGraphProcessor,
 };
 
 
@@ -557,7 +562,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function updateWorkspaceSimulationPreview() {
-        if (window.isHydratingWorkspace) return; // 🛑 Halt execution during hydration loop
+        if (window.isHydratingWorkspace || window.__workspacePreviewQuiet) return; // 🛑 Halt during hydration / Quill HTML load
         const renderTarget = document.getElementById('simulation-render-target');
         if (!renderTarget) {
             console.warn("Simulation preview aborted: #simulation-render-target is missing.");
@@ -728,10 +733,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             } else {
                                 displayVal = evaluateSingleCardOutput(card, cleanToken);
                             }
-                        } else {
-                            // 🔍 ADD THIS WARNING HERE:
-                            console.warn(`Preview token "<${cleanToken}>" has no matching entity card in the DOM.`);
                         }
+                        // Missing card is expected during early Quill paste before segments land —
+                        // fall through to token/cache fallbacks without console noise.
                     }
 
                     // Strict validation fallback loop parameter checks
@@ -760,6 +764,28 @@ document.addEventListener('DOMContentLoaded', function() {
                     return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
                 
                 } else if (answerFieldsTokens.some(i => i.token === baseArchetypeToken)) {
+                    // Prefer entity-specific preview (e.g. slopeFieldGraph) over generic stub
+                    let answerDisplayVal = null;
+                    if (card) {
+                        answerDisplayVal = card.getAttribute('data-simulated-value')
+                            || formulaLiveLatexCache[cleanToken]
+                            || null;
+                    }
+                    const answerPreviewHtml = getEntityInformation(baseArchetypeToken, {
+                        action: 'renderPreviewToken',
+                        displayVal: answerDisplayVal,
+                        cleanToken,
+                        card,
+                        renderGraphComponentCanvas,
+                        renderSlopeFieldCanvas,
+                        previewInstanceId: `live-preview-canvas-${cleanToken}-${++previewGraphSeq}`,
+                        registerPreviewGraph: (job) => {
+                            if (job) pendingGraphRenders.push(job);
+                        }
+                    });
+                    if (answerPreviewHtml) {
+                        return answerPreviewHtml;
+                    }
                     return `
                         <div class="simulated-input-wrapper" style="display: inline-block; vertical-align: middle; margin: 4px 2px;">
                             <input type="text" placeholder="Input slot..." disabled style="background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 4px; font-size: 0.9rem; width: 140px;">
@@ -852,7 +878,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const hostTd = canvasEl.closest('td, th');
             const hostTable = hostTd ? hostTd.closest('table') : null;
             const shouldExpand = hostTable ? previewTableShouldExpandEntities(hostTable) : true;
-            const container = canvasEl.closest('.simulated-live-graph-preview-container');
+            const container = canvasEl.closest('.simulated-live-graph-preview-container, .simulated-live-slope-preview-container');
 
             let width = 340;
             if (hostTd) {
@@ -878,7 +904,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             try {
-                renderGraphComponentCanvas(job.canvasId, job.graphConfig, { width, height });
+                if (job.kind === 'slopeFieldGraph' || job.graphConfig?.archetype === 'slopeFieldGraph') {
+                    renderSlopeFieldCanvas(canvasEl, job.graphConfig, {
+                        mode: 'student',
+                        width,
+                        height
+                    });
+                } else {
+                    renderGraphComponentCanvas(job.canvasId, job.graphConfig, { width, height });
+                }
             } catch (err) {
                 console.error('Preview graph paint failed:', err);
             }
@@ -1665,6 +1699,9 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Allow entity modules to request a sync after local UI mutations (e.g. slope selection)
+    window.dispatchWorkspaceBatchSync = dispatchWorkspaceBatchSync;
+
 
     /**
      * Builds and manages ledger tokens badges
@@ -2079,7 +2116,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 });
                 workspaceQuillInstance.on('text-change', (delta, oldDelta, source) => {
-                    if (window.__workspaceTableLayoutQuiet) return;
+                    if (window.__workspaceTableLayoutQuiet || window.__workspacePreviewQuiet) return;
                     // Re-applying nested/outer layouts on every keystroke mutates the DOM and can
                     // retrigger Quill optimize/text-change (freeze). Only re-layout when table ops
                     // are involved.
@@ -2153,12 +2190,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
+            // Restore entity cards first so Quill paste / preview can resolve tokens
+            rehydrateWorkspaceSegments(data.loaded_segments || []);
+
             if (workspaceQuillInstance) {
                 loadWorkspaceQuillHtml(data.body_html || '<p><br></p>');
             }
-
-            // Restore active workspace variables configuration blocks columns rows items
-            rehydrateWorkspaceSegments(data.loaded_segments || []);
 
             if (saveStatusSpan) {
                 saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Synced`;
@@ -4074,46 +4111,61 @@ document.addEventListener('DOMContentLoaded', function() {
             tableMetas = [];
         }
 
-        workspaceQuillInstance.setText('');
-        workspaceQuillInstance.clipboard.dangerouslyPasteHTML(0, cleanHtml);
+        // setText / paste / update fire text-change → preview; suppress until layout settles
+        window.__workspacePreviewQuiet = true;
+        try {
+            workspaceQuillInstance.setText('');
+            workspaceQuillInstance.clipboard.dangerouslyPasteHTML(0, cleanHtml);
+        } catch (pasteErr) {
+            window.__workspacePreviewQuiet = false;
+            throw pasteErr;
+        }
+
         setTimeout(() => {
-            if (!workspaceQuillInstance) return;
-            const tableModule = workspaceQuillInstance.getModule('table');
-            if (tableModule && typeof tableModule.balanceTables === 'function') {
-                tableModule.balanceTables();
+            if (!workspaceQuillInstance) {
+                window.__workspacePreviewQuiet = false;
+                return;
             }
-
-            const liveTables = queryWorkspaceQuillTables(workspaceQuillInstance.root);
-            liveTables.forEach((table, i) => {
-                const meta = tableMetas[i];
-                if (!meta) return;
-                if (meta.colWidths) table.setAttribute('data-col-widths', meta.colWidths);
-                if (meta.rowHeights) table.setAttribute('data-row-heights', meta.rowHeights);
-                if (meta.align) table.setAttribute('data-table-align', meta.align);
-                if (meta.noBorder) table.setAttribute('data-no-border', 'true');
-                if (meta.compact) table.setAttribute('data-compact-cells', 'true');
-                if (meta.expandEntities === false) {
-                    table.classList.remove('ql-table-expand-entities');
-                    table.setAttribute('data-expand-entities', 'false');
-                } else {
-                    table.classList.add('ql-table-expand-entities');
-                    table.setAttribute('data-expand-entities', 'true');
+            try {
+                const tableModule = workspaceQuillInstance.getModule('table');
+                if (tableModule && typeof tableModule.balanceTables === 'function') {
+                    tableModule.balanceTables();
                 }
-                reapplyWorkspaceTableLayout(table);
-            });
 
-            // Restore interactive cells on nested embeds after Quill paste
-            workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
-                hydrateWorkspaceNestedTableEmbed(node);
-            });
+                const liveTables = queryWorkspaceQuillTables(workspaceQuillInstance.root);
+                liveTables.forEach((table, i) => {
+                    const meta = tableMetas[i];
+                    if (!meta) return;
+                    if (meta.colWidths) table.setAttribute('data-col-widths', meta.colWidths);
+                    if (meta.rowHeights) table.setAttribute('data-row-heights', meta.rowHeights);
+                    if (meta.align) table.setAttribute('data-table-align', meta.align);
+                    if (meta.noBorder) table.setAttribute('data-no-border', 'true');
+                    if (meta.compact) table.setAttribute('data-compact-cells', 'true');
+                    if (meta.expandEntities === false) {
+                        table.classList.remove('ql-table-expand-entities');
+                        table.setAttribute('data-expand-entities', 'false');
+                    } else {
+                        table.classList.add('ql-table-expand-entities');
+                        table.setAttribute('data-expand-entities', 'true');
+                    }
+                    reapplyWorkspaceTableLayout(table);
+                });
 
-            workspaceQuillInstance.update('user');
-            lockOuterCellsThatContainNestedTables();
-            repairOrphanSoftBreakEmptyOuterCells();
-            workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
-                scheduleNestedHostRealign(node);
-            });
-            updateWorkspaceSimulationPreview();
+                // Restore interactive cells on nested embeds after Quill paste
+                workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+                    hydrateWorkspaceNestedTableEmbed(node);
+                });
+
+                workspaceQuillInstance.update('user');
+                lockOuterCellsThatContainNestedTables();
+                repairOrphanSoftBreakEmptyOuterCells();
+                workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
+                    scheduleNestedHostRealign(node);
+                });
+            } finally {
+                window.__workspacePreviewQuiet = false;
+                updateWorkspaceSimulationPreview();
+            }
         }, 50);
     }
 

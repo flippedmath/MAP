@@ -363,10 +363,24 @@ class Command(BaseCommand):
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
             "note": "Create a freehand canvas or whiteboard field"
+        },
+        {
+            "name": "Slope Field Graph",
+            "token": "slopeFieldGraph",
+            "answer_field": True,
+            "inputs": {
+                "equation": {"field": "text", "value": ["string", "formula"], "default": "dy/dx = x + y"},
+                "x-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 1]},
+                "y-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 1]},
+                "selected_points": {"field": "array", "value": ["array([array(['double'])])"], "default": []}
+            },
+            "output": ["content"],
+            "points": {"field": "double", "value": ["double"], "default": 1.0},
+            "entity_name_list": "Answer Input Fields",
+            "disabled": False,
+            "note": "Slope field answer: teacher marks lattice points; students align slope ticks on those points in the live assessment."
         }
     ]
-    # add a slope field entity, lots of dots in a graph, make slope line on given points
-
     def add_arguments(self, parser):
         parser.add_argument(
             '--token',

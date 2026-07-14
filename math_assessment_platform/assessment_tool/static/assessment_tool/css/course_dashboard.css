@@ -252,17 +252,20 @@
    🎯 QUILL CONTENT FONT SIZING SYSTEM (DISPLAY VIEW)
    ========================================================================== */
 .ql-editor-output .ql-size-small,
-.ql-editor .ql-size-small {
+.ql-editor .ql-size-small,
+#simulation-render-target .ql-size-small {
     font-size: 0.75em !important;
 }
 
 .ql-editor-output .ql-size-large,
-.ql-editor .ql-size-large {
+.ql-editor .ql-size-large,
+#simulation-render-target .ql-size-large {
     font-size: 1.5em !important;
 }
 
 .ql-editor-output .ql-size-huge,
-.ql-editor .ql-size-huge {
+.ql-editor .ql-size-huge,
+#simulation-render-target .ql-size-huge {
     font-size: 2.5em !important;
 }
 

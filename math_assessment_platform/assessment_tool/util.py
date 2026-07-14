@@ -2304,6 +2304,238 @@ class MatrixResultByIndexEntity(BaseEntity):
         self.last_computed_sympy_result = cell
         self.output_types = self._classify_cell(cell)
         return str(cell)
+
+
+class SlopeFieldGraphEntity(BaseEntity):
+    """
+    Answer-field slope field: validate dy/dx = f(x,y), axis lattice, and selected points.
+    evaluate_output returns a JSON manifest with precomputed slopes for SVG rendering.
+    """
+    MAX_LATTICE_DIM = 40
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        raw_equation = self.data.get("equation") or self.runtime_values.get("equation") or ""
+        display_eq, rhs = self._normalize_equation(raw_equation)
+        if not rhs:
+            self.errors["equation"] = "A slope field equation is required (e.g. dy/dx = x + y)."
+            return False
+
+        try:
+            local_dict = {
+                "x": sp.Symbol("x"),
+                "y": sp.Symbol("y"),
+                "pi": sp.pi,
+                "E": sp.E,
+                "exp": sp.exp,
+                "sin": sp.sin,
+                "cos": sp.cos,
+                "tan": sp.tan,
+                "log": sp.log,
+                "sqrt": sp.sqrt,
+            }
+            parsed = self.parse_math_expression(rhs, local_dict=local_dict, evaluate=False)
+            free = {str(s) for s in getattr(parsed, "free_symbols", set())}
+            allowed = {"x", "y"}
+            extras = free - allowed
+            if extras:
+                self.errors["equation"] = (
+                    f"Slope equation may only use variables x and y "
+                    f"(found: {', '.join(sorted(extras))})."
+                )
+                return False
+        except Exception as exc:
+            self.errors["equation"] = f"Could not parse slope equation: {exc}"
+            return False
+
+        x_range = self._parse_axis_range("x-axis range", self.data.get("x-axis range"), [-5.0, 5.0, 1.0])
+        y_range = self._parse_axis_range("y-axis range", self.data.get("y-axis range"), [-5.0, 5.0, 1.0])
+        if self.errors:
+            return False
+
+        x_count = self._lattice_count(x_range)
+        y_count = self._lattice_count(y_range)
+        if x_count > self.MAX_LATTICE_DIM or y_count > self.MAX_LATTICE_DIM:
+            self.errors["x-axis range" if x_count > self.MAX_LATTICE_DIM else "y-axis range"] = (
+                f"Lattice is too dense (max {self.MAX_LATTICE_DIM} points per axis). "
+                f"Increase the step or shrink the range."
+            )
+            return False
+
+        lattice_keys = set()
+        for xv in self._iter_axis(x_range):
+            for yv in self._iter_axis(y_range):
+                lattice_keys.add(self._point_key(xv, yv))
+
+        raw_selected = self.data.get("selected_points", [])
+        if isinstance(raw_selected, str):
+            try:
+                raw_selected = json.loads(raw_selected) if raw_selected.strip() else []
+            except Exception:
+                raw_selected = []
+        if not isinstance(raw_selected, list):
+            raw_selected = []
+
+        cleaned_selected = []
+        seen = set()
+        for item in raw_selected:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                px = float(item[0])
+                py = float(item[1])
+            except (TypeError, ValueError):
+                continue
+            key = self._point_key(px, py)
+            if key in lattice_keys and key not in seen:
+                seen.add(key)
+                cleaned_selected.append([round(px, 10), round(py, 10)])
+
+        self.runtime_values["equation_display"] = display_eq
+        self.runtime_values["equation_rhs"] = rhs
+        self.runtime_values["parsed_slope_expr"] = parsed
+        self.runtime_values["resolved_x-axis range"] = x_range
+        self.runtime_values["resolved_y-axis range"] = y_range
+        self.runtime_values["selected_points"] = cleaned_selected
+
+        self.cleaned_data["equation"] = display_eq
+        self.cleaned_data["x-axis range"] = x_range
+        self.cleaned_data["y-axis range"] = y_range
+        self.cleaned_data["selected_points"] = cleaned_selected
+        # Flat keys for frontend rehydration
+        self.cleaned_data["x_min"] = x_range[0]
+        self.cleaned_data["x_max"] = x_range[1]
+        self.cleaned_data["x_step"] = x_range[2]
+        self.cleaned_data["y_min"] = y_range[0]
+        self.cleaned_data["y_max"] = y_range[1]
+        self.cleaned_data["y_step"] = y_range[2]
+
+        return True
+
+    def _normalize_equation(self, raw):
+        s = str(raw or "").strip()
+        if not s:
+            return "", ""
+        display = s
+        lower = s.lower().replace(" ", "")
+        rhs = s
+        # Strip common LHS forms: dy/dx = ..., y' = ..., dydx = ...
+        m = re.match(
+            r"^\s*(?:d\s*y\s*/\s*d\s*x|dy\s*/\s*dx|y\s*'|dydx)\s*=\s*(.+)$",
+            s,
+            flags=re.IGNORECASE,
+        )
+        if m:
+            rhs = m.group(1).strip()
+            display = f"dy/dx = {rhs}"
+        elif "=" in s and not lower.startswith("dy/dx"):
+            # Generic "lhs = rhs" — keep RHS only for evaluation
+            parts = s.split("=", 1)
+            if len(parts) == 2 and parts[1].strip():
+                rhs = parts[1].strip()
+                display = f"dy/dx = {rhs}"
+        else:
+            display = f"dy/dx = {rhs}"
+        return display, rhs
+
+    def _parse_axis_range(self, key, raw, default_triple):
+        if not raw or not isinstance(raw, list) or len(raw) != 3:
+            # Fall back to individual flat keys if present
+            prefix = "x_" if key.startswith("x") else "y_"
+            flat = [
+                self.data.get(f"{prefix}min"),
+                self.data.get(f"{prefix}max"),
+                self.data.get(f"{prefix}step"),
+            ]
+            if all(v not in (None, "", "null") for v in flat):
+                raw = flat
+            else:
+                raw = default_triple
+        try:
+            min_val = float(raw[0])
+            max_val = float(raw[1])
+            step_val = float(raw[2])
+        except (TypeError, ValueError):
+            self.errors[key] = "Axis bounds must be numeric [min, max, step]."
+            return list(default_triple)
+
+        if min_val >= max_val:
+            self.errors[key] = "The coordinate minimum cannot be greater than or equal to its maximum."
+        if step_val <= 0:
+            self.errors[key] = "The step interval must be greater than zero."
+        return [min_val, max_val, step_val]
+
+    def _lattice_count(self, axis_range):
+        min_val, max_val, step_val = axis_range
+        if step_val <= 0:
+            return 0
+        count = 0
+        val = min_val
+        # Guard against floating drift
+        while val <= max_val + step_val * 1e-9:
+            count += 1
+            val = round(val + step_val, 10)
+            if count > self.MAX_LATTICE_DIM + 5:
+                break
+        return count
+
+    def _iter_axis(self, axis_range):
+        min_val, max_val, step_val = axis_range
+        val = min_val
+        n = 0
+        while val <= max_val + step_val * 1e-9 and n <= self.MAX_LATTICE_DIM:
+            yield round(val, 10)
+            val = round(val + step_val, 10)
+            n += 1
+
+    def _point_key(self, x, y):
+        return (round(float(x), 8), round(float(y), 8))
+
+    def evaluate_output(self):
+        rhs = self.runtime_values.get("equation_rhs", "0")
+        display = self.runtime_values.get("equation_display", f"dy/dx = {rhs}")
+        x_range = self.runtime_values.get("resolved_x-axis range", [-5.0, 5.0, 1.0])
+        y_range = self.runtime_values.get("resolved_y-axis range", [-5.0, 5.0, 1.0])
+        selected = self.runtime_values.get("selected_points", [])
+        expr = self.runtime_values.get("parsed_slope_expr")
+
+        if expr is None:
+            local_dict = {"x": sp.Symbol("x"), "y": sp.Symbol("y")}
+            expr = self.parse_math_expression(rhs, local_dict=local_dict, evaluate=False)
+
+        x_sym = sp.Symbol("x")
+        y_sym = sp.Symbol("y")
+        lattice = []
+        for xv in self._iter_axis(x_range):
+            for yv in self._iter_axis(y_range):
+                entry = {"x": xv, "y": yv, "slope": 0.0, "finite": True}
+                try:
+                    val = expr.subs({x_sym: xv, y_sym: yv})
+                    val = sp.N(val)
+                    if val.has(sp.zoo) or val.has(sp.oo) or val.has(-sp.oo) or val.has(sp.nan):
+                        entry["finite"] = False
+                        entry["slope"] = None
+                    else:
+                        entry["slope"] = float(val)
+                except Exception:
+                    entry["finite"] = False
+                    entry["slope"] = None
+                lattice.append(entry)
+
+        manifest = {
+            "archetype": "slopeFieldGraph",
+            "equation": rhs,
+            "equation_display": display,
+            "bounds": {
+                "x_range": {"min": x_range[0], "max": x_range[1], "step": x_range[2]},
+                "y_range": {"min": y_range[0], "max": y_range[1], "step": y_range[2]},
+            },
+            "selected_points": selected,
+            "lattice": lattice,
+        }
+        return json.dumps(manifest)
     
 
 def get_entity_validator(token_string, data_payload, pattern_blueprint, all_entities_payload=None):
@@ -2320,6 +2552,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "graph": GraphEntity,
         "matrix": MatrixEntity,
         "matrixResultByIndex": MatrixResultByIndexEntity,
+        "slopeFieldGraph": SlopeFieldGraphEntity,
     }
     
     # Fallback to base configuration validator if a custom token model isn't written yet
@@ -2372,6 +2605,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             # 🎯 Component Type Specific Pre-Formatting Overrides
             if archetype_name == 'graph':
                 latex_output = "[Graph Component]"
+            elif archetype_name == 'slopeFieldGraph':
+                latex_output = "[Slope Field Graph]"
             elif archetype_name == 'matrix' or archetype_name == 'matrixResultByIndex':
                 # Matrix / cell extract: format SymPy results as LaTeX
                 if hasattr(validator, 'last_computed_sympy_result'):
@@ -2469,6 +2704,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "matrix"
             elif archetype_name == "graph":
                 error_field = "formulas"
+            elif archetype_name == "slopeFieldGraph":
+                error_field = "equation"
             errors = {
                 error_field: (
                     f"Expression could not be evaluated after resolving linked "
@@ -2484,6 +2721,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'graph':
                 evaluated_output = "[Invalid Graph Config]"
                 latex_output = "[Invalid Graph Config]"
+            elif archetype_name == 'slopeFieldGraph':
+                evaluated_output = "[Invalid Slope Field Config]"
+                latex_output = "[Invalid Slope Field Config]"
             elif archetype_name == 'matrix':
                 evaluated_output = "[Invalid Matrix Config]"
                 latex_output = "[Invalid Matrix Config]"

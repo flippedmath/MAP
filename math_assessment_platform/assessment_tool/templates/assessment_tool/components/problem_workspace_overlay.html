@@ -575,6 +575,20 @@
     border-bottom: 1px solid #94a3b8 !important;
 }
 
+/* Quill size classes in editor + Workspace Simulation preview (nested + plain text) */
+#problem-workspace-overlay .ql-editor .ql-size-small,
+#simulation-render-target .ql-size-small {
+    font-size: 0.75em !important;
+}
+#problem-workspace-overlay .ql-editor .ql-size-large,
+#simulation-render-target .ql-size-large {
+    font-size: 1.5em !important;
+}
+#problem-workspace-overlay .ql-editor .ql-size-huge,
+#simulation-render-target .ql-size-huge {
+    font-size: 2.5em !important;
+}
+
 /* Quill size classes inside nested cells (must beat any parent font rules) */
 #problem-workspace-overlay .ql-editor .ql-nested-table-inner .ql-size-small,
 #simulation-render-target .ql-nested-table-inner .ql-size-small {

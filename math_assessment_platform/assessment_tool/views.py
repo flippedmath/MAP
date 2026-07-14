@@ -2111,7 +2111,7 @@ def save_problem_workspace(request, problem_id):
         # Schema/syntax checks replace linked tokens with placeholders, so an
         # entity can pass is_valid() and still blow up when the resolved sympy
         # form is evaluated (e.g. formula referencing another Integral result).
-        if is_valid and token_id in ('formula', 'matrix', 'graph', 'matrixResultByIndex'):
+        if is_valid and token_id in ('formula', 'matrix', 'graph', 'matrixResultByIndex', 'slopeFieldGraph'):
             try:
                 validator.evaluate_output()
             except Exception as eval_err:
