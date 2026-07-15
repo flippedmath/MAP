@@ -2,7 +2,8 @@ import { ensureLatexRenderBox } from './helpers.js';
 
 /**
  * arrayMatchingUnordered — unordered comma-separated list answer field.
- * All-or-nothing by default; optional partial credit per correct item.
+ * Server splits on commas outside parentheses and grades each item like a
+ * short answer (exact match or equivalent formula). Optional partial credit.
  * Links only to primeFactors Dynamic Variable entities.
  */
 export function processEntity(contextData) {
@@ -61,7 +62,7 @@ function getFieldsHtml(savedValues) {
         <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box;">
             <div class="linked-input-wrapper" data-input-key="results" data-input-type="integer" style="position: relative; display: flex; align-items: flex-end; gap: 4px; width: 100%; box-sizing: border-box;">
                 <label style="font-size: 0.75rem; color: #475569; flex-grow: 1;">Correct answers (comma-separated):
-                    <input type="text" class="val-array-matching-results" value="${textValue}" ${isLinked ? 'disabled' : ''} placeholder="e.g. 2, 2, 3 or apple, banana" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                    <input type="text" class="val-array-matching-results" value="${textValue}" ${isLinked ? 'disabled' : ''} placeholder="e.g. x+1, 3-x, 7x^2, hello" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                 </label>
                 <button type="button" class="btn-input-link-trigger ${isLinked ? 'is-linked' : ''}" title="Link primeFactors token" style="background: #ffffff; border: 1px solid ${isLinked ? '#fca5a5' : '#cbd5e1'}; border-radius: 4px; color: ${isLinked ? '#ef4444' : '#94a3b8'}; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
                     <i class="fas ${isLinked ? 'fa-times' : 'fa-link'}"></i>

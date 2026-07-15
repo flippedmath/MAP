@@ -301,7 +301,11 @@ class Command(BaseCommand):
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
             "note": (
-                "Unordered comma-separated list. Tokens are trimmed and lowercased; numbers compare after rounding to 3 decimals. "
+                "Unordered comma-separated list. Split on commas <em>outside</em> parentheses "
+                "(commas inside <code>(...)</code> stay in the same item). "
+                "Each item is graded like a short answer: exact trim+lowercase match, else "
+                "equivalent formulas (e.g. <code>7x^2</code> matches <code>7*x**2</code>, "
+                "<code>3-x</code> matches <code>-x+3</code>). Numbers also compare after rounding to 3 decimals. "
                 "Default scoring is all-or-nothing. May link only a primeFactors entity."
                 "<br>"
                 "Partial credit for partial answer: with N key items and P points, sub = P/N. "

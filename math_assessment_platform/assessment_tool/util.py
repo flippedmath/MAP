@@ -2960,7 +2960,9 @@ class MatrixAnswerEntity(BaseEntity):
 class ArrayMatchingUnorderedEntity(BaseEntity):
     """
     Answer-field unordered comma-separated list matching.
-    Numbers compare after round(..., 3); strings after trim+lowercase.
+    Segments split on commas outside parentheses. Each segment is compared
+    with shortAnswer rules (exact trim+lowercase, else sympy formula
+    equivalence with count_ops gate). Numeric round-to-3 fallback preserved.
     Multiset matching. Optional partial credit with ±sub / −½ sub penalties.
     """
 
@@ -2978,48 +2980,63 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
             return ", ".join(str(x) for x in raw)
         return str(raw)
 
-    def _normalize_token(self, piece):
-        text = str(piece).strip().lower()
-        if not text:
-            return None
-        try:
-            num = float(text)
-            if math.isfinite(num):
-                return ("num", round(num, 3))
-        except (TypeError, ValueError):
-            pass
-        return ("str", text)
-
-    def _parse_list(self, raw):
+    def _split_paren_aware(self, raw):
+        """
+        Split on commas only when not inside (...).
+        Commas inside parentheses stay part of the same segment.
+        """
         s = self._raw_to_str(raw).strip()
         if not s:
             return []
-        items = []
-        for part in s.split(","):
-            token = self._normalize_token(part)
-            if token is not None:
-                items.append(token)
-        return items
+        parts = []
+        buf = []
+        depth = 0
+        for ch in s:
+            if ch == "(":
+                depth += 1
+                buf.append(ch)
+            elif ch == ")":
+                depth = max(0, depth - 1)
+                buf.append(ch)
+            elif ch == "," and depth == 0:
+                piece = "".join(buf).strip()
+                if piece:
+                    parts.append(piece)
+                buf = []
+            else:
+                buf.append(ch)
+        piece = "".join(buf).strip()
+        if piece:
+            parts.append(piece)
+        return parts
 
-    def _format_token(self, token):
-        kind, val = token
-        if kind == "num":
-            if float(val).is_integer():
-                return str(int(val))
-            return str(val)
-        return str(val)
+    def _parse_list(self, raw):
+        return self._split_paren_aware(raw)
+
+    def _items_match(self, student_piece, key_piece):
+        """Match via shortAnswer formula/text rules, then numeric round-3."""
+        if self._grade_short_answer_text(student_piece, key_piece):
+            return True
+        try:
+            na = float(str(student_piece).strip())
+            nb = float(str(key_piece).strip())
+            if math.isfinite(na) and math.isfinite(nb):
+                return round(na, 3) == round(nb, 3)
+        except (TypeError, ValueError):
+            pass
+        return False
 
     def _format_list(self, items):
-        return ", ".join(self._format_token(t) for t in items)
+        return ", ".join(str(t) for t in items)
 
     def _match_counts(self, key_items, student_items):
-        """Greedy multiset match. Returns (matches, missing, extras)."""
+        """Greedy multiset match with formula-aware equality. Returns (matches, missing, extras)."""
         remaining = list(student_items)
         matches = 0
         for key in key_items:
             found_idx = None
             for i, stud in enumerate(remaining):
-                if stud == key:
+                if self._items_match(stud, key):
                     found_idx = i
                     break
             if found_idx is not None:
