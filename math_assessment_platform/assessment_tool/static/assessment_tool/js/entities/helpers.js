@@ -29,6 +29,21 @@ export function safeNumValue(val, fallback) {
 }
 
 /**
+ * Escape raw text for safe interpolation into HTML attribute/text contexts.
+ * Required for math preview spans so values like "x < 5" do not break surrounding markup
+ * (e.g. multiple-choice option rows after a linked formula).
+ * @param {*} val
+ * @returns {string}
+ */
+export function escapeHtmlText(val) {
+    return String(val ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/**
  * Normalize a bound/pill token string to "<tokenId>" form.
  * @param {string} raw
  * @returns {string}

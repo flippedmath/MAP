@@ -312,13 +312,41 @@ class Command(BaseCommand):
             "token": "multipleChoiceAnswer",
             "answer_field": True,
             "inputs": {
-                "value": {"field": "checkboxes", "value": ["array(['content'])"]}
+                "randomize_order": {"field": "checkbox", "value": ["boolean"], "default": True},
+                "force_radio": {"field": "checkbox", "value": ["boolean"], "default": True},
+                "grading_method": {
+                    "field": "dropdown",
+                    "value": ["string_match(['all_or_nothing', 'practical', 'proportional'])"],
+                    "default": "all_or_nothing"
+                },
+                "options": {
+                    "field": "array",
+                    "value": ["array(['content'])"],
+                    "default": [
+                        {"id": "opt_1", "content": "", "is_correct": False},
+                        {"id": "opt_2", "content": "", "is_correct": False}
+                    ]
+                }
             },
             "output": ["content"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Multiple choice question will display to Student as radio selection if only a single answer is specified by Teacher"
+            "note": (
+                "Requires at least 2 choices and at least one marked correct. "
+                "Options may be typed or linked from any Dynamic Variable. "
+                "Randomize answer order shuffles preview display. "
+                "With exactly one correct answer, Display as radio buttons (default on) forces a single selection; "
+                "turn it off to mark additional correct answers."
+                "<br>"
+                "<strong>All or nothing (default):</strong> full points only if the selected set exactly matches the correct set; else 0."
+                "<br>"
+                "<strong>Practical:</strong> points_per_correct = P / num_correct; penalty_per_wrong = points_per_correct / 2; "
+                "score = max(0, correct_selected × points_per_correct − wrong_selected × penalty_per_wrong)."
+                "<br>"
+                "<strong>Proportional:</strong> score = max(0, P × (correct_selected/num_correct − incorrect_selected/num_incorrect)). "
+                "If every option is correct (num_incorrect = 0), the wrong term is treated as 0."
+            )
         },
         {
             "name": "Matrix",

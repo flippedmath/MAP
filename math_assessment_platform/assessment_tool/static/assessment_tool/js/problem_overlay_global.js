@@ -12,6 +12,7 @@ import {
 import { processEntity as numAnswerProcessor } from './entities/numAnswer.js';
 import { processEntity as shortAnswerProcessor } from './entities/shortAnswer.js';
 import { processEntity as arrayMatchingUnorderedProcessor } from './entities/arrayMatchingUnordered.js';
+import { processEntity as multipleChoiceAnswerProcessor } from './entities/multipleChoiceAnswer.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -27,6 +28,7 @@ const ENTITY_REGISTRY = {
     'numAnswer': numAnswerProcessor,
     'shortAnswer': shortAnswerProcessor,
     'arrayMatchingUnordered': arrayMatchingUnorderedProcessor,
+    'multipleChoiceAnswer': multipleChoiceAnswerProcessor,
 };
 
 
@@ -345,7 +347,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div style="display: flex; align-items: center; gap: 8px;">
                     
                     ${!getEntityInformation(token, { action: 'hideRefreshButton' }) ? `
-                        <button type="button" class="btn-refresh-workspace-component-value" title="Shuffle simulation instance sample value" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, transform 0.15s;">
+                        <button type="button" class="btn-refresh-workspace-component-value" title="${token === 'multipleChoiceAnswer' ? 'Re-randomize preview choice order' : 'Shuffle simulation instance sample value'}" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 2px 4px; display: flex; align-items: center; justify-content: center; transition: color 0.15s, transform 0.15s;">
                             <i class="fas fa-redo-alt"></i>
                         </button>
                     ` : ''}
@@ -610,6 +612,9 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
+        // Preserve in-progress preview answers before the DOM is replaced
+        capturePreviewAnswersFromDom(renderTarget);
+
         let canvasContent = workspaceQuillInstance ? getWorkspaceQuillHtmlForSave() : '';
 
         if (!canvasContent || canvasContent === '<p><br></p>') {
@@ -624,6 +629,45 @@ document.addEventListener('DOMContentLoaded', function() {
             console.warn("Simulation preview aborted: renderPreviewCanvasMarkup is not available.");
         }
         scheduleWorkspacePreviewGradeRefresh();
+    }
+
+    function capturePreviewAnswersFromDom(root) {
+        if (!root) return;
+        // Group by data-token so orphaned checkboxes (broken markup) still count
+        const byToken = {};
+        root.querySelectorAll('.preview-mc-choice').forEach((el) => {
+            const tokenKey = el.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            if (!byToken[tokenKey]) byToken[tokenKey] = [];
+            if (el.checked) {
+                const id = el.getAttribute('data-option-id') || el.value;
+                if (id) byToken[tokenKey].push(id);
+            }
+        });
+        Object.entries(byToken).forEach(([tokenKey, selected]) => {
+            previewStudentAnswers[tokenKey] = { selected };
+        });
+        // Also keep wrappers that exist but had zero choices scanned (clear them)
+        root.querySelectorAll('.simulated-mc-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            if (!tokenKey || Object.prototype.hasOwnProperty.call(byToken, tokenKey)) return;
+            previewStudentAnswers[tokenKey] = { selected: [] };
+        });
+        root.querySelectorAll('.preview-num-answer-input').forEach((input) => {
+            const tokenKey = input.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            previewStudentAnswers[tokenKey] = { value: input.value };
+        });
+        root.querySelectorAll('.preview-short-answer-input').forEach((input) => {
+            const tokenKey = input.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            previewStudentAnswers[tokenKey] = { value: input.value };
+        });
+        root.querySelectorAll('.preview-array-matching-input').forEach((input) => {
+            const tokenKey = input.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            previewStudentAnswers[tokenKey] = { value: input.value };
+        });
     }
 
     function scheduleWorkspacePreviewGradeRefresh(delayMs = 280) {
@@ -754,6 +798,9 @@ document.addEventListener('DOMContentLoaded', function() {
     async function refreshWorkspacePreviewGrades() {
         const target = document.getElementById('workspace-preview-grade-target');
         const problemId = workspaceOverlay.getAttribute('data-current-problem-id');
+        // Capture latest preview choices before grading (important for multi-select MC)
+        const renderTarget = document.getElementById('simulation-render-target');
+        capturePreviewAnswersFromDom(renderTarget);
         const entities = collectAnswerFieldEntitiesForGrading();
         // Sibling dynamic variables (and all cards) so linked answer keys can resolve
         const all_entities = typeof serializeAllWorkspaceEntities === 'function'
@@ -1000,11 +1047,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         registerPreviewGraph: (job) => {
                             if (job) pendingGraphRenders.push(job);
                         },
+                        getEntityInformation,
+                        evaluateSingleCardOutput,
+                        formulaLiveLatexCache,
                         initialValue: (() => {
                             const stored = previewStudentAnswers[cleanToken];
-                            if (stored && typeof stored === 'object' && stored.value != null) {
-                                return stored.value;
-                            }
+                            if (!stored || typeof stored !== 'object') return '';
+                            if (Array.isArray(stored.selected)) return stored;
+                            if (Array.isArray(stored.marks)) return stored;
+                            if (stored.value != null) return stored.value;
                             return '';
                         })()
                     });
@@ -1026,6 +1077,11 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         renderTarget.innerHTML = simulatedHtml;
+
+        // Quill wraps tokens in <p>. Block widgets (MC lists, graphs) cannot live inside
+        // <p> without the browser closing the paragraph early — hoist them out first.
+        hoistBlockPreviewsOutOfParagraphs(renderTarget);
+
         // Apply persisted table col/row sizes so preview images constrain like the editor
         Array.from(renderTarget.querySelectorAll('table')).forEach(table => {
             if (table.classList.contains('ql-nested-table-inner') || table.closest('.ql-workspace-nested-table')) {
@@ -1083,6 +1139,7 @@ document.addEventListener('DOMContentLoaded', function() {
         bindPreviewNumAnswerInputs(renderTarget);
         bindPreviewShortAnswerInputs(renderTarget);
         bindPreviewArrayMatchingInputs(renderTarget);
+        bindPreviewMultipleChoiceInputs(renderTarget);
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
@@ -1139,6 +1196,83 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    function bindPreviewMultipleChoiceInputs(root) {
+        if (!root) return;
+
+        const collectSelectedForToken = (tokenKey) => Array.from(root.querySelectorAll('.preview-mc-choice'))
+            .filter((el) => el.getAttribute('data-token') === tokenKey && el.checked)
+            .map((el) => el.getAttribute('data-option-id') || el.value)
+            .filter(Boolean);
+
+        const syncChoice = (choice) => {
+            const tokenKey = choice?.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            previewStudentAnswers[tokenKey] = { selected: collectSelectedForToken(tokenKey) };
+            scheduleWorkspacePreviewGradeRefresh(180);
+        };
+
+        // Event delegation on the preview root so choices still grade even if
+        // nested block HTML (e.g. a graph) previously broke the MC wrapper.
+        if (root.dataset.previewMcDelegated !== '1') {
+            root.dataset.previewMcDelegated = '1';
+            root.addEventListener('change', (e) => {
+                const choice = e.target.closest?.('.preview-mc-choice');
+                if (!choice || !root.contains(choice)) return;
+                syncChoice(choice);
+            });
+            root.addEventListener('click', (e) => {
+                const row = e.target.closest?.('.mc-option-preview-row');
+                if (!row || !root.contains(row)) return;
+                const choice = row.querySelector('.preview-mc-choice');
+                if (!choice) return;
+
+                // Don't toggle from interactions inside the embedded graph itself
+                const inGraph = e.target.closest?.(
+                    '.live-preview-graph-canvas, .simulated-live-graph-preview-container svg, .simulated-live-slope-preview-container'
+                );
+                if (!inGraph && e.target !== choice) {
+                    if (choice.type === 'radio') {
+                        choice.checked = true;
+                    } else {
+                        choice.checked = !choice.checked;
+                    }
+                }
+                setTimeout(() => syncChoice(choice), 0);
+            });
+        }
+        // Seed stored answers from any pre-checked restore for each MC instance
+        root.querySelectorAll('.simulated-mc-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            previewStudentAnswers[tokenKey] = { selected: collectSelectedForToken(tokenKey) };
+        });
+    }
+
+    /**
+     * Lift block-level preview widgets out of Quill <p> wrappers so nested graphs
+     * and MC option lists stay intact.
+     */
+    function hoistBlockPreviewsOutOfParagraphs(root) {
+        if (!root) return;
+        const blockSelector = [
+            '.simulated-mc-wrapper',
+            '.simulated-live-graph-preview-container',
+            '.simulated-live-slope-preview-container'
+        ].join(', ');
+
+        root.querySelectorAll(blockSelector).forEach((block) => {
+            const p = block.closest('p');
+            if (!p || !p.parentNode || !p.contains(block)) return;
+            // Only hoist when the paragraph is an ancestor of the block
+            if (block.parentElement !== p && !p.contains(block.parentElement)) return;
+            p.parentNode.insertBefore(block, p);
+            // Drop empty leftovers from Quill's paragraph shell
+            if (!p.textContent.trim() && p.children.length === 0) {
+                p.remove();
+            }
+        });
+    }
+
     /**
      * Paint deferred graph previews into the live simulation DOM, sizing to table cells
      * when expand-entities is off, and using full plot size when expand is on.
@@ -1156,20 +1290,25 @@ document.addEventListener('DOMContentLoaded', function() {
             const shouldExpand = hostTable ? previewTableShouldExpandEntities(hostTable) : true;
             const container = canvasEl.closest('.simulated-live-graph-preview-container, .simulated-live-slope-preview-container');
 
-            let width = 340;
+            let width = Number(job.width) > 0 ? Math.round(job.width) : 340;
             if (hostTd) {
                 const cs = window.getComputedStyle(hostTd);
                 const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
                 const avail = Math.floor((hostTd.clientWidth || 0) - padX - 12);
                 if (shouldExpand) {
                     // Prefer full plot; cell will grow via expandPreviewTablesForEntities
-                    width = 340;
+                    width = Number(job.width) > 0 ? Math.round(job.width) : 340;
                 } else if (avail > 0) {
-                    width = Math.max(100, Math.min(340, avail));
+                    width = Math.max(100, Math.min(width, avail));
                 }
+            } else if (canvasEl.closest('.simulated-mc-wrapper') && !(Number(job.width) > 0)) {
+                // Default slightly smaller when embedded as an MC choice
+                width = 280;
             }
 
-            const height = Math.max(100, Math.round(width * (240 / 340)));
+            const height = Number(job.height) > 0
+                ? Math.round(job.height)
+                : Math.max(100, Math.round(width * (240 / 340)));
             canvasEl.style.width = '100%';
             if (container) {
                 container.style.maxWidth = `${width + 8}px`;
@@ -2129,6 +2268,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // 🎯 UPDATE: Pull the token ID of this specific card to recalculate its dependencies
             const cardTokenId = cardElement.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+
+            // MC re-shuffle: clear ephemeral preview selections so the new order
+            // starts unchecked (must clear DOM before capture-on-remount).
+            if (
+                cardElement.getAttribute('data-token') === 'multipleChoiceAnswer'
+                && cardTokenId
+            ) {
+                delete previewStudentAnswers[cardTokenId];
+                const renderTarget = document.getElementById('simulation-render-target');
+                renderTarget?.querySelectorAll('.simulated-mc-wrapper').forEach((wrap) => {
+                    if (wrap.getAttribute('data-token') !== cardTokenId) return;
+                    wrap.querySelectorAll('.preview-mc-choice').forEach((el) => {
+                        el.checked = false;
+                    });
+                });
+            }
 
             if (typeof dispatchWorkspaceBatchSync === 'function' && cardTokenId) {
                 dispatchWorkspaceBatchSync(cardTokenId, { forceRefresh: true });

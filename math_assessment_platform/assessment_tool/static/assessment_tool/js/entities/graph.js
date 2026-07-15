@@ -327,7 +327,8 @@ function renderPreviewToken({
     renderGraphComponentCanvas,
     card,
     registerPreviewGraph,
-    previewInstanceId
+    previewInstanceId,
+    sizeOptions
 }) {
     let sawJsonParseError = null;
     let graphConfig = null;
@@ -349,6 +350,11 @@ function renderPreviewToken({
         }
     }
 
+    const compactW = Number(sizeOptions?.width) > 0 ? Math.round(sizeOptions.width) : null;
+    const compactH = Number(sizeOptions?.height) > 0 ? Math.round(sizeOptions.height) : null;
+    const maxWidth = compactW || 360;
+    const canvasHeight = compactH || 240;
+
     // Quill hydration / text-change often runs before batch sync lands the JSON.
     // Treat that as a quiet pending state, not a hard failure.
     if (!graphConfig) {
@@ -357,7 +363,7 @@ function renderPreviewToken({
             return `<span style="color: #ef4444; font-family: monospace;">[Malformed Graph State Data]</span>`;
         }
         return `
-            <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" data-graph-pending="1" style="display: block; margin: 8px auto; width: 100%; max-width: 360px; padding: 12px 8px; box-sizing: border-box; background: #ffffff; border: 1px dashed #cbd5e1; border-radius: 8px; text-align: center;">
+            <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" data-graph-pending="1" style="display: block; margin: 8px auto; width: 100%; max-width: ${maxWidth}px; padding: 12px 8px; box-sizing: border-box; background: #ffffff; border: 1px dashed #cbd5e1; border-radius: 8px; text-align: center;">
                 <span style="color: #94a3b8; font-size: 0.8rem; font-style: italic;">Graph preview loading…</span>
             </div>
         `;
@@ -371,16 +377,25 @@ function renderPreviewToken({
 
     if (typeof registerPreviewGraph === 'function') {
         // Prefer deferred paint after preview HTML is inserted (needed for table cells)
-        registerPreviewGraph({ canvasId: previewCanvasId, graphConfig, cleanToken });
+        registerPreviewGraph({
+            canvasId: previewCanvasId,
+            graphConfig,
+            cleanToken,
+            width: compactW || undefined,
+            height: compactH || undefined
+        });
     } else if (typeof renderGraphComponentCanvas === 'function') {
         setTimeout(() => {
-            renderGraphComponentCanvas(previewCanvasId, graphConfig);
+            renderGraphComponentCanvas(previewCanvasId, graphConfig, {
+                width: compactW || 340,
+                height: compactH || 240
+            });
         }, 0);
     }
 
     return `
-        <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" style="display: block; margin: 8px auto; width: 100%; max-width: 360px; padding: 4px; box-sizing: border-box; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
-            <div id="${previewCanvasId}" class="live-preview-graph-canvas" style="width: 100%; height: 240px; min-height: 120px; box-sizing: border-box;"></div>
+        <div class="simulated-live-graph-preview-container" data-graph-token="${cleanToken}" style="display: block; margin: 4px 0; width: 100%; max-width: ${maxWidth}px; padding: 4px; box-sizing: border-box; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
+            <div id="${previewCanvasId}" class="live-preview-graph-canvas" style="width: 100%; height: ${canvasHeight}px; min-height: ${Math.min(120, canvasHeight)}px; box-sizing: border-box;"></div>
         </div>
     `;
 }

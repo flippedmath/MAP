@@ -2779,6 +2779,275 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
         }
 
 
+class MultipleChoiceAnswerEntity(BaseEntity):
+    """
+    Multiple-choice answer field with dynamic options, optional radio mode,
+    and grading methods: all_or_nothing (default), practical, proportional.
+    """
+
+    GRADING_METHODS = ("all_or_nothing", "practical", "proportional")
+
+    def _coerce_bool(self, raw, default=False):
+        if raw is None:
+            return default
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _resolve_content(self, raw):
+        if raw is None:
+            return ""
+        text = str(raw).strip()
+        if not text:
+            return ""
+        if re.match(r"^<([^>]+)>$", text):
+            try:
+                return str(self.resolve_token_dependency(text)).strip()
+            except Exception as exc:
+                raise ValidationError(str(getattr(exc, "message", exc)))
+        return text
+
+    def _normalize_options(self, raw_options):
+        if isinstance(raw_options, str):
+            try:
+                raw_options = json.loads(raw_options)
+            except Exception:
+                raw_options = []
+        if not isinstance(raw_options, list):
+            return []
+
+        normalized = []
+        for idx, item in enumerate(raw_options):
+            if not isinstance(item, dict):
+                continue
+            opt_id = str(item.get("id") or f"opt_{idx + 1}").strip() or f"opt_{idx + 1}"
+            content_raw = item.get("content", "")
+            is_correct = self._coerce_bool(item.get("is_correct"), False)
+            try:
+                content_resolved = self._resolve_content(content_raw)
+            except ValidationError as e:
+                self.errors["options"] = f"Option {opt_id}: {e.message}"
+                content_resolved = ""
+            normalized.append({
+                "id": opt_id,
+                "content": content_raw if isinstance(content_raw, str) else str(content_raw or ""),
+                "content_resolved": content_resolved,
+                "is_correct": is_correct,
+            })
+        return normalized
+
+    def is_valid(self):
+        # Skip strict missing-key errors for nested options handled below
+        if not isinstance(self.data, dict):
+            self.errors["inputs"] = "The provided inputs field must be a structured key-value map."
+            return False
+
+        # Validate scalar fields via base where present; options handled manually
+        scalar_data = {
+            k: v for k, v in self.data.items()
+            if k != "options" and not str(k).startswith("option_")
+        }
+        # Temporarily validate scalars with a shallow blueprint pass
+        original_data = self.data
+        self.data = scalar_data
+        # Ensure defaults applied for missing scalars
+        blueprint_inputs = self.pattern_blueprint.get("inputs", {}) or {}
+        for key in ("randomize_order", "force_radio", "grading_method"):
+            if key not in self.data and key in blueprint_inputs and "default" in blueprint_inputs[key]:
+                self.data[key] = blueprint_inputs[key]["default"]
+        base_ok = super().is_valid()
+        self.data = original_data
+        if not base_ok and self.errors:
+            # Ignore errors about missing options from base if any leaked
+            self.errors.pop("options", None)
+
+        options = self._normalize_options(original_data.get("options", []))
+        if "options" in self.errors:
+            return False
+
+        if len(options) < 2:
+            self.errors["options"] = "At least 2 choices are required."
+            return False
+
+        for opt in options:
+            if not str(opt.get("content_resolved") or "").strip() and not str(opt.get("content") or "").strip():
+                self.errors["options"] = "Each choice must have text or a linked Dynamic Variable."
+                return False
+            # Linked but failed resolve already set errors
+            if str(opt.get("content") or "").strip().startswith("<") and not str(opt.get("content_resolved") or "").strip():
+                if "options" not in self.errors:
+                    self.errors["options"] = f"Could not resolve linked option {opt.get('id')}."
+                return False
+
+        num_correct = sum(1 for o in options if o.get("is_correct"))
+        if num_correct < 1:
+            self.errors["options"] = "At least one choice must be marked as correct."
+            return False
+
+        method = str(
+            self.runtime_values.get(
+                "grading_method",
+                original_data.get("grading_method", "all_or_nothing"),
+            )
+        ).strip()
+        if method not in self.GRADING_METHODS:
+            method = "all_or_nothing"
+
+        randomize = self._coerce_bool(
+            self.runtime_values.get("randomize_order", original_data.get("randomize_order", True)),
+            True,
+        )
+        force_radio = self._coerce_bool(
+            self.runtime_values.get("force_radio", original_data.get("force_radio", True)),
+            True,
+        )
+        if num_correct != 1:
+            force_radio = False
+
+        self.runtime_values["options"] = options
+        self.runtime_values["grading_method"] = method
+        self.runtime_values["randomize_order"] = randomize
+        self.runtime_values["force_radio"] = force_radio
+        self.cleaned_data["options"] = original_data.get("options", options)
+        self.cleaned_data["grading_method"] = method
+        self.cleaned_data["randomize_order"] = randomize
+        self.cleaned_data["force_radio"] = force_radio
+        return len(self.errors) == 0
+
+    def evaluate_output(self):
+        options = self.runtime_values.get("options")
+        if options is None:
+            if not self.is_valid():
+                raise ValueError("Cannot evaluate multipleChoiceAnswer: configuration is invalid.")
+            options = self.runtime_values.get("options") or []
+
+        n = len(options)
+        k = sum(1 for o in options if o.get("is_correct"))
+        method = self.runtime_values.get("grading_method", "all_or_nothing")
+        method_label = {
+            "all_or_nothing": "all-or-nothing",
+            "practical": "practical",
+            "proportional": "proportional",
+        }.get(method, method)
+        self.output_types = ["content"]
+        return f"{n} options, {k} correct ({method_label})"
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        options = self.runtime_values.get("options")
+        if options is None:
+            options = self._normalize_options(self.data.get("options", []))
+
+        correct_ids = {str(o["id"]).strip() for o in options if o.get("is_correct")}
+        incorrect_ids = {str(o["id"]).strip() for o in options if not o.get("is_correct")}
+        all_ids = {str(o["id"]).strip() for o in options}
+
+        selected = []
+        if isinstance(student_input, dict):
+            raw_sel = student_input.get("selected", student_input.get("value", []))
+            if isinstance(raw_sel, str):
+                selected = [raw_sel] if raw_sel.strip() else []
+            elif isinstance(raw_sel, (list, tuple)):
+                selected = [str(x) for x in raw_sel if x is not None and str(x).strip() != ""]
+        elif isinstance(student_input, (list, tuple)):
+            selected = [str(x) for x in student_input if x is not None and str(x).strip() != ""]
+        elif student_input is not None and str(student_input).strip() != "":
+            selected = [str(student_input)]
+
+        # Prefer option ids; also accept content / resolved display text as a fallback
+        # (broken/older frontends occasionally submitted the visible label text).
+        content_to_id = {}
+        for o in options:
+            oid = str(o["id"]).strip()
+            for key in (o.get("content"), o.get("content_resolved")):
+                text = str(key or "").strip()
+                if text and text not in content_to_id:
+                    content_to_id[text] = oid
+
+        selected_set = set()
+        for s in selected:
+            token = str(s).strip()
+            if not token:
+                continue
+            if token in all_ids:
+                selected_set.add(token)
+            elif token in content_to_id:
+                selected_set.add(content_to_id[token])
+
+        if not selected and not selected_set:
+            return {"earned": 0.0, "max": pts, "detail": "No student input"}
+        if not selected_set:
+            return {"earned": 0.0, "max": pts, "detail": "Selected choices did not match any option"}
+
+        method = str(
+            self.runtime_values.get(
+                "grading_method",
+                self.data.get("grading_method", "all_or_nothing"),
+            )
+        ).strip()
+        if method not in self.GRADING_METHODS:
+            method = "all_or_nothing"
+
+        correct_selected = len(selected_set & correct_ids)
+        wrong_selected = len(selected_set & incorrect_ids)
+        num_correct = len(correct_ids)
+        num_incorrect = len(incorrect_ids)
+
+        if method == "all_or_nothing":
+            if selected_set == correct_ids:
+                return {"earned": pts, "max": pts, "detail": "All or nothing: correct"}
+            return {"earned": 0.0, "max": pts, "detail": "All or nothing: incorrect"}
+
+        if method == "practical":
+            if num_correct <= 0:
+                return {"earned": 0.0, "max": pts, "detail": "Practical: no correct options"}
+            points_per_correct = pts / num_correct
+            penalty_per_wrong = points_per_correct / 2.0
+            earned = correct_selected * points_per_correct - wrong_selected * penalty_per_wrong
+            if earned < 0:
+                earned = 0.0
+            return {
+                "earned": earned,
+                "max": pts,
+                "detail": f"Practical: {correct_selected}/{num_correct} correct, {wrong_selected} wrong",
+            }
+
+        # proportional
+        if num_correct <= 0:
+            # Defensive: not allowed by validation
+            if num_incorrect <= 0:
+                earned = 0.0
+            else:
+                earned = pts * (wrong_selected / num_incorrect)
+            if earned < 0:
+                earned = 0.0
+            return {
+                "earned": earned,
+                "max": pts,
+                "detail": f"Proportional: {correct_selected} correct selected, {wrong_selected} wrong",
+            }
+
+        correct_term = correct_selected / num_correct
+        if num_incorrect <= 0:
+            wrong_term = 0.0
+        else:
+            wrong_term = wrong_selected / num_incorrect
+        earned = pts * (correct_term - wrong_term)
+        if earned < 0:
+            earned = 0.0
+        return {
+            "earned": earned,
+            "max": pts,
+            "detail": f"Proportional: {correct_selected}/{num_correct} correct, {wrong_selected}/{num_incorrect or 0} wrong",
+        }
+
+
 class SlopeFieldGraphEntity(BaseEntity):
     """
     Answer-field slope field: validate dy/dx = f(x,y), axis lattice, and selected points.
@@ -3206,6 +3475,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "numAnswer": NumAnswerEntity,
         "shortAnswer": ShortAnswerEntity,
         "arrayMatchingUnordered": ArrayMatchingUnorderedEntity,
+        "multipleChoiceAnswer": MultipleChoiceAnswerEntity,
         "slopeFieldGraph": SlopeFieldGraphEntity,
     }
     
@@ -3366,6 +3636,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "value"
             elif archetype_name == "arrayMatchingUnordered":
                 error_field = "results"
+            elif archetype_name == "multipleChoiceAnswer":
+                error_field = "options"
             errors = {
                 error_field: (
                     f"Expression could not be evaluated after resolving linked "
@@ -3384,6 +3656,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'arrayMatchingUnordered':
                 evaluated_output = "[Invalid Array Matching]"
                 latex_output = "[Invalid Array Matching]"
+            elif archetype_name == 'multipleChoiceAnswer':
+                evaluated_output = "[Invalid Multiple Choice]"
+                latex_output = "[Invalid Multiple Choice]"
             elif clean_inputs.get('formula') and archetype_name == 'formula':
                 evaluated_output = str(validator.evaluate_output())
                 latex_output = evaluated_output

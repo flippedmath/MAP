@@ -1,4 +1,4 @@
-import { safeNumValue, ensureLatexRenderBox } from './helpers.js';
+import { safeNumValue, ensureLatexRenderBox, escapeHtmlText } from './helpers.js';
 
 /**
  * matrixResultByIndex — extract one cell from a linked matrix (1-based row/col).
@@ -140,5 +140,5 @@ function applyBatchSync({ card, result }) {
 }
 
 function renderPreviewToken({ displayVal }) {
-    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
+    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${escapeHtmlText(displayVal)}</span>`;
 }

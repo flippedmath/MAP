@@ -1,4 +1,4 @@
-import { ensureLatexRenderBox, extractVariablesFromFormulaString } from './helpers.js';
+import { ensureLatexRenderBox, escapeHtmlText, extractVariablesFromFormulaString } from './helpers.js';
 
 /**
  * formula entity module — expression editor with solve methods and substitutions.
@@ -454,5 +454,7 @@ function applyBatchSync({ card, result }) {
 }
 
 function renderPreviewToken({ displayVal }) {
-    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
+    // Escape so values like "x < 5" cannot break surrounding HTML (e.g. MC option rows).
+    // KaTeX later reads textContent, which resolves entities back to the raw expression.
+    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${escapeHtmlText(displayVal)}</span>`;
 }

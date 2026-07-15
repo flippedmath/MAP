@@ -1,5 +1,6 @@
 import {
     ensureLatexRenderBox,
+    escapeHtmlText,
     extractVariablesFromFormulaString,
     triggerCardLiveSync
 } from './helpers.js';
@@ -557,7 +558,8 @@ function applyBatchSync({ card, result, token }) {
 
 function renderPreviewToken({ displayVal }) {
     // displayVal is expected to be LaTeX when preview path uses formulaLiveLatexCache
-    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${displayVal}</span>`;
+    // Escape so raw "<" / ">" in the expression cannot break surrounding markup.
+    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${escapeHtmlText(displayVal)}</span>`;
 }
 
 let globalListenersInitialized = false;
