@@ -407,13 +407,25 @@ class Command(BaseCommand):
             "token": "canvas",
             "answer_field": True,
             "inputs": {
-                "canvas": {"field": "whiteboard", "value": ["content"]}
+                "source": {"field": "entity", "value": ["content"], "default": None}
             },
             "output": ["content"],
             "points": {"field": "double", "value": ["double"], "default": 0.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Create a freehand canvas or whiteboard field"
+            "note": (
+                "Scratch paper for freehand drawing or writing in the preview. "
+                "Points default to <strong>0</strong> (not graded); if you assign Pts, scoring is manual "
+                "like a long answer."
+                "<br>"
+                "Optional: link any Dynamic Variable or answer field as a <strong>background</strong> "
+                "(graph, formula, matrix, etc.). Students draw on top; eraser / undo / erase-all "
+                "never remove the linked render."
+                "<br>"
+                "Tools: pan, draw (default), eraser, erase all, undo; zoom and resize the board. "
+                "Unlinked answers are stored as vector strokes; linked answers flatten to a cropped "
+                "image that includes the background (computed for Answer Grading Preview; not saved to DB yet)."
+            )
         },
         {
             "name": "Slope Field Graph",

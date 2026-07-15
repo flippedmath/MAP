@@ -15,6 +15,7 @@ import { processEntity as longAnswerProcessor } from './entities/longAnswer.js';
 import { processEntity as arrayMatchingUnorderedProcessor } from './entities/arrayMatchingUnordered.js';
 import { processEntity as multipleChoiceAnswerProcessor } from './entities/multipleChoiceAnswer.js';
 import { processEntity as matrixAnswerProcessor } from './entities/matrixAnswer.js';
+import { processEntity as canvasProcessor } from './entities/canvas.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -33,6 +34,7 @@ const ENTITY_REGISTRY = {
     'arrayMatchingUnordered': arrayMatchingUnorderedProcessor,
     'multipleChoiceAnswer': multipleChoiceAnswerProcessor,
     'matrixAnswer': matrixAnswerProcessor,
+    'canvas': canvasProcessor,
 };
 
 
@@ -683,6 +685,31 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!tokenKey) return;
             previewStudentAnswers[tokenKey] = { value: input.value };
         });
+        root.querySelectorAll('.simulated-canvas-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            const format = wrap.dataset.format || 'strokes';
+            let strokes = [];
+            try {
+                strokes = JSON.parse(wrap.getAttribute('data-strokes') || '[]');
+            } catch (_) {
+                strokes = [];
+            }
+            if (format === 'png') {
+                previewStudentAnswers[tokenKey] = {
+                    format: 'png',
+                    result_png: wrap.dataset.resultPng || null,
+                    strokes,
+                };
+            } else {
+                previewStudentAnswers[tokenKey] = {
+                    format: 'strokes',
+                    version: 1,
+                    strokes,
+                    _display_png: wrap.dataset.resultPng || null,
+                };
+            }
+        });
         root.querySelectorAll('.preview-array-matching-input').forEach((input) => {
             const tokenKey = input.getAttribute('data-token') || '';
             if (!tokenKey) return;
@@ -798,11 +825,34 @@ document.addEventListener('DOMContentLoaded', function() {
             const max = Number(item.max) || 0;
             const detail = item.detail ? `<div style="font-size:0.72rem; color:#64748b; margin-top:2px;">${escapeHtmlText(item.detail)}</div>` : '';
             const label = escapeHtmlText(item.label || item.token || 'Answer field');
+            const tokenKey = item.sequence_token || item.token || '';
+            const stored = tokenKey ? previewStudentAnswers[tokenKey] : null;
+            let canvasVisual = '';
+            if (stored && typeof stored === 'object') {
+                const png = stored.format === 'png'
+                    ? stored.result_png
+                    : (stored._display_png || null);
+                if (png) {
+                    const formatNote = stored.format === 'png'
+                        ? 'saved as image (linked background)'
+                        : 'stored as vector strokes';
+                    canvasVisual = `
+                        <div style="margin-top:8px;">
+                            <button type="button" class="btn-canvas-grade-enlarge" style="display:block; padding:0; border:1px solid #cbd5e1; border-radius:6px; background:#fff; cursor:zoom-in; max-width:100%;">
+                                <img src="${png}" alt="Canvas submission" style="display:block; max-height:160px; max-width:100%; width:auto; height:auto; object-fit:contain; margin:0 auto;">
+                            </button>
+                            <div style="font-size:0.68rem; color:#94a3b8; margin-top:4px;">Click to enlarge · ${formatNote}</div>
+                        </div>`;
+                } else if (stored.format === 'strokes' || stored.format === 'png') {
+                    canvasVisual = `<div style="margin-top:6px; font-size:0.75rem; color:#94a3b8; font-style:italic;">No drawing yet</div>`;
+                }
+            }
             return `
                 <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; padding:8px 0; border-bottom:1px solid #e2e8f0;">
-                    <div style="min-width:0;">
+                    <div style="min-width:0; flex:1;">
                         <div style="font-size:0.85rem; font-weight:600; color:#0f172a;">${label}</div>
                         ${detail}
+                        ${canvasVisual}
                     </div>
                     <div style="font-size:0.85rem; font-weight:700; color:#166534; white-space:nowrap;">${formatGradeNumber(earned)} / ${formatGradeNumber(max)}</div>
                 </div>
@@ -818,6 +868,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 <span style="font-size:1rem; font-weight:800; color:#0f172a;">${formatGradeNumber(earnedTotal)} / ${formatGradeNumber(maxTotal)}</span>
             </div>
         `;
+
+        target.querySelectorAll('.btn-canvas-grade-enlarge').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const img = btn.querySelector('img');
+                const src = img?.getAttribute('src');
+                if (!src) return;
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed; inset:0; background:rgba(15,23,42,0.55); z-index:12000; display:flex; align-items:center; justify-content:center; padding:24px; cursor:zoom-out;';
+                overlay.innerHTML = `<img src="${src}" alt="Canvas enlarged" style="max-width:min(960px,100%); max-height:90vh; background:#fff; border-radius:8px; box-shadow:0 20px 40px rgba(0,0,0,0.25);">`;
+                overlay.addEventListener('click', () => overlay.remove());
+                document.body.appendChild(overlay);
+            });
+        });
     }
 
     function formatGradeNumber(n) {
@@ -1095,6 +1158,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (Array.isArray(stored.selected)) return stored;
                             if (Array.isArray(stored.marks)) return stored;
                             if (stored.cells && typeof stored.cells === 'object') return stored;
+                            if (stored.format === 'strokes' || stored.format === 'png') return stored;
                             if (stored.value != null) return stored.value;
                             return '';
                         })()
@@ -1182,12 +1246,57 @@ document.addEventListener('DOMContentLoaded', function() {
         bindPreviewArrayMatchingInputs(renderTarget);
         bindPreviewMultipleChoiceInputs(renderTarget);
         bindPreviewMatrixAnswerInputs(renderTarget);
+        mountPreviewCanvases(renderTarget);
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
         // Remeasure once plot SVG layout settles
         setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 40);
         setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 200);
+        // Graphs finish async — refresh canvas underlays that may clone them
+        setTimeout(() => refreshAllCanvasUnderlays(renderTarget), 120);
+    }
+
+    function mountPreviewCanvases(root) {
+        if (!root) return;
+        root.querySelectorAll('.simulated-canvas-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            const card = Array.from(document.querySelectorAll('.workspace-block-card, .workspace-component-card')).find((c) => {
+                const id = c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                return id === tokenKey;
+            });
+            getEntityInformation('canvas', {
+                action: 'mountPreviewCanvas',
+                wrapper: wrap,
+                card,
+                renderGraphComponentCanvas,
+                renderSlopeFieldCanvas,
+                onChange: (token, payload) => {
+                    if (!token) return;
+                    previewStudentAnswers[token] = payload;
+                },
+                scheduleGradeRefresh: () => scheduleWorkspacePreviewGradeRefresh(220),
+            });
+        });
+    }
+
+    function refreshAllCanvasUnderlays(root) {
+        const scope = root || document.getElementById('simulation-render-target');
+        if (!scope) return;
+        scope.querySelectorAll('.simulated-canvas-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            const card = Array.from(document.querySelectorAll('.workspace-block-card, .workspace-component-card')).find((c) => {
+                const id = c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                return id === tokenKey;
+            });
+            getEntityInformation('canvas', {
+                action: 'refreshCanvasUnderlay',
+                wrapper: wrap,
+                card,
+                renderGraphComponentCanvas,
+                renderSlopeFieldCanvas,
+            });
+        });
     }
 
     function bindPreviewNumAnswerInputs(root) {
@@ -1433,6 +1542,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.error('Preview graph paint failed:', err);
             }
         });
+
+        // Canvas underlays that link a graph need the painted SVG
+        refreshAllCanvasUnderlays(root);
     }
 
     function applyPreviewTableEntityFitModes(root) {
@@ -2209,6 +2321,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
             updateWorkspaceSimulationPreview();
+            refreshAllCanvasUnderlays();
         })
         .catch(err => {
             console.error("Batch preview sync request failed:", err);
@@ -6391,6 +6504,35 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 return;
             }
+
+            // canvas optional background source unlink
+            if (inputKey === 'source') {
+                const statusLabel = wrapper.querySelector('.link-status-text');
+                if (statusLabel) {
+                    statusLabel.textContent = 'None — blank scratch paper';
+                    statusLabel.style.color = '#94a3b8';
+                }
+                const rawInput = wrapper.querySelector('input.val-canvas-source, input, select');
+                if (rawInput) rawInput.value = '';
+                const pill = wrapper.querySelector('.linked-token-pill');
+                if (pill) pill.remove();
+                linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+                linkBtn.className = 'btn-input-link-trigger';
+                linkBtn.style.color = '#94a3b8';
+                linkBtn.style.borderColor = '#cbd5e1';
+                const activeCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
+                if (activeCard) {
+                    const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                    if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                        dispatchWorkspaceBatchSync(cardId);
+                    } else {
+                        updateWorkspaceSimulationPreview();
+                    }
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+                return;
+            }
             // 🎯 🌟 ADDED OVERRIDE: Handle unlinking variable substitution rows smoothly
             if (inputKey && inputKey.startsWith('sub_')) {
                 wrapper.removeAttribute('data-bound-token');
@@ -6710,6 +6852,37 @@ document.addEventListener('DOMContentLoaded', function() {
                 actualInputNode.dispatchEvent(new Event('input', { bubbles: true }));
             }
 
+            const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+            if (activeCard) {
+                const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                    dispatchWorkspaceBatchSync(cardId);
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+            } else {
+                updateWorkspaceSimulationPreview();
+            }
+            return;
+        }
+
+        // canvas optional background source link
+        if (inputKey === 'source') {
+            const statusLabel = wrapper.querySelector('.link-status-text');
+            if (statusLabel) {
+                statusLabel.textContent = `Linked to: ${rawTokenId}`;
+                statusLabel.style.color = '#0284c7';
+            }
+            wrapper.setAttribute('data-bound-token', chosenTokenString);
+            const actualInputNode = wrapper.querySelector('input.val-canvas-source, input, select');
+            if (actualInputNode) actualInputNode.value = chosenTokenString;
+            const existingPill = wrapper.querySelector('.linked-token-pill');
+            if (existingPill) existingPill.remove();
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+            wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
             const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
             if (activeCard) {
                 const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');

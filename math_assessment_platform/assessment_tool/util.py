@@ -2676,6 +2676,44 @@ class LongAnswerEntity(BaseEntity):
         }
 
 
+class CanvasEntity(BaseEntity):
+    """
+    Scratch-paper canvas answer field. Optional linked source as underlay.
+    No auto-grading — manual when points > 0; scratch paper when points = 0.
+    """
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+        source = self.cleaned_data.get("source")
+        if source is None or source is False or (isinstance(source, str) and not str(source).strip()):
+            self.cleaned_data["source"] = None
+            self.runtime_values["source"] = None
+        return True
+
+    def evaluate_output(self):
+        self.output_types = ["content"]
+        source = self.cleaned_data.get("source")
+        if isinstance(source, str) and re.match(r"^<[^>]+>$", source.strip()):
+            label = source.strip().replace("<", "").replace(">", "")
+            return f"Canvas over <{label}>"
+        return "Canvas (scratch paper)"
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+        detail = "To be graded manually" if pts > 0 else "Scratch paper (not graded)"
+        return {
+            "earned": 0.0,
+            "max": pts,
+            "detail": detail,
+        }
+
+
 class MatrixAnswerEntity(BaseEntity):
     """
     Answer-field matrix fill-in: link a matrix Dynamic Variable, mark cells to solve,
@@ -3769,6 +3807,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "numAnswer": NumAnswerEntity,
         "shortAnswer": ShortAnswerEntity,
         "longAnswer": LongAnswerEntity,
+        "canvas": CanvasEntity,
         "arrayMatchingUnordered": ArrayMatchingUnorderedEntity,
         "multipleChoiceAnswer": MultipleChoiceAnswerEntity,
         "matrixAnswer": MatrixAnswerEntity,
@@ -3942,6 +3981,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "value"
             elif archetype_name == "longAnswer":
                 error_field = "inputs"
+            elif archetype_name == "canvas":
+                error_field = "source"
             elif archetype_name == "arrayMatchingUnordered":
                 error_field = "results"
             elif archetype_name == "multipleChoiceAnswer":
@@ -3966,6 +4007,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'longAnswer':
                 evaluated_output = "[Invalid Long Answer]"
                 latex_output = "[Invalid Long Answer]"
+            elif archetype_name == 'canvas':
+                evaluated_output = "[Invalid Canvas]"
+                latex_output = "[Invalid Canvas]"
             elif archetype_name == 'arrayMatchingUnordered':
                 evaluated_output = "[Invalid Array Matching]"
                 latex_output = "[Invalid Array Matching]"
