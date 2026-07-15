@@ -277,14 +277,16 @@ class Command(BaseCommand):
             "name": "Long Answer",
             "token": "longAnswer",
             "answer_field": True,
-            "inputs": {
-                "value": {"field": "paragraph", "value": ["string"]}
-            },
-            "output": ["string"],
+            "inputs": {},
+            "output": ["content"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "An exact match of text is looked for. Note: it does trim text and match upper/lower cases before comparing."
+            "note": (
+                "Free-response paragraph field. Students type into a large plain text box in the preview. "
+                "There is no auto-grading — the Answer Grading (Preview) panel lists this item as "
+                "<strong>to be graded manually</strong> (earned 0 of the card Points until scored by hand)."
+            )
         },
         {
             "name": "Array Matching (unordered)",
@@ -384,22 +386,6 @@ class Command(BaseCommand):
                 "<br>"
                 "<strong>Split points per cell:</strong> earned = P × (correct / N); max = P."
             )
-        },
-        {
-            "name": "Matrix Calculations",
-            "token": "matrixMath",
-            "answer_field": True,
-            "inputs": {
-                "matrix A": {"field": "entity", "value": ["matrix"], "default": None},
-                "matrix B": {"field": "entity", "value": ["matrix"], "default": None},
-                "scalar": {"field": "double", "value": ["double"], "default": 1.0},
-                "calculate": {"field": "dropdown", "value": ["string_match(['multiply', 'add', 'subtract', 'inversion', 'transpose', 'scalar', 'determinate'])"], "default": "scalar"}
-            },
-            "output": ["matrix", "double"],
-            "points": {"field": "double", "value": ["double"], "default": 1.0},
-            "entity_name_list": "Answer Input Fields",
-            "disabled": False,
-            "note": "Perform one of AxB/A+B/A-B/A^-1/transpose(A)/A*c/det(A) on matricies"
         },
         {
             "name": "Graph Between Points",

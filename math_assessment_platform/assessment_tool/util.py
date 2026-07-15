@@ -2649,6 +2649,33 @@ class ShortAnswerEntity(BaseEntity):
         return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
 
 
+class LongAnswerEntity(BaseEntity):
+    """
+    Free-response paragraph answer field. No auto-grading — preview always
+    reports earned 0 of available points with a manual-grading detail.
+    """
+
+    def is_valid(self):
+        return super().is_valid()
+
+    def evaluate_output(self):
+        self.output_types = ["content"]
+        return "Long answer (manual grading)"
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+        return {
+            "earned": 0.0,
+            "max": pts,
+            "detail": "To be graded manually",
+        }
+
+
 class MatrixAnswerEntity(BaseEntity):
     """
     Answer-field matrix fill-in: link a matrix Dynamic Variable, mark cells to solve,
@@ -3741,6 +3768,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "matrixResultByIndex": MatrixResultByIndexEntity,
         "numAnswer": NumAnswerEntity,
         "shortAnswer": ShortAnswerEntity,
+        "longAnswer": LongAnswerEntity,
         "arrayMatchingUnordered": ArrayMatchingUnorderedEntity,
         "multipleChoiceAnswer": MultipleChoiceAnswerEntity,
         "matrixAnswer": MatrixAnswerEntity,
@@ -3912,6 +3940,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "value"
             elif archetype_name == "shortAnswer":
                 error_field = "value"
+            elif archetype_name == "longAnswer":
+                error_field = "inputs"
             elif archetype_name == "arrayMatchingUnordered":
                 error_field = "results"
             elif archetype_name == "multipleChoiceAnswer":
@@ -3933,6 +3963,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'shortAnswer':
                 evaluated_output = "[Invalid Short Answer]"
                 latex_output = "[Invalid Short Answer]"
+            elif archetype_name == 'longAnswer':
+                evaluated_output = "[Invalid Long Answer]"
+                latex_output = "[Invalid Long Answer]"
             elif archetype_name == 'arrayMatchingUnordered':
                 evaluated_output = "[Invalid Array Matching]"
                 latex_output = "[Invalid Array Matching]"

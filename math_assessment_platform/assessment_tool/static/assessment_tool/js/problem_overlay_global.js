@@ -11,6 +11,7 @@ import {
 } from './entities/slopeFieldGraph.js';
 import { processEntity as numAnswerProcessor } from './entities/numAnswer.js';
 import { processEntity as shortAnswerProcessor } from './entities/shortAnswer.js';
+import { processEntity as longAnswerProcessor } from './entities/longAnswer.js';
 import { processEntity as arrayMatchingUnorderedProcessor } from './entities/arrayMatchingUnordered.js';
 import { processEntity as multipleChoiceAnswerProcessor } from './entities/multipleChoiceAnswer.js';
 import { processEntity as matrixAnswerProcessor } from './entities/matrixAnswer.js';
@@ -28,6 +29,7 @@ const ENTITY_REGISTRY = {
     'slopeFieldGraph': slopeFieldGraphProcessor,
     'numAnswer': numAnswerProcessor,
     'shortAnswer': shortAnswerProcessor,
+    'longAnswer': longAnswerProcessor,
     'arrayMatchingUnordered': arrayMatchingUnorderedProcessor,
     'multipleChoiceAnswer': multipleChoiceAnswerProcessor,
     'matrixAnswer': matrixAnswerProcessor,
@@ -676,6 +678,11 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!tokenKey) return;
             previewStudentAnswers[tokenKey] = { value: input.value };
         });
+        root.querySelectorAll('.preview-long-answer-input').forEach((input) => {
+            const tokenKey = input.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            previewStudentAnswers[tokenKey] = { value: input.value };
+        });
         root.querySelectorAll('.preview-array-matching-input').forEach((input) => {
             const tokenKey = input.getAttribute('data-token') || '';
             if (!tokenKey) return;
@@ -1171,6 +1178,7 @@ document.addEventListener('DOMContentLoaded', function() {
         flushPreviewGraphRenders(renderTarget, pendingGraphRenders);
         bindPreviewNumAnswerInputs(renderTarget);
         bindPreviewShortAnswerInputs(renderTarget);
+        bindPreviewLongAnswerInputs(renderTarget);
         bindPreviewArrayMatchingInputs(renderTarget);
         bindPreviewMultipleChoiceInputs(renderTarget);
         bindPreviewMatrixAnswerInputs(renderTarget);
@@ -1203,6 +1211,22 @@ document.addEventListener('DOMContentLoaded', function() {
         root.querySelectorAll('.preview-short-answer-input').forEach((input) => {
             if (input.dataset.previewShortBound === '1') return;
             input.dataset.previewShortBound = '1';
+            const tokenKey = input.getAttribute('data-token') || '';
+            const sync = () => {
+                if (!tokenKey) return;
+                previewStudentAnswers[tokenKey] = { value: input.value };
+                scheduleWorkspacePreviewGradeRefresh(180);
+            };
+            input.addEventListener('input', sync);
+            input.addEventListener('change', sync);
+        });
+    }
+
+    function bindPreviewLongAnswerInputs(root) {
+        if (!root) return;
+        root.querySelectorAll('.preview-long-answer-input').forEach((input) => {
+            if (input.dataset.previewLongBound === '1') return;
+            input.dataset.previewLongBound = '1';
             const tokenKey = input.getAttribute('data-token') || '';
             const sync = () => {
                 if (!tokenKey) return;
