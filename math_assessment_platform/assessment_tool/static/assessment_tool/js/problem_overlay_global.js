@@ -13,6 +13,7 @@ import { processEntity as numAnswerProcessor } from './entities/numAnswer.js';
 import { processEntity as shortAnswerProcessor } from './entities/shortAnswer.js';
 import { processEntity as arrayMatchingUnorderedProcessor } from './entities/arrayMatchingUnordered.js';
 import { processEntity as multipleChoiceAnswerProcessor } from './entities/multipleChoiceAnswer.js';
+import { processEntity as matrixAnswerProcessor } from './entities/matrixAnswer.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -29,6 +30,7 @@ const ENTITY_REGISTRY = {
     'shortAnswer': shortAnswerProcessor,
     'arrayMatchingUnordered': arrayMatchingUnorderedProcessor,
     'multipleChoiceAnswer': multipleChoiceAnswerProcessor,
+    'matrixAnswer': matrixAnswerProcessor,
 };
 
 
@@ -99,6 +101,16 @@ document.addEventListener('DOMContentLoaded', function() {
         Object.keys(previewStudentAnswers).forEach((key) => {
             delete previewStudentAnswers[key];
         });
+        // Wipe the live preview DOM too — otherwise reopening the overlay
+        // recaptures typed values (e.g. matrixAnswer cells) from leftover inputs.
+        const renderTarget = document.getElementById('simulation-render-target');
+        if (renderTarget) {
+            renderTarget.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Interactive layout testing view builds dynamically here...</p>';
+        }
+        const gradeTarget = document.getElementById('workspace-preview-grade-target');
+        if (gradeTarget) {
+            gradeTarget.innerHTML = '<p style="color: #94a3b8; font-style: italic; margin: 0;">Grading results appear here when answer fields are present...</p>';
+        }
     }
 
     // Global Workspace Quill Editor Tracker Instance
@@ -409,7 +421,8 @@ document.addEventListener('DOMContentLoaded', function() {
             action: 'bindEvents',
             card,
             savedValues: savedValues || {},
-            updateWorkspaceSimulationPreview
+            updateWorkspaceSimulationPreview,
+            dispatchWorkspaceBatchSync
         });
 
         const newlyCreatedWrappers = card.querySelectorAll(
@@ -667,6 +680,25 @@ document.addEventListener('DOMContentLoaded', function() {
             const tokenKey = input.getAttribute('data-token') || '';
             if (!tokenKey) return;
             previewStudentAnswers[tokenKey] = { value: input.value };
+        });
+        // Matrix answer: aggregate all blank cells per token into { cells: { "r,c": value } }
+        const matrixByToken = {};
+        root.querySelectorAll('.preview-matrix-answer-cell').forEach((input) => {
+            const tokenKey = input.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            if (!matrixByToken[tokenKey]) matrixByToken[tokenKey] = {};
+            const r = input.getAttribute('data-row');
+            const c = input.getAttribute('data-col');
+            if (r == null || c == null) return;
+            matrixByToken[tokenKey][`${r},${c}`] = input.value;
+        });
+        Object.entries(matrixByToken).forEach(([tokenKey, cells]) => {
+            previewStudentAnswers[tokenKey] = { cells };
+        });
+        root.querySelectorAll('.simulated-matrix-answer-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            if (!tokenKey || Object.prototype.hasOwnProperty.call(matrixByToken, tokenKey)) return;
+            previewStudentAnswers[tokenKey] = { cells: {} };
         });
     }
 
@@ -1055,6 +1087,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (!stored || typeof stored !== 'object') return '';
                             if (Array.isArray(stored.selected)) return stored;
                             if (Array.isArray(stored.marks)) return stored;
+                            if (stored.cells && typeof stored.cells === 'object') return stored;
                             if (stored.value != null) return stored.value;
                             return '';
                         })()
@@ -1140,6 +1173,7 @@ document.addEventListener('DOMContentLoaded', function() {
         bindPreviewShortAnswerInputs(renderTarget);
         bindPreviewArrayMatchingInputs(renderTarget);
         bindPreviewMultipleChoiceInputs(renderTarget);
+        bindPreviewMatrixAnswerInputs(renderTarget);
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
@@ -1189,6 +1223,35 @@ document.addEventListener('DOMContentLoaded', function() {
             const sync = () => {
                 if (!tokenKey) return;
                 previewStudentAnswers[tokenKey] = { value: input.value };
+                scheduleWorkspacePreviewGradeRefresh(180);
+            };
+            input.addEventListener('input', sync);
+            input.addEventListener('change', sync);
+        });
+    }
+
+    function bindPreviewMatrixAnswerInputs(root) {
+        if (!root) return;
+
+        const collectCellsForToken = (tokenKey) => {
+            const cells = {};
+            root.querySelectorAll('.preview-matrix-answer-cell').forEach((input) => {
+                if (input.getAttribute('data-token') !== tokenKey) return;
+                const r = input.getAttribute('data-row');
+                const c = input.getAttribute('data-col');
+                if (r == null || c == null) return;
+                cells[`${r},${c}`] = input.value;
+            });
+            return cells;
+        };
+
+        root.querySelectorAll('.preview-matrix-answer-cell').forEach((input) => {
+            if (input.dataset.previewMatrixAnswerBound === '1') return;
+            input.dataset.previewMatrixAnswerBound = '1';
+            const tokenKey = input.getAttribute('data-token') || '';
+            const sync = () => {
+                if (!tokenKey) return;
+                previewStudentAnswers[tokenKey] = { cells: collectCellsForToken(tokenKey) };
                 scheduleWorkspacePreviewGradeRefresh(180);
             };
             input.addEventListener('input', sync);
@@ -6265,7 +6328,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 return; // 🚀 EXIT EARLY
             }
 
-            // matrixResultByIndex source matrix unlink
+            // matrixResultByIndex / matrixAnswer source matrix unlink
             if (inputKey === 'matrix') {
                 const statusLabel = wrapper.querySelector('.link-status-text');
                 if (statusLabel) {
@@ -6273,7 +6336,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     statusLabel.style.color = '#ef4444';
                 }
 
-                const rawInput = wrapper.querySelector('input.val-matrix-result-source, input, select');
+                const rawInput = wrapper.querySelector(
+                    'input.val-matrix-result-source, input.val-matrix-answer-source, input, select'
+                );
                 if (rawInput) rawInput.value = '';
 
                 const pill = wrapper.querySelector('.linked-token-pill');
@@ -6589,7 +6654,7 @@ document.addEventListener('DOMContentLoaded', function() {
             return; // 🚀 EXIT EARLY: Avoid creating an inline green pill for this custom container layout row!
         }
 
-        // matrixResultByIndex source matrix link
+        // matrixResultByIndex / matrixAnswer source matrix link
         if (inputKey === 'matrix') {
             const statusLabel = wrapper.querySelector('.link-status-text');
             if (statusLabel) {
@@ -6597,7 +6662,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 statusLabel.style.color = '#0284c7';
             }
 
-            const actualInputNode = wrapper.querySelector('input.val-matrix-result-source, input, select');
+            // Persist the dependency so serialize / batch sync actually see the link
+            wrapper.setAttribute('data-bound-token', chosenTokenString);
+
+            const actualInputNode = wrapper.querySelector(
+                'input.val-matrix-result-source, input.val-matrix-answer-source, input, select'
+            );
             if (actualInputNode) {
                 actualInputNode.value = chosenTokenString;
             }

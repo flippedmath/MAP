@@ -991,6 +991,81 @@ class BaseEntity:
         if empty:
             return {"earned": 0.0, "max": pts, "detail": "No student input"}
         return {"earned": 0.0, "max": pts, "detail": "Grading not implemented"}
+
+    # --- Shared shortAnswer-style text / expression comparison ---
+
+    def _trim_str(self, raw):
+        if raw is None:
+            return ""
+        if isinstance(raw, dict):
+            raw = raw.get("value", "")
+        return str(raw).strip()
+
+    def _to_sympy(self, raw):
+        s = self._trim_str(raw)
+        if not s:
+            return None
+        normalized = self.insert_implicit_multiplication(s)
+        try:
+            if re.search(r"(?<![<>!=])=(?!=)", normalized):
+                left, right = re.split(r"(?<![<>!=])=(?!=)", normalized, maxsplit=1)
+                left_expr = sp.parse_expr(left.strip(), evaluate=False)
+                right_expr = sp.parse_expr(right.strip(), evaluate=False)
+                return sp.Eq(left_expr, right_expr)
+            return sp.parse_expr(normalized, evaluate=False)
+        except Exception:
+            return None
+
+    def _simplify_key(self, raw):
+        """Return simplified display/grade key string, or trimmed text if unparseable."""
+        trimmed = self._trim_str(raw)
+        expr = self._to_sympy(trimmed)
+        if expr is None:
+            return trimmed
+        try:
+            if isinstance(expr, sp.Equality):
+                left = sp.simplify(expr.lhs)
+                right = sp.simplify(expr.rhs)
+                return f"{left} = {right}"
+            return str(sp.simplify(expr))
+        except Exception:
+            return trimmed
+
+    def _exprs_equivalent(self, student_expr, correct_expr):
+        def as_diff(e):
+            if isinstance(e, sp.Equality):
+                return e.lhs - e.rhs
+            return e
+
+        try:
+            return sp.simplify(as_diff(student_expr) - as_diff(correct_expr)) == 0
+        except Exception:
+            return False
+
+    def _grade_short_answer_text(self, student_raw, correct_raw):
+        """
+        True if student matches correct via shortAnswer rules:
+        trim + lowercase exact match, else sympy equivalence with count_ops gate
+        (reject if student still needs further simplification).
+        """
+        student_trimmed = self._trim_str(student_raw)
+        correct_trimmed = self._trim_str(correct_raw)
+        if not student_trimmed:
+            return False
+        if student_trimmed.lower() == correct_trimmed.lower():
+            return True
+        student_expr = self._to_sympy(student_trimmed)
+        correct_expr = self._to_sympy(correct_trimmed)
+        if student_expr is None or correct_expr is None:
+            return False
+        if not self._exprs_equivalent(student_expr, correct_expr):
+            return False
+        try:
+            student_ops = sp.count_ops(student_expr)
+            correct_ops = sp.count_ops(correct_expr)
+        except Exception:
+            return False
+        return student_ops <= correct_ops
     
 
 class RandomIntegerEntity(BaseEntity):
@@ -2495,56 +2570,8 @@ class ShortAnswerEntity(BaseEntity):
     Answer-field short text / expression response.
     Exact match uses trim + lowercase; sympy path uses trimmed original-case
     strings and requires equivalence without needing further simplification
-    (count_ops(student) <= count_ops(correct)).
+    (count_ops(student) <= count_ops(correct)). Comparison helpers live on BaseEntity.
     """
-
-    def _trim_str(self, raw):
-        if raw is None:
-            return ""
-        if isinstance(raw, dict):
-            raw = raw.get("value", "")
-        return str(raw).strip()
-
-    def _to_sympy(self, raw):
-        s = self._trim_str(raw)
-        if not s:
-            return None
-        normalized = self.insert_implicit_multiplication(s)
-        try:
-            if re.search(r"(?<![<>!=])=(?!=)", normalized):
-                left, right = re.split(r"(?<![<>!=])=(?!=)", normalized, maxsplit=1)
-                left_expr = sp.parse_expr(left.strip(), evaluate=False)
-                right_expr = sp.parse_expr(right.strip(), evaluate=False)
-                return sp.Eq(left_expr, right_expr)
-            return sp.parse_expr(normalized, evaluate=False)
-        except Exception:
-            return None
-
-    def _simplify_key(self, raw):
-        """Return simplified display/grade key string, or trimmed text if unparseable."""
-        trimmed = self._trim_str(raw)
-        expr = self._to_sympy(trimmed)
-        if expr is None:
-            return trimmed
-        try:
-            if isinstance(expr, sp.Equality):
-                left = sp.simplify(expr.lhs)
-                right = sp.simplify(expr.rhs)
-                return f"{left} = {right}"
-            return str(sp.simplify(expr))
-        except Exception:
-            return trimmed
-
-    def _exprs_equivalent(self, student_expr, correct_expr):
-        def as_diff(e):
-            if isinstance(e, sp.Equality):
-                return e.lhs - e.rhs
-            return e
-
-        try:
-            return sp.simplify(as_diff(student_expr) - as_diff(correct_expr)) == 0
-        except Exception:
-            return False
 
     def is_valid(self):
         if not super().is_valid():
@@ -2592,36 +2619,276 @@ class ShortAnswerEntity(BaseEntity):
         if isinstance(student_input, dict):
             student_raw = student_input.get("value", "")
         student_trimmed = self._trim_str(student_raw)
-        correct_trimmed = self._trim_str(correct_key)
 
         if not student_trimmed:
             return {"earned": 0.0, "max": pts, "detail": "No student input"}
 
-        # Tier 1: exact match on trimmed + lowercased copies only
-        if student_trimmed.lower() == correct_trimmed.lower():
-            return {"earned": pts, "max": pts, "detail": "Exact match"}
-
-        # Tier 2: sympy on trimmed original-case strings (not lowercased)
-        student_expr = self._to_sympy(student_trimmed)
-        correct_expr = self._to_sympy(correct_trimmed)
-        if student_expr is None or correct_expr is None:
-            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
-
-        if not self._exprs_equivalent(student_expr, correct_expr):
-            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
-
-        try:
-            student_ops = sp.count_ops(student_expr)
-            correct_ops = sp.count_ops(correct_expr)
-        except Exception:
-            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
-
-        if student_ops <= correct_ops:
+        if self._grade_short_answer_text(student_trimmed, correct_key):
+            # Distinguish exact vs sympy for detail (same outcome)
+            if student_trimmed.lower() == self._trim_str(correct_key).lower():
+                return {"earned": pts, "max": pts, "detail": "Exact match"}
             return {"earned": pts, "max": pts, "detail": "Equivalent (simplified form)"}
+
+        # Match prior detail when sympy-equivalent but not simplified enough
+        student_expr = self._to_sympy(student_trimmed)
+        correct_expr = self._to_sympy(correct_key)
+        if (
+            student_expr is not None
+            and correct_expr is not None
+            and self._exprs_equivalent(student_expr, correct_expr)
+        ):
+            try:
+                if sp.count_ops(student_expr) > sp.count_ops(correct_expr):
+                    return {
+                        "earned": 0.0,
+                        "max": pts,
+                        "detail": "Equivalent but not simplified",
+                    }
+            except Exception:
+                pass
+        return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
+
+
+class MatrixAnswerEntity(BaseEntity):
+    """
+    Answer-field matrix fill-in: link a matrix Dynamic Variable, mark cells to solve,
+    grade each blank like shortAnswer. Modes: points_per_cell, whole_matrix, per_cell.
+    """
+
+    GRADING_MODES = ("points_per_cell", "whole_matrix", "per_cell")
+    DEFAULT_GRADING_MODE = "points_per_cell"
+
+    def _coerce_to_matrix(self, raw_value):
+        if isinstance(raw_value, (SymPyMatrix, sp.MatrixBase)):
+            return raw_value
+        if isinstance(raw_value, list):
+            return SymPyMatrix(raw_value)
+        if isinstance(raw_value, str):
+            s = raw_value.strip()
+            if not s:
+                raise ValueError("Linked matrix value is empty.")
+            if s.startswith("Matrix("):
+                parsed = sp.sympify(s, evaluate=False)
+            else:
+                parsed = self.parse_math_expression(s, evaluate=False)
+            if isinstance(parsed, (SymPyMatrix, sp.MatrixBase)):
+                return parsed
+            raise ValueError("Linked entity evaluated to a non-matrix value.")
+        raise ValueError(f"Unable to interpret linked matrix payload of type {type(raw_value).__name__}.")
+
+    def _normalize_solve_cells(self, raw, nrows, ncols):
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = []
+        if not isinstance(raw, (list, tuple)):
+            return []
+
+        seen = set()
+        out = []
+        for item in raw:
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            try:
+                r = int(item[0])
+                c = int(item[1])
+            except (TypeError, ValueError):
+                continue
+            if r < 0 or c < 0 or r >= nrows or c >= ncols:
+                continue
+            key = (r, c)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append([r, c])
+        return out
+
+    def _mode_max(self, mode, points, n_solve):
+        try:
+            pts = float(points) if points is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+        if mode == "points_per_cell":
+            return pts * max(n_solve, 0)
+        return pts
+
+    def _resolve_grading_mode(self):
+        mode = str(
+            self.runtime_values.get(
+                "grading_mode",
+                self.data.get("grading_mode", self.DEFAULT_GRADING_MODE),
+            )
+        ).strip()
+        if mode not in self.GRADING_MODES:
+            mode = self.DEFAULT_GRADING_MODE
+        return mode
+
+    def _store_matrix_runtime(self, matrix_obj, solve_cells, mode):
+        """Persist dims/grid for author UI even when solve_cells is still empty."""
+        nrows, ncols = int(matrix_obj.rows), int(matrix_obj.cols)
+        cell_keys = [f"{r},{c}" for r, c in solve_cells]
+        correct_by_key = {}
+        rows_display = []
+        for r in range(nrows):
+            row_vals = []
+            for c in range(ncols):
+                cell_str = str(matrix_obj[r, c])
+                row_vals.append(cell_str)
+                key = f"{r},{c}"
+                if key in cell_keys:
+                    correct_by_key[key] = self._simplify_key(cell_str)
+            rows_display.append(row_vals)
+
+        self.runtime_values["resolved_matrix"] = matrix_obj
+        self.runtime_values["nrows"] = nrows
+        self.runtime_values["ncols"] = ncols
+        self.runtime_values["solve_cells"] = solve_cells
+        self.runtime_values["solve_keys"] = cell_keys
+        self.runtime_values["correct_by_key"] = correct_by_key
+        self.runtime_values["rows_display"] = rows_display
+        self.runtime_values["grading_mode"] = mode
+        self.cleaned_data["solve_cells"] = solve_cells
+        self.cleaned_data["grading_mode"] = mode
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        matrix_token = self.cleaned_data.get("matrix")
+        if not matrix_token or (isinstance(matrix_token, str) and not matrix_token.strip()):
+            self.errors["matrix"] = "A source matrix must be linked."
+            return False
+
+        raw_matrix = self.runtime_values.get("matrix")
+        try:
+            matrix_obj = self._coerce_to_matrix(raw_matrix)
+        except Exception as exc:
+            self.errors["matrix"] = f"Linked entity did not evaluate to a matrix: {exc}"
+            return False
+
+        nrows, ncols = int(matrix_obj.rows), int(matrix_obj.cols)
+        raw_solve = self.data.get("solve_cells", self.runtime_values.get("solve_cells", []))
+        solve_cells = self._normalize_solve_cells(raw_solve, nrows, ncols)
+        mode = self._resolve_grading_mode()
+
+        # Always store the grid so the author card can paint cells even before
+        # any solve cells are marked (is_valid still fails until ≥1 is set).
+        self.cleaned_data["matrix"] = matrix_token
+        self._store_matrix_runtime(matrix_obj, solve_cells, mode)
+
+        if len(solve_cells) < 1:
+            self.errors["solve_cells"] = "Mark at least one cell as set to solve."
+            return False
+
+        return True
+
+    def evaluate_output(self):
+        """
+        Build author/preview JSON. Works with 0 solve cells when the matrix was
+        already hydrated by is_valid (partial / incomplete configuration).
+        """
+        if self.runtime_values.get("rows_display") is None:
+            # Soft hydrate without requiring solve cells
+            if not isinstance(self.data, dict):
+                raise ValueError("Cannot evaluate matrixAnswer: configuration is invalid.")
+            matrix_token = self.data.get("matrix") or self.cleaned_data.get("matrix")
+            if not matrix_token:
+                raise ValueError("Cannot evaluate matrixAnswer: no matrix linked.")
+            raw_matrix = self.runtime_values.get("matrix")
+            if raw_matrix is None and isinstance(matrix_token, str) and re.match(r"^<[^>]+>$", matrix_token.strip()):
+                raw_matrix = self.resolve_token_dependency(matrix_token)
+                self.runtime_values["matrix"] = raw_matrix
+            matrix_obj = self._coerce_to_matrix(raw_matrix)
+            nrows, ncols = int(matrix_obj.rows), int(matrix_obj.cols)
+            solve_cells = self._normalize_solve_cells(
+                self.data.get("solve_cells", self.runtime_values.get("solve_cells", [])),
+                nrows,
+                ncols,
+            )
+            self._store_matrix_runtime(matrix_obj, solve_cells, self._resolve_grading_mode())
+
+        nrows = self.runtime_values.get("nrows", 0)
+        ncols = self.runtime_values.get("ncols", 0)
+        solve_cells = self.runtime_values.get("solve_cells") or []
+        mode = self.runtime_values.get("grading_mode", self.DEFAULT_GRADING_MODE)
+        n = len(solve_cells)
+        if n < 1:
+            summary = f"{nrows}×{ncols} — click cells to set to solve"
+        else:
+            summary = f"{nrows}×{ncols}, {n} cells to solve ({mode})"
+        payload = {
+            "archetype": "matrixAnswer",
+            "summary": summary,
+            "rows": self.runtime_values.get("rows_display") or [],
+            "solve_cells": solve_cells,
+            "grading_mode": mode,
+        }
+        self.output_types = ["content"]
+        return json.dumps(payload)
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        if self.runtime_values.get("correct_by_key") is None:
+            self.is_valid()
+
+        solve_cells = self.runtime_values.get("solve_cells") or []
+        correct_by_key = self.runtime_values.get("correct_by_key") or {}
+        mode = self.runtime_values.get("grading_mode", self.DEFAULT_GRADING_MODE)
+        if mode not in self.GRADING_MODES:
+            mode = self.DEFAULT_GRADING_MODE
+        n = len(solve_cells)
+        mode_max = self._mode_max(mode, pts, n)
+
+        cells_map = {}
+        if isinstance(student_input, dict):
+            raw_cells = student_input.get("cells", student_input)
+            if isinstance(raw_cells, dict):
+                cells_map = raw_cells
+
+        def cell_value(r, c):
+            key = f"{r},{c}"
+            if key in cells_map:
+                return cells_map.get(key)
+            return cells_map.get(f"{r}, {c}", "")
+
+        any_filled = False
+        correct_count = 0
+        for pair in solve_cells:
+            r, c = pair[0], pair[1]
+            key = f"{r},{c}"
+            student_val = self._trim_str(cell_value(r, c))
+            if student_val:
+                any_filled = True
+            correct_val = correct_by_key.get(key, "")
+            if self._grade_short_answer_text(student_val, correct_val):
+                correct_count += 1
+
+        if not any_filled:
+            return {"earned": 0.0, "max": mode_max, "detail": "No student input"}
+
+        if n <= 0:
+            return {"earned": 0.0, "max": mode_max, "detail": "No solve cells"}
+
+        if mode == "whole_matrix":
+            earned = pts if correct_count == n else 0.0
+        elif mode == "points_per_cell":
+            earned = correct_count * pts
+        else:  # per_cell — split points
+            earned = pts * (correct_count / n)
+
         return {
-            "earned": 0.0,
-            "max": pts,
-            "detail": "Equivalent but not simplified",
+            "earned": float(earned),
+            "max": float(mode_max),
+            "detail": f"{correct_count}/{n} cells correct ({mode})",
         }
 
 
@@ -3476,6 +3743,7 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "shortAnswer": ShortAnswerEntity,
         "arrayMatchingUnordered": ArrayMatchingUnorderedEntity,
         "multipleChoiceAnswer": MultipleChoiceAnswerEntity,
+        "matrixAnswer": MatrixAnswerEntity,
         "slopeFieldGraph": SlopeFieldGraphEntity,
     }
     
@@ -3541,6 +3809,16 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                     if hasattr(result_obj, 'free_symbols'):
                         sym_set = result_obj.free_symbols
                 else:
+                    latex_output = evaluated_output
+            elif archetype_name == 'matrixAnswer':
+                # evaluated_output is JSON; latex box shows the human summary
+                try:
+                    parsed = json.loads(evaluated_output) if isinstance(evaluated_output, str) else evaluated_output
+                    if isinstance(parsed, dict) and parsed.get("summary"):
+                        latex_output = str(parsed["summary"])
+                    else:
+                        latex_output = evaluated_output
+                except Exception:
                     latex_output = evaluated_output
             else:
                 latex_output = evaluated_output
@@ -3638,6 +3916,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "results"
             elif archetype_name == "multipleChoiceAnswer":
                 error_field = "options"
+            elif archetype_name == "matrixAnswer":
+                error_field = "matrix"
             errors = {
                 error_field: (
                     f"Expression could not be evaluated after resolving linked "
@@ -3659,6 +3939,32 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'multipleChoiceAnswer':
                 evaluated_output = "[Invalid Multiple Choice]"
                 latex_output = "[Invalid Multiple Choice]"
+            elif archetype_name == 'matrixAnswer':
+                # Matrix linked but incomplete (e.g. no solve cells yet): still
+                # return the grid JSON so the author card can paint toggle cells.
+                try:
+                    if getattr(validator, "runtime_values", {}).get("rows_display") is not None:
+                        evaluated_output = str(validator.evaluate_output())
+                        try:
+                            parsed = json.loads(evaluated_output)
+                            latex_output = str(parsed.get("summary") or evaluated_output)
+                        except Exception:
+                            latex_output = evaluated_output
+                    elif clean_inputs.get("matrix"):
+                        # is_valid failed before hydrate (e.g. resolve error) —
+                        # attempt a soft evaluate for author UI.
+                        evaluated_output = str(validator.evaluate_output())
+                        try:
+                            parsed = json.loads(evaluated_output)
+                            latex_output = str(parsed.get("summary") or evaluated_output)
+                        except Exception:
+                            latex_output = evaluated_output
+                    else:
+                        evaluated_output = "[Link a matrix]"
+                        latex_output = "[Link a matrix]"
+                except Exception:
+                    evaluated_output = "[Invalid Matrix Answer]"
+                    latex_output = "[Invalid Matrix Answer]"
             elif clean_inputs.get('formula') and archetype_name == 'formula':
                 evaluated_output = str(validator.evaluate_output())
                 latex_output = evaluated_output

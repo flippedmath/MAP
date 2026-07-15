@@ -349,19 +349,41 @@ class Command(BaseCommand):
             )
         },
         {
-            "name": "Matrix",
+            "name": "Matrix Answer",
             "token": "matrixAnswer",
             "answer_field": True,
             "inputs": {
-                "rows": {"field": "integer", "value": ["integer"], "default": 3},
-                "cols": {"field": "integer", "value": ["integer"], "default": 3},
-                "cells": {"field": "double", "value": ["matrix", "array([array([['double', 'integer', 'formula']])])"], "default": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}
+                "matrix": {"field": "entity", "value": ["matrix"]},
+                "grading_mode": {
+                    "field": "dropdown",
+                    "value": ["string_match(['points_per_cell', 'whole_matrix', 'per_cell'])"],
+                    "default": "points_per_cell"
+                },
+                "solve_cells": {
+                    "field": "array",
+                    "value": ["array([array(['integer'])])"],
+                    "default": []
+                }
             },
-            "output": ["matrix"],
+            "output": ["content"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "The input can be a LaTeX formula, or typed out."
+            "note": (
+                "Link a matrix Dynamic Variable. Click cells on the card to mark them as "
+                "<strong>provided</strong> (shown in the preview) or <strong>set to solve</strong> "
+                "(student fills them in). At least one solve cell is required."
+                "<br>"
+                "Each blank is graded like shortAnswer: trim + lowercase exact match, then sympy "
+                "equivalence that does not require further simplification."
+                "<br>"
+                "<strong>Points per cell (default):</strong> earned = correct × P; max = N × P "
+                "(selecting this mode resets Pts to 1 so each blank is worth 1 by default)."
+                "<br>"
+                "<strong>All or nothing:</strong> full P only if every solve cell is correct; else 0."
+                "<br>"
+                "<strong>Split points per cell:</strong> earned = P × (correct / N); max = P."
+            )
         },
         {
             "name": "Matrix Calculations",
