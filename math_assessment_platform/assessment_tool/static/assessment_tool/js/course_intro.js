@@ -205,6 +205,43 @@ function setupTableContextMenu() {
         document.body.appendChild(menu);
     }
 
+    function positionMenuInViewport(clientX, clientY) {
+        const margin = 8;
+        menu.style.position = 'fixed';
+        menu.style.right = 'auto';
+        menu.style.bottom = 'auto';
+        menu.style.left = `${Math.max(margin, clientX)}px`;
+        menu.style.top = `${Math.max(margin, clientY)}px`;
+        menu.style.maxHeight = '';
+        menu.style.overflowY = '';
+        menu.style.display = 'block';
+
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const maxH = Math.max(140, vh - margin * 2);
+        menu.style.maxHeight = `${maxH}px`;
+        menu.style.overflowY = 'auto';
+
+        const rect = menu.getBoundingClientRect();
+        let left = clientX;
+        let top = clientY;
+
+        if (left + rect.width > vw - margin) {
+            left = Math.max(margin, vw - rect.width - margin);
+        }
+        if (left < margin) left = margin;
+
+        const menuH = Math.min(rect.height, maxH);
+        if (top + menuH > vh - margin) {
+            // Pin the menu bottom to the viewport edge (do not flip above cursor).
+            top = Math.max(margin, vh - menuH - margin);
+        }
+        if (top < margin) top = margin;
+
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+    }
+
     // Hide the menu whenever the user clicks anywhere else on the screen
     document.addEventListener('click', function() {
         menu.style.display = 'none';
@@ -242,10 +279,7 @@ function setupTableContextMenu() {
             <div class="menu-item menu-item-danger" data-command="delete-table">❌ Delete Entire Table</div>
         `;
 
-        // Position the menu exactly at the mouse pointer coordinates
-        menu.style.left = `${e.pageX}px`;
-        menu.style.top = `${e.pageY}px`;
-        menu.style.display = 'block';
+        positionMenuInViewport(e.clientX, e.clientY);
 
         // Bind clicks to handle Quill 2.0 API calls safely
         const items = menu.querySelectorAll('.menu-item');

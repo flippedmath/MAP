@@ -1,4 +1,4 @@
-import { safeNumValue, triggerCardLiveSync } from './helpers.js';
+import { safeNumValue, triggerCardLiveSync, escapeHtmlText } from './helpers.js';
 
 /**
  * randInt entity module — integer random value generator.
@@ -15,6 +15,8 @@ export function processEntity(contextData) {
             return serialize(contextData);
         case 'evaluate':
             return evaluate(contextData);
+        case 'renderPreviewToken':
+            return renderPreviewToken(contextData);
         case 'getOutputTypes':
             return ['integer'];
         case 'hideRefreshButton':
@@ -205,4 +207,10 @@ function evaluate({ card, tokenIdentifier, visitedTokens = [], getLiveComponentV
         }
     }
     return null;
+}
+
+function renderPreviewToken({ displayVal }) {
+    // Numeric value as inline LaTeX (no green badge). Preview pipeline
+    // KaTeX-renders .simulated-math-formula-render spans after HTML insert.
+    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${escapeHtmlText(displayVal)}</span>`;
 }

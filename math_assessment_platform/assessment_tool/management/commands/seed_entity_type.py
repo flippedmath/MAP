@@ -46,7 +46,9 @@ class Command(BaseCommand):
                 "solve method": {"field": "dropdown", "value": ["string_match(['simplify', 'expand polynomial', 'factor polynomial', 'variable substitution', 'leave as formula'])"], "default": "leave as formula"},
                 "variables": {"field": "text", "value": ["array(['string'])"], "default": ""},
                 "variable substitution": {"field": "text", "value": ["string_match([\"self('variables')\"])", "or_null"], "default": ""},
-                "variable to solve for": {"field": "text", "value": ["string", "or_null"], "default": ""}
+                "variable to solve for": {"field": "text", "value": ["string", "or_null"], "default": ""},
+                "output rhs only": {"field": "checkbox", "value": ["boolean"], "default": False},
+                "simplify after substitution": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
             "output": ["double", "integer", "formula"],
             "entity_name_list": "Dynamic Variables",
@@ -62,10 +64,10 @@ class Command(BaseCommand):
                 "    <tr style='background: #f1f5f9; border-bottom: 1px solid #cbd5e1;'><th style='padding: 3px;'>Variable Type</th><th style='padding: 3px;'>Valid Examples</th><th style='padding: 3px;'>Syntax / Constraints</th></tr>"
                 "  </thead>"
                 "  <tbody>"
-                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Standard Characters</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>x, y, z2, A5</td><td style='padding: 3px; color: #475569;'>A single letter optionally followed by digits. Note: <code>E</code> and <code>I</code> are reserved system constants.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Standard Characters</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>x, y, z2, A5</td><td style='padding: 3px; color: #475569;'>A single letter optionally followed by digits. Note: <code>E</code> and <code>I</code>/<code>i</code> are reserved system constants (Euler’s number and the imaginary unit).</td></tr>"
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Standard Subscripts</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>x_1, y_22, A_0</td><td style='padding: 3px; color: #475569;'>A single letter followed by an underscore and one or more digits.</td></tr>"
-                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Greek Letters</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>alpha, beta, gamma, theta, phi, omega</td><td style='padding: 3px; color: #475569;'>Full lowercase spelled names of standard Greek alphabet characters.</td></tr>"
-                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Greek Subscripts</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>alpha_3, theta_12, beta2</td><td style='padding: 3px; color: #475569;'>Spelled Greek words followed directly by digits, or by an underscore and digits.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Greek Letters</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>alpha, theta, phi, omega</td><td style='padding: 3px; color: #475569;'>Full lowercase spelled names. Note: bare <code>beta</code>, <code>gamma</code>, and <code>zeta</code> are reserved SymPy functions — use a subscript (e.g. <code>beta_1</code>) to use them as variables.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px; font-weight: 500;'>Greek Subscripts</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>alpha_3, beta_1, gamma2, theta_12</td><td style='padding: 3px; color: #475569;'>Spelled Greek words followed directly by digits, or by an underscore and digits (required for beta/gamma/zeta).</td></tr>"
                 "  </tbody>"
                 "</table>"
 
@@ -97,6 +99,7 @@ class Command(BaseCommand):
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\tan^2(x)\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>\"tan(x)**2\"</td><td style='padding: 3px; color: #64748b;'>N/A</td><td style='padding: 3px; color: #475569;'>Functional operators are squared by placing exponents outside the parameter bracket.</td></tr>"
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(e^{2x}\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>\"exp(2x)\"</td><td style='padding: 3px; color: #16a34a; font-weight: 600;'>Auto-Injected</td><td style='padding: 3px; color: #475569;'>Euler's constant base uses <code>exp()</code> structure. Note the inner <code>2x</code> gets expanded.</td></tr>"
                 "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(2\\pi\\theta\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>\"2 * pi * theta\"</td><td style='padding: 3px; color: #ea580c;'>Manual Required</td><td style='padding: 3px; color: #475569;'>Pi constant written as <code>pi</code>. Consecutive named variables need <code>*</code> splits.</td></tr>"
+                "    <tr style='border-bottom: 1px solid #e2e8f0;'><td style='padding: 3px;'>\\(\\overline{4i-1}\\)</td><td style='padding: 3px; font-family: monospace; font-weight: bold; color: #0f172a;'>\"conjugate(4*i-1)\"</td><td style='padding: 3px; color: #64748b;'>N/A</td><td style='padding: 3px; color: #475569;'>Complex conjugate. Lowercase <code>i</code> and capital <code>I</code> both mean the imaginary unit.</td></tr>"
                 "  </tbody>"
                 "</table>"
 
@@ -259,7 +262,8 @@ class Command(BaseCommand):
             "token": "shortAnswer",
             "answer_field": True,
             "inputs": {
-                "value": {"field": "text", "value": ["string", "formula"]}
+                "value": {"field": "text", "value": ["string", "formula"]},
+                "accept_rounded_decimals": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
             "output": ["string"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
@@ -268,6 +272,8 @@ class Command(BaseCommand):
             "note": (
                 "Trim + case-insensitive exact match first. Otherwise sympy equivalence vs the simplified key; "
                 "rearrangements allowed but answers that still need simplifying are incorrect. May link a formula entity. "
+                "Optional checkbox accepts numeric answers that match after rounding both sides to 3 decimal places "
+                "(e.g. 8/9 and 0.88889 both round to 0.889). "
                 "Expression entry: \"**\" is the same as \"^\". \"*\" is only required between two variables "
                 "(e.g. x*y); it is not required when a number is followed by a variable (e.g. 2x). "
                 "Formatting follows the same rules as editing a formula entity field — see that entity's info note for more detail."
@@ -294,23 +300,74 @@ class Command(BaseCommand):
             "answer_field": True,
             "inputs": {
                 "results": {"field": "text", "value": ["string", "array(['integer'])"]},
-                "partial_credit": {"field": "checkbox", "value": ["boolean"], "default": False}
+                "partial_credit": {"field": "checkbox", "value": ["boolean"], "default": False},
+                "ordered": {"field": "checkbox", "value": ["boolean"], "default": False}
             },
             "output": ["string"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
             "note": (
-                "Unordered comma-separated list. Split on commas <em>outside</em> parentheses "
-                "(commas inside <code>(...)</code> stay in the same item). "
+                "Comma-separated list. Optional outer <code>[...]</code> or <code>(...)</code> around the "
+                "whole answer is stripped first (so <code>[2,3]</code> and <code>(2,3)</code> become "
+                "<code>2,3</code>). Split on commas <em>outside</em> parentheses/brackets. "
                 "Each item is graded like a short answer: exact trim+lowercase match, else "
-                "equivalent formulas (e.g. <code>7x^2</code> matches <code>7*x**2</code>, "
-                "<code>3-x</code> matches <code>-x+3</code>). Numbers also compare after rounding to 3 decimals. "
-                "Default scoring is all-or-nothing. May link only a primeFactors entity."
+                "equivalent formulas (e.g. <code>7x^2</code> matches <code>7*x**2</code>). "
+                "Numbers also compare after rounding to 3 decimals. "
+                "Default is unordered multiset matching; check <strong>Require order</strong> for "
+                "positional match (e.g. coordinates). Default scoring is all-or-nothing. "
+                "May link only a primeFactors entity."
                 "<br>"
                 "Partial credit for partial answer: with N key items and P points, sub = P/N. "
-                "Earned = max(0, matches×sub − ½×sub×(missing + extras)), where matches are multiset hits, "
-                "missing are unmatched key items, and extras are unmatched student items."
+                "Earned = max(0, matches×sub − ½×sub×(missing + extras))."
+            )
+        },
+        {
+            "name": "Answers or DNE",
+            "token": "answersOrDne",
+            "answer_field": True,
+            "inputs": {
+                "correct_is_dne": {"field": "checkbox", "value": ["boolean"], "default": False},
+                "grading_mode": {
+                    "field": "dropdown",
+                    "value": ["string_match(['all_or_nothing', 'per_answer'])"],
+                    "default": "all_or_nothing"
+                },
+                "answers": {
+                    "field": "array",
+                    "value": ["array(['entity'])"],
+                    "default": []
+                }
+            },
+            "output": ["content"],
+            "points": {"field": "double", "value": ["double"], "default": 1.0},
+            "entity_name_list": "Answer Input Fields",
+            "disabled": False,
+            "note": (
+                "For problems that may have one or more answers <em>or</em> no solution (DNE). "
+                "Check <strong>Correct answer is DNE</strong> when there is no solution "
+                "(linked answer rows must be empty). Otherwise add rows that each link a "
+                "<code>shortAnswer</code>, <code>arrayMatchingUnordered</code>, <code>numAnswer</code>, "
+                "or <code>formula</code> key card."
+                "<br>"
+                "A linked <code>formula</code> must use solve method <strong>simplify</strong> with a "
+                "target variable selected. Its Or/And/Eq result expands into multiple answer slots: "
+                "equalities → formula/string or number (e.g. <code>-1/2</code> / <code>-0.5</code>); "
+                "bound ranges → coordinates (e.g. <code>[-oo,-1]</code>, where <code>oo</code> is infinity); "
+                "multi-root lists like <code>x = [-4/3, -1, 0]</code> → one point slot per value."
+                "<br>"
+                "In the preview, students use <strong>Add answer</strong> (formula/string, coordinates, or number) "
+                "or select <strong>DNE</strong>. DNE hides once any answer row exists; it returns if all rows are deleted. "
+                "Formula/string and number entries cross-match when they are the same value "
+                "(e.g. <code>-1/2</code> and <code>-0.5</code>). "
+                "Each linked key is a separate slot (multiset): if two keys are both "
+                "<code>-0.5</code>, the student must submit two matching values "
+                "(any mix of <code>-0.5</code> / <code>-1/2</code>). "
+                "Extra equivalent forms beyond the number of matching keys count as wrongs."
+                "<br>"
+                "Grading: <strong>All or nothing</strong>, or <strong>Split points per correct answer</strong> "
+                "(sub = Pts/N; earned = max(0, matches×sub − ½×sub×wrong student entries)). "
+                "Student DNE when keys exist is incorrect; values when author marked DNE are incorrect."
             )
         },
         {
@@ -339,19 +396,33 @@ class Command(BaseCommand):
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
             "note": (
-                "Requires at least 2 choices and at least one marked correct. "
+                "Requires at least 2 choices. Zero or more may be marked correct. "
+                "If none are marked correct, students must leave all choices unchecked for full credit. "
                 "Options may be typed or linked from any Dynamic Variable. "
+                "Typed choices may embed entity tokens such as <code>&lt;randInt1&gt;</code>; "
+                "they are replaced with the live value when rendered. "
+                "Tokens may sit inside LaTeX wrappers, e.g. "
+                "<code>\\(p(&lt;randInt1&gt;)=&lt;randInt2&gt;\\) is a relative minimum</code>. "
+                "To render part of a typed choice as math, wrap LaTeX in "
+                "<code>\\(...\\)</code>, <code>LATEX(...)</code>, or <code>latex(...)</code> "
+                "(not <code>$...$</code>). Example: <code>Area is LATEX(x^2)</code> or "
+                "<code>\\(\\frac{1}{2}\\)</code>. Unwrapped text stays plain."
+                "<br>"
                 "Randomize answer order shuffles preview display. "
                 "With exactly one correct answer, Display as radio buttons (default on) forces a single selection; "
-                "turn it off to mark additional correct answers."
+                "turn it off to mark additional correct answers. "
+                "Radio mode is unavailable when zero answers are marked correct (a radio selection cannot be cleared)."
                 "<br>"
-                "<strong>All or nothing (default):</strong> full points only if the selected set exactly matches the correct set; else 0."
+                "<strong>All or nothing (default):</strong> full points only if the selected set exactly matches the correct set "
+                "(including the empty set when none are marked correct); else 0."
                 "<br>"
                 "<strong>Practical:</strong> points_per_correct = P / num_correct; penalty_per_wrong = points_per_correct / 2; "
-                "score = max(0, correct_selected × points_per_correct − wrong_selected × penalty_per_wrong)."
+                "score = max(0, correct_selected × points_per_correct − wrong_selected × penalty_per_wrong). "
+                "When num_correct = 0, full credit only if nothing is selected."
                 "<br>"
                 "<strong>Proportional:</strong> score = max(0, P × (correct_selected/num_correct − incorrect_selected/num_incorrect)). "
-                "If every option is correct (num_incorrect = 0), the wrong term is treated as 0."
+                "If every option is correct (num_incorrect = 0), the wrong term is treated as 0. "
+                "When num_correct = 0, full credit only if nothing is selected."
             )
         },
         {
@@ -396,15 +467,45 @@ class Command(BaseCommand):
             "token": "graphBetweenPoints",
             "answer_field": True,
             "inputs": {
-                "coordinate groups": {"field": "array", "value": ["array([array(['double'])])"]},
-                "x-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 0.5]},
-                "y-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 0.5]}
+                "show_grid": {"field": "checkbox", "value": ["boolean"], "default": True},
+                "let_student_draw": {"field": "checkbox", "value": ["boolean"], "default": False},
+                "x-axis range": {
+                    "field": "<'double'> to <'double'> by interval <'double'>",
+                    "value": ["array(['double'])"],
+                    "default": [-5, 5, 1]
+                },
+                "y-axis range": {
+                    "field": "<'double'> to <'double'> by interval <'double'>",
+                    "value": ["array(['double'])"],
+                    "default": [-5, 5, 1]
+                },
+                "segments": {"field": "array", "value": ["array(['content'])"], "default": []},
+                "vertices": {"field": "array", "value": ["array(['content'])"], "default": []},
+                "curve_seeds": {"field": "array", "value": ["content"], "default": {}}
             },
             "output": ["content"],
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Create a graph using one or more lines"
+            "note": (
+                "Piecewise graph from segments: each row is "
+                "<code>coord | divider | type | divider | coord</code>. "
+                "Types: concave-down / concave-up parabola, line, cubic parabola. "
+                "Dividers draw open (<code>&lt;</code>/<code>&gt;</code>), filled "
+                "(<code>&lt;=</code>/<code>&gt;=</code>), a directional arrow "
+                "(<code>arrow</code> / →) along the segment, or no endpoint marker (<code>none</code>). "
+                "<br>"
+                "Optional <strong>vertex</strong> list binds to a segment row whose x-range contains "
+                "the vertex (dropdown). Vertices are never required — missing peaks are synthesized "
+                "in-bounds with a stable seed. Lines take 0 vertices; parabolas at most 1; cubics at most 2 "
+                "(distinct x)."
+                "<br>"
+                "<strong>Let student draw</strong>: check segments the student must complete "
+                "(those are hidden in preview). Segments with an assigned vertex cannot be student-drawn. "
+                "Grading is per student-drawn segment (default 1 Pt each)."
+                "<br>"
+                "Coordinates must be strictly inside the y-axis range; x may sit on x min/max but not outside."
+            )
         },
         {
             "name": "Canvas",

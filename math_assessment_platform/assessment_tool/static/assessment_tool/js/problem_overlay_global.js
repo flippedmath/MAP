@@ -16,6 +16,11 @@ import { processEntity as arrayMatchingUnorderedProcessor } from './entities/arr
 import { processEntity as multipleChoiceAnswerProcessor } from './entities/multipleChoiceAnswer.js';
 import { processEntity as matrixAnswerProcessor } from './entities/matrixAnswer.js';
 import { processEntity as canvasProcessor } from './entities/canvas.js';
+import { processEntity as answersOrDneProcessor } from './entities/answersOrDne.js';
+import {
+    processEntity as graphBetweenPointsProcessor,
+    renderGraphBetweenPointsCanvas
+} from './entities/graphBetweenPoints.js';
 import { ensureLatexRenderBox } from './entities/helpers.js';
 
 // Map tokens directly to their synchronous entity processors
@@ -28,10 +33,12 @@ const ENTITY_REGISTRY = {
     'matrixResultByIndex': matrixResultByIndexProcessor,
     'graph': graphProcessor,
     'slopeFieldGraph': slopeFieldGraphProcessor,
+    'graphBetweenPoints': graphBetweenPointsProcessor,
     'numAnswer': numAnswerProcessor,
     'shortAnswer': shortAnswerProcessor,
     'longAnswer': longAnswerProcessor,
     'arrayMatchingUnordered': arrayMatchingUnorderedProcessor,
+    'answersOrDne': answersOrDneProcessor,
     'multipleChoiceAnswer': multipleChoiceAnswerProcessor,
     'matrixAnswer': matrixAnswerProcessor,
     'canvas': canvasProcessor,
@@ -713,7 +720,21 @@ document.addEventListener('DOMContentLoaded', function() {
         root.querySelectorAll('.preview-array-matching-input').forEach((input) => {
             const tokenKey = input.getAttribute('data-token') || '';
             if (!tokenKey) return;
+            // Skip nested entries inside answersOrDne (those use preview-aod-entry-input)
+            if (input.classList.contains('preview-aod-entry-input')) return;
             previewStudentAnswers[tokenKey] = { value: input.value };
+        });
+        root.querySelectorAll('.simulated-answers-or-dne-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            const entries = Array.from(wrap.querySelectorAll('.aod-preview-entry-row')).map((row) => {
+                const type = row.getAttribute('data-entry-type') || '';
+                const input = row.querySelector('.preview-aod-entry-input');
+                return { type, value: input ? input.value : '' };
+            }).filter((e) => e.type);
+            const dneCb = wrap.querySelector('.preview-aod-dne');
+            const dne = entries.length === 0 && !!dneCb?.checked;
+            previewStudentAnswers[tokenKey] = { dne, entries };
         });
         // Matrix answer: aggregate all blank cells per token into { cells: { "r,c": value } }
         const matrixByToken = {};
@@ -744,11 +765,48 @@ document.addEventListener('DOMContentLoaded', function() {
         }, delayMs);
     }
 
+    function collectTokensReferencedInEditingField() {
+        // Answer grading lists only fields present in the Quill editing canvas,
+        // even when they are missing from / erroring in the live preview display.
+        const referenced = new Set();
+        if (!workspaceQuillInstance) return referenced;
+        const html = workspaceQuillInstance.root?.innerHTML || '';
+        const plain = workspaceQuillInstance.getText ? workspaceQuillInstance.getText() : '';
+        const haystack = `${html}\n${plain}`
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>');
+        const regex = /<([a-zA-Z][a-zA-Z0-9_]*)>/g;
+        let match;
+        while ((match = regex.exec(haystack)) !== null) {
+            if (match[1]) referenced.add(match[1]);
+        }
+        return referenced;
+    }
+
     function collectAnswerFieldEntitiesForGrading() {
         const entities = [];
         const answerCards = inputsContainer
             ? inputsContainer.querySelectorAll('.workspace-block-card')
             : document.querySelectorAll('#sidebar-inputs-list .workspace-block-card');
+
+        const tokensInEditor = collectTokensReferencedInEditingField();
+
+        // Keys linked into answersOrDne are graded only via that parent — hide them here.
+        const linkedToAnswersOrDne = new Set();
+        answerCards.forEach((card) => {
+            if (card.getAttribute('data-token') !== 'answersOrDne') return;
+            const dneChecked = !!card.querySelector('.val-aod-dne')?.checked;
+            if (dneChecked) return;
+            card.querySelectorAll('.answers-or-dne-key-row[data-bound-token]').forEach((row) => {
+                let tok = (row.getAttribute('data-bound-token') || '')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .trim();
+                if (!tok) return;
+                const clean = tok.replace(/[<>]/g, '').trim();
+                if (clean) linkedToAnswersOrDne.add(clean);
+            });
+        });
 
         answerCards.forEach(card => {
             const baseToken = card.getAttribute('data-token');
@@ -757,6 +815,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const delBtn = card.querySelector('.btn-delete-workspace-component');
             const sequenceToken = delBtn?.getAttribute('data-indexed-token') || baseToken;
+            // Sidebar-only answer cards (not placed in the editing field) stay out of grading.
+            if (!tokensInEditor.has(sequenceToken)) return;
+            if (linkedToAnswersOrDne.has(sequenceToken)) return;
             const matchingMeta = answerFieldsTokens.find(item => item.token === baseToken);
             const label = matchingMeta?.name
                 ? `${matchingMeta.name} (<${sequenceToken}>)`
@@ -1159,6 +1220,8 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (Array.isArray(stored.marks)) return stored;
                             if (stored.cells && typeof stored.cells === 'object') return stored;
                             if (stored.format === 'strokes' || stored.format === 'png') return stored;
+                            if (Array.isArray(stored.entries) || stored.dne === true || stored.dne === false) return stored;
+                            if (Array.isArray(stored.segments)) return stored;
                             if (stored.value != null) return stored.value;
                             return '';
                         })()
@@ -1247,6 +1310,7 @@ document.addEventListener('DOMContentLoaded', function() {
         bindPreviewMultipleChoiceInputs(renderTarget);
         bindPreviewMatrixAnswerInputs(renderTarget);
         mountPreviewCanvases(renderTarget);
+        mountPreviewAnswersOrDne(renderTarget);
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
@@ -1271,6 +1335,23 @@ document.addEventListener('DOMContentLoaded', function() {
                 card,
                 renderGraphComponentCanvas,
                 renderSlopeFieldCanvas,
+                onChange: (token, payload) => {
+                    if (!token) return;
+                    previewStudentAnswers[token] = payload;
+                },
+                scheduleGradeRefresh: () => scheduleWorkspacePreviewGradeRefresh(220),
+            });
+        });
+    }
+
+    function mountPreviewAnswersOrDne(root) {
+        if (!root) return;
+        root.querySelectorAll('.simulated-answers-or-dne-wrapper').forEach((wrap) => {
+            const tokenKey = wrap.getAttribute('data-token') || '';
+            getEntityInformation('answersOrDne', {
+                action: 'mountPreviewAnswersOrDne',
+                wrapper: wrap,
+                initialValue: previewStudentAnswers[tokenKey] || null,
                 onChange: (token, payload) => {
                     if (!token) return;
                     previewStudentAnswers[token] = payload;
@@ -1529,6 +1610,27 @@ document.addEventListener('DOMContentLoaded', function() {
                         onStudentAnswerChange: (marks) => {
                             if (!tokenKey) return;
                             previewStudentAnswers[tokenKey] = { marks: Array.isArray(marks) ? marks : [] };
+                            scheduleWorkspacePreviewGradeRefresh(180);
+                        }
+                    });
+                } else if (job.kind === 'graphBetweenPoints' || job.graphConfig?.archetype === 'graphBetweenPoints') {
+                    canvasEl.style.height = 'auto';
+                    canvasEl.style.minHeight = '';
+                    canvasEl.innerHTML = '';
+                    const tokenKey = job.cleanToken || '';
+                    const stored = tokenKey ? previewStudentAnswers[tokenKey] : null;
+                    const initialValue = (stored && typeof stored === 'object') ? stored : (job.initialValue || null);
+                    renderGraphBetweenPointsCanvas(canvasEl, job.graphConfig, {
+                        mode: 'student',
+                        width,
+                        height,
+                        initialValue,
+                        studentSegments: Array.isArray(initialValue?.segments) ? initialValue.segments : [],
+                        onStudentAnswerChange: (payload) => {
+                            if (!tokenKey) return;
+                            previewStudentAnswers[tokenKey] = payload && typeof payload === 'object'
+                                ? payload
+                                : { segments: [] };
                             scheduleWorkspacePreviewGradeRefresh(180);
                         }
                     });
@@ -2189,23 +2291,31 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
+            // Pass 1: stamp caches/attributes so linked dependents can resolve latex
+            // even when their applyBatchSync runs before the upstream token in Pass 2.
             Object.keys(data.updated_cache).forEach(token => {
                 const result = data.updated_cache[token];
-                
-
                 formulaLiveLatexCache[token] = result.latex_output;
-                
+
+                const card = Array.from(document.querySelectorAll('.workspace-block-card')).find(c =>
+                    c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') === token
+                );
+                if (!card) return;
+                card.setAttribute('data-simulated-value', result.evaluated_output);
+                if (result.latex_output !== undefined && result.latex_output !== null) {
+                    card.setAttribute('data-latex-output', result.latex_output);
+                }
+            });
+
+            Object.keys(data.updated_cache).forEach(token => {
+                const result = data.updated_cache[token];
+
                 const card = Array.from(document.querySelectorAll('.workspace-block-card')).find(c => 
                     c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token') === token
                 );
                 
                 if (!card) {
                     return;
-                }
-
-                card.setAttribute('data-simulated-value', result.evaluated_output);
-                if (result.latex_output !== undefined && result.latex_output !== null) {
-                    card.setAttribute('data-latex-output', result.latex_output);
                 }
 
                 const baseArchetype = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-token');
@@ -2222,6 +2332,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     targetDisplay,
                     formulaLiveLatexCache,
                     renderGraphComponentCanvas,
+                    renderSlopeFieldCanvas,
+                    getEntityInformation,
+                    evaluateSingleCardOutput,
                     token
                 });
 
@@ -2268,51 +2381,89 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (solveForSelect) {
                     const methodSelect = card.querySelector('.val-input-solve-method');
                     const activeMethod = methodSelect ? methodSelect.value : "";
-                    const simplifyDropdownContainer = solveForSelect.closest('.form-group, .input-row, div');
+                    const simplifyDropdownContainer = solveForSelect.closest('.row-simplify-target')
+                        || solveForSelect.closest('.form-group, .input-row, div');
 
                     // If the card is configured for variable substitution, hide this element wrapper row out of view
                     if (activeMethod != 'simplify') {
                         if (simplifyDropdownContainer) {
                             simplifyDropdownContainer.style.display = 'none';
                         }
+                        const rhsOnlyRowHidden = card.querySelector('.row-simplify-rhs-only');
+                        if (rhsOnlyRowHidden) rhsOnlyRowHidden.style.display = 'none';
                     } else {
                         if (simplifyDropdownContainer) {
-                            simplifyDropdownContainer.style.display = '';
+                            simplifyDropdownContainer.style.display = 'flex';
                         }
 
-                        const currentSelection = card.getAttribute('data-selected-variable') || solveForSelect.value || "";
+                        // Prefer server-extracted variables (free symbols of the linked /
+                        // pre-solve expression). Do not re-inject a stale target like `c`
+                        // when the upstream result only contains `b`.
+                        const declaredVars = (varsInput?.value || '')
+                            .split(',')
+                            .map(v => v.trim())
+                            .filter(v => v.length > 0);
+                        const optionSource = declaredVars.length ? declaredVars : varArray;
+
+                        const currentSelection = card.getAttribute('data-selected-variable')
+                            || solveForSelect.value
+                            || "";
                         const existingDropdownOptions = Array.from(solveForSelect.options)
                             .map(opt => opt.value.trim())
                             .filter(val => val.length > 0)
                             .sort();
 
-                        const dropdownOptionsStructurallyChanged = 
-                            varArray.length !== existingDropdownOptions.length || 
-                            !varArray.every((v, i) => v === existingDropdownOptions[i]);
+                        const sortedSource = [...optionSource].sort();
+                        const dropdownOptionsStructurallyChanged =
+                            sortedSource.length !== existingDropdownOptions.length ||
+                            !sortedSource.every((v, i) => v === existingDropdownOptions[i]);
 
                         if (dropdownOptionsStructurallyChanged) {
-                            
                             solveForSelect.options.length = 0;
-                            
+
                             const defaultOpt = document.createElement('option');
                             defaultOpt.value = "";
-                            defaultOpt.textContent = "-- select variable --";
+                            defaultOpt.textContent = "-- N/A --";
                             solveForSelect.appendChild(defaultOpt);
-                            
-                            varArray.forEach(v => {
+
+                            optionSource.forEach(v => {
                                 const opt = document.createElement('option');
                                 opt.value = v;
                                 opt.textContent = v;
                                 solveForSelect.appendChild(opt);
                             });
                         }
-                        
-                        // 🎯 --- SELECTION RESOLUTION PIPELINE ---
-                        if (currentSelection && varArray.includes(currentSelection)) {
+
+                        if (currentSelection && optionSource.includes(currentSelection)) {
                             solveForSelect.value = currentSelection;
+                            card.setAttribute('data-selected-variable', currentSelection);
+                        } else if (currentSelection && optionSource.length === 0) {
+                            // Variables not known yet — keep selection until sync fills them
+                            const hasOption = Array.from(solveForSelect.options)
+                                .some(opt => opt.value === currentSelection);
+                            if (!hasOption) {
+                                const opt = document.createElement('option');
+                                opt.value = currentSelection;
+                                opt.textContent = currentSelection;
+                                solveForSelect.appendChild(opt);
+                            }
+                            solveForSelect.value = currentSelection;
+                            card.setAttribute('data-selected-variable', currentSelection);
                         } else {
                             solveForSelect.value = '';
                             card.removeAttribute('data-selected-variable');
+                        }
+
+                        // RHS-only only applies when a real target variable is selected
+                        const rhsOnlyRow = card.querySelector('.row-simplify-rhs-only');
+                        const rhsOnlyCheckbox = card.querySelector('.val-output-rhs-only');
+                        const selectedTarget = (solveForSelect.value || '').trim();
+                        const hasRealTarget = !!selectedTarget && selectedTarget !== '-- N/A --';
+                        if (rhsOnlyRow) {
+                            rhsOnlyRow.style.display = hasRealTarget ? 'flex' : 'none';
+                        }
+                        if (!hasRealTarget && rhsOnlyCheckbox) {
+                            rhsOnlyCheckbox.checked = false;
                         }
                     }
                 }
@@ -2767,7 +2918,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 });
                 workspaceQuillInstance.on('text-change', (delta, oldDelta, source) => {
-                    if (window.__workspaceTableLayoutQuiet || window.__workspacePreviewQuiet) return;
+                    if (window.__workspaceTableLayoutQuiet || window.__workspacePreviewQuiet || window.__workspaceEnsuringTableTrail) return;
                     // Re-applying nested/outer layouts on every keystroke mutates the DOM and can
                     // retrigger Quill optimize/text-change (freeze). Only re-layout when table ops
                     // are involved.
@@ -2785,6 +2936,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     } else if (source === 'user') {
                         lockOuterCellsThatContainNestedTables();
+                    }
+                    if (source === 'user') {
+                        ensureTrailingParagraphAfterTables();
                     }
                     updateWorkspaceSimulationPreview();
                     if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
@@ -3155,6 +3309,49 @@ document.addEventListener('DOMContentLoaded', function() {
     let tableObjectSelectionBound = false;
     let selectedWorkspaceTable = null;
 
+    /**
+     * Place a context menu fully inside the viewport. Shifts/flips as needed and
+     * caps height with scroll when the menu is taller than the window.
+     */
+    function positionContextMenuInViewport(menu, clientX, clientY) {
+        if (!menu) return;
+        const margin = 8;
+        menu.style.position = 'fixed';
+        menu.style.right = 'auto';
+        menu.style.bottom = 'auto';
+        menu.style.left = `${Math.max(margin, clientX)}px`;
+        menu.style.top = `${Math.max(margin, clientY)}px`;
+        menu.style.maxHeight = '';
+        menu.style.overflowY = '';
+        menu.style.display = 'block';
+
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const maxH = Math.max(140, vh - margin * 2);
+        menu.style.maxHeight = `${maxH}px`;
+        menu.style.overflowY = 'auto';
+
+        const rect = menu.getBoundingClientRect();
+        let left = clientX;
+        let top = clientY;
+
+        if (left + rect.width > vw - margin) {
+            left = Math.max(margin, vw - rect.width - margin);
+        }
+        if (left < margin) left = margin;
+
+        const menuH = Math.min(rect.height, maxH);
+        if (top + menuH > vh - margin) {
+            // Keep the menu anchored toward the cursor; pin its bottom to the
+            // viewport edge instead of flipping above the pointer.
+            top = Math.max(margin, vh - menuH - margin);
+        }
+        if (top < margin) top = margin;
+
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+    }
+
     function isNestedTableElement(table) {
         return !!(table && (
             table.classList.contains('ql-nested-table-inner') ||
@@ -3165,6 +3362,43 @@ document.addEventListener('DOMContentLoaded', function() {
     function queryWorkspaceQuillTables(root) {
         if (!root) return [];
         return Array.from(root.querySelectorAll('table')).filter(t => !isNestedTableElement(t));
+    }
+
+    /**
+     * Quill leaves the caret stranded in the last table cell when the document
+     * ends with a table. Always keep an empty <p><br></p> after a trailing table.
+     */
+    function ensureTrailingParagraphAfterTables() {
+        if (!workspaceQuillInstance?.root || window.__workspaceEnsuringTableTrail) return false;
+        const editor = workspaceQuillInstance.root;
+        const last = editor.lastElementChild;
+        if (!last || last.tagName !== 'TABLE' || isNestedTableElement(last)) {
+            return false;
+        }
+
+        window.__workspaceEnsuringTableTrail = true;
+        try {
+            const blot = typeof Quill !== 'undefined' ? Quill.find(last) : null;
+            if (blot && typeof blot.offset === 'function') {
+                try {
+                    const index = blot.offset(workspaceQuillInstance.scroll) + blot.length();
+                    workspaceQuillInstance.insertText(index, '\n', Quill.sources.SILENT);
+                } catch (err) {
+                    /* fall through to DOM append */
+                }
+            }
+
+            // Quill sometimes absorbs the newline into the table blot — force a real block.
+            const stillLast = editor.lastElementChild;
+            if (stillLast && stillLast.tagName === 'TABLE' && !isNestedTableElement(stillLast)) {
+                const p = document.createElement('p');
+                p.appendChild(document.createElement('br'));
+                editor.appendChild(p);
+            }
+            return true;
+        } finally {
+            window.__workspaceEnsuringTableTrail = false;
+        }
     }
 
     function registerWorkspaceNestedTableBlot() {
@@ -4736,6 +4970,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 syncWorkspaceNestedTableNode(node);
             });
 
+            // Persist a caret landing line after a document-trailing table
+            const lastTop = doc.body.lastElementChild;
+            if (lastTop && lastTop.tagName === 'TABLE') {
+                const trail = doc.createElement('p');
+                trail.appendChild(doc.createElement('br'));
+                doc.body.appendChild(trail);
+            }
+
             cleanHtml = doc.body.innerHTML || '<p><br></p>';
         } catch (err) {
             console.warn('Failed normalizing workspace Quill tables:', err);
@@ -4811,6 +5053,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 workspaceQuillInstance.update('user');
                 lockOuterCellsThatContainNestedTables();
                 repairOrphanSoftBreakEmptyOuterCells();
+                ensureTrailingParagraphAfterTables();
                 workspaceQuillInstance.root.querySelectorAll('.ql-workspace-nested-table').forEach(node => {
                     scheduleNestedHostRealign(node);
                 });
@@ -5027,22 +5270,51 @@ document.addEventListener('DOMContentLoaded', function() {
         hideWorkspaceTableHoverTip();
         selectedWorkspaceTable = table;
         table.classList.add('ql-table-object-selected');
-        // Blur cell caret so toolbar align clearly targets the table object
+        // Blur cell caret so toolbar align clearly targets the table object,
+        // but keep editor focus so Delete/Backspace can remove the table.
         try {
             workspaceQuillInstance.setSelection(null);
         } catch (err) {
             // ignore
         }
+        try {
+            workspaceQuillInstance.root.focus({ preventScroll: true });
+        } catch (err) {
+            try { workspaceQuillInstance.root.focus(); } catch (_) { /* ignore */ }
+        }
     }
 
-    function isWorkspaceTableSelectHotspot(table, clientX, clientY) {
-        if (!table || isNestedTableElement(table)) return false;
-        const rect = table.getBoundingClientRect();
-        // Top-left of first cell (⧉ cue lives inside the cell to avoid table ::before)
-        return clientX >= rect.left
-            && clientX <= rect.left + 24
-            && clientY >= rect.top
-            && clientY <= rect.top + 24;
+    function deleteSelectedWorkspaceTable() {
+        const table = selectedWorkspaceTable;
+        if (!table || !workspaceQuillInstance || !document.contains(table)) return false;
+        if (!workspaceQuillInstance.root.contains(table) || isNestedTableElement(table)) return false;
+
+        const tableModule = workspaceQuillInstance.getModule('table');
+        if (!tableModule || typeof tableModule.deleteTable !== 'function') return false;
+
+        const cell = table.querySelector('td, th');
+        if (!cell) return false;
+
+        // deleteTable() needs an active selection inside the table
+        try {
+            const blot = typeof Quill !== 'undefined' ? Quill.find(cell) : null;
+            if (blot) {
+                const index = blot.offset(workspaceQuillInstance.scroll);
+                workspaceQuillInstance.setSelection(index, 0, Quill.sources.SILENT);
+            }
+        } catch (err) {
+            // best-effort
+        }
+
+        tableModule.deleteTable();
+        clearWorkspaceTableSelection();
+        hideWorkspaceTableHoverTip();
+        setTimeout(() => {
+            reapplyAllWorkspaceTableLayouts();
+            updateWorkspaceSimulationPreview();
+        }, 0);
+        if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+        return true;
     }
 
     function ensureWorkspaceTableHoverTip() {
@@ -5281,13 +5553,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
-            if (table && isWorkspaceTableSelectHotspot(table, e.clientX, e.clientY)) {
-                e.preventDefault();
-                e.stopPropagation();
-                selectWorkspaceTable(table);
-                return;
-            }
-
             // Clicking inside a cell edits that cell — clear whole-table selection
             if (e.target.closest && e.target.closest('td, th')) {
                 clearWorkspaceTableSelection();
@@ -5300,6 +5565,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 clearWorkspaceTableSelection();
                 hideWorkspaceTableHoverTip();
             }
+        }, true);
+
+        htmlCanvasEditor.addEventListener('keydown', function(e) {
+            if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+            if (!selectedWorkspaceTable || !document.contains(selectedWorkspaceTable)) return;
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            e.preventDefault();
+            e.stopPropagation();
+            deleteSelectedWorkspaceTable();
         }, true);
 
         if (workspaceQuillInstance) {
@@ -5431,7 +5705,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         tableModule.insertTable(safeRows, safeCols);
         setTimeout(() => {
-            // Default to left float so following/prev text wraps beside the table (image-like).
+            // Default left-aligned (block, not floated) so following text starts below the table.
             const tables = queryWorkspaceQuillTables(workspaceQuillInstance.root);
             const newest = tables[tables.length - 1];
             if (newest && !newest.getAttribute('data-table-align')) {
@@ -5444,6 +5718,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (newest) persistWorkspaceTableLayoutAttrs(newest);
             reapplyAllWorkspaceTableLayouts();
+            ensureTrailingParagraphAfterTables();
             updateWorkspaceSimulationPreview();
         }, 0);
         if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
@@ -5496,9 +5771,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div class="menu-item menu-item-danger" data-command="delete-col">🗑️ Delete Inner Column</div>
                     <div class="menu-item menu-item-danger" data-command="delete-table">❌ Delete Inner Table</div>
                 `;
-                menu.style.left = `${e.pageX}px`;
-                menu.style.top = `${e.pageY}px`;
-                menu.style.display = 'block';
+                positionContextMenuInViewport(menu, e.clientX, e.clientY);
                 menu.querySelectorAll('.menu-item').forEach(item => {
                     item.onclick = function(ev) {
                         ev.preventDefault();
@@ -5539,7 +5812,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             menu.innerHTML = `
                 <div class="menu-item" data-command="select-table" style="font-weight: 600; color: #2563eb;">
-                    ⧉ Select Entire Table
+                    Select Entire Table
                 </div>
                 <div class="menu-divider"></div>
                 <div class="menu-item" data-command="align-table" data-align="left">⬅️ Align Table Left (wrap text)</div>
@@ -5567,9 +5840,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="menu-item menu-item-danger" data-command="delete-table">❌ Delete Entire Table</div>
             `;
 
-            menu.style.left = `${e.pageX}px`;
-            menu.style.top = `${e.pageY}px`;
-            menu.style.display = 'block';
+            positionContextMenuInViewport(menu, e.clientX, e.clientY);
 
             menu.querySelectorAll('.menu-item').forEach(item => {
                 item.onclick = function(ev) {
@@ -6122,7 +6393,31 @@ document.addEventListener('DOMContentLoaded', function() {
     const draftConfirmReasonsList = document.getElementById('draft-save-confirm-reasons');
     const draftConfirmBtn = document.getElementById('btn-confirm-draft-save');
     const draftCancelBtn = document.getElementById('btn-cancel-draft-save');
+    const draftForceCompleteWrap = document.getElementById('draft-force-complete-div0-wrap');
+    const draftForceCompleteCheckbox = document.getElementById('draft-force-complete-div0');
     let pendingDraftSavePayload = null;
+
+    const DRAFT_CONFIRM_BTN_DEFAULT = 'Confirm Save as Draft';
+    const DRAFT_CONFIRM_BTN_FORCE = 'Save as Complete';
+
+    function isDiv0UnfinishedReason(reason) {
+        const text = String(reason || '');
+        return (
+            text.includes('Possible division by zero')
+            || text.includes('non-finite value (possible division by zero)')
+        );
+    }
+
+    function syncDraftConfirmButtonLabel() {
+        if (!draftConfirmBtn) return;
+        const forcing = !!(
+            draftForceCompleteWrap
+            && draftForceCompleteWrap.style.display !== 'none'
+            && draftForceCompleteCheckbox?.checked
+        );
+        draftConfirmBtn.textContent = forcing ? DRAFT_CONFIRM_BTN_FORCE : DRAFT_CONFIRM_BTN_DEFAULT;
+        draftConfirmBtn.style.background = forcing ? '#16a34a' : '#f59e0b';
+    }
 
     function collectWorkspaceSavePayload() {
         // Preview student answers (previewStudentAnswers) are intentionally omitted —
@@ -6171,10 +6466,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 card.querySelectorAll('.substitutions-list-container .substitution-row-item').forEach(row => {
                     const varName = row.getAttribute('data-var-name');
                     const rowWrapper = row.querySelector('.linked-input-wrapper');
-                    const boundTokenValue = rowWrapper?.getAttribute('data-bound-token');
+                    let boundTokenValue = rowWrapper?.getAttribute('data-bound-token');
 
                     if (boundTokenValue) {
-                        inputValues[`sub_${varName}`] = boundTokenValue;
+                        // Always persist linked tokens as <token> so server interval
+                        // checks are not defeated by bare / entity-encoded ids.
+                        let normalized = String(boundTokenValue)
+                            .replace(/&lt;/gi, '<')
+                            .replace(/&gt;/gi, '>')
+                            .trim();
+                        const bare = normalized.replace(/[<>]/g, '');
+                        if (bare && /^[A-Za-z][A-Za-z0-9_]*\d+$/.test(bare)) {
+                            normalized = `<${bare}>`;
+                        }
+                        inputValues[`sub_${varName}`] = normalized;
                     } else {
                         const inputField = row.querySelector('.val-substitution-input');
                         if (inputField) {
@@ -6182,6 +6487,14 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     }
                 });
+
+                // Keep nested substitutions map authoritative when present
+                if (inputValues.substitutions && typeof inputValues.substitutions === 'object') {
+                    Object.entries(inputValues.substitutions).forEach(([vName, vVal]) => {
+                        if (vVal == null || vVal === '') return;
+                        inputValues[`sub_${vName}`] = vVal;
+                    });
+                }
 
                 let variablesArray = inputValues['variables']
                     ? String(inputValues['variables']).split(',').map(v => v.trim()).filter(Boolean)
@@ -6233,18 +6546,28 @@ document.addEventListener('DOMContentLoaded', function() {
             draftConfirmModal.style.visibility = 'hidden';
             draftConfirmModal.style.opacity = '0';
         }
+        if (draftForceCompleteCheckbox) draftForceCompleteCheckbox.checked = false;
+        if (draftForceCompleteWrap) draftForceCompleteWrap.style.display = 'none';
+        syncDraftConfirmButtonLabel();
         pendingDraftSavePayload = null;
     }
 
     function showDraftConfirmModal(reasons) {
         if (!draftConfirmModal || !draftConfirmReasonsList) return;
         draftConfirmReasonsList.innerHTML = '';
-        (reasons || []).forEach(reason => {
+        const reasonList = reasons || [];
+        reasonList.forEach(reason => {
             const li = document.createElement('li');
             li.textContent = reason;
             li.style.marginBottom = '4px';
             draftConfirmReasonsList.appendChild(li);
         });
+        const hasDiv0 = reasonList.some(isDiv0UnfinishedReason);
+        if (draftForceCompleteWrap) {
+            draftForceCompleteWrap.style.display = hasDiv0 ? 'block' : 'none';
+        }
+        if (draftForceCompleteCheckbox) draftForceCompleteCheckbox.checked = false;
+        syncDraftConfirmButtonLabel();
         // .modal-overlay CSS defaults to visibility:hidden / opacity:0 until .is-visible
         draftConfirmModal.style.display = 'flex';
         draftConfirmModal.style.visibility = 'visible';
@@ -6261,7 +6584,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    async function persistWorkspaceSave({ confirmDraft = false } = {}) {
+    async function persistWorkspaceSave({ confirmDraft = false, forceCompleteDiv0 = false } = {}) {
         const collected = collectWorkspaceSavePayload();
         const problemId = collected.problemId;
         if (!problemId) {
@@ -6273,11 +6596,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const payload = {
             ...collected.payload,
-            confirm_draft: confirmDraft
+            confirm_draft: confirmDraft,
+            force_complete_div0: !!forceCompleteDiv0
         };
 
         if (saveStatusSpan) {
-            saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${confirmDraft ? 'Saving draft...' : 'Checking workspace...'}`;
+            const busyLabel = forceCompleteDiv0
+                ? 'Saving as complete...'
+                : (confirmDraft ? 'Saving draft...' : 'Checking workspace...');
+            saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${busyLabel}`;
         }
         if (saveDraftBtn) saveDraftBtn.disabled = true;
 
@@ -6347,9 +6674,18 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    if (draftForceCompleteCheckbox) {
+        draftForceCompleteCheckbox.addEventListener('change', syncDraftConfirmButtonLabel);
+    }
+
     if (draftConfirmBtn) {
         draftConfirmBtn.addEventListener('click', async function() {
-            await persistWorkspaceSave({ confirmDraft: true });
+            const forceCompleteDiv0 = !!(
+                draftForceCompleteWrap
+                && draftForceCompleteWrap.style.display !== 'none'
+                && draftForceCompleteCheckbox?.checked
+            );
+            await persistWorkspaceSave({ confirmDraft: true, forceCompleteDiv0 });
         });
     }
 
@@ -6533,6 +6869,34 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
                 return;
             }
+
+            // answersOrDne key-row unlink
+            if (inputKey && String(inputKey).startsWith('aod_answer_')) {
+                wrapper.removeAttribute('data-bound-token');
+                const statusLabel = wrapper.querySelector('.link-status-text');
+                if (statusLabel) {
+                    statusLabel.textContent = 'Link shortAnswer / coordinates / numAnswer';
+                    statusLabel.style.color = '#94a3b8';
+                }
+                const pill = wrapper.querySelector('.linked-token-pill');
+                if (pill) pill.remove();
+                linkBtn.innerHTML = '<i class="fas fa-link"></i>';
+                linkBtn.className = 'btn-input-link-trigger';
+                linkBtn.style.color = '#94a3b8';
+                linkBtn.style.borderColor = '#cbd5e1';
+                const activeCard = linkBtn.closest('.workspace-block-card') || linkBtn.closest('.workspace-component-card');
+                if (activeCard) {
+                    const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                    if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                        dispatchWorkspaceBatchSync(cardId);
+                    } else {
+                        updateWorkspaceSimulationPreview();
+                    }
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+                return;
+            }
             // 🎯 🌟 ADDED OVERRIDE: Handle unlinking variable substitution rows smoothly
             if (inputKey && inputKey.startsWith('sub_')) {
                 wrapper.removeAttribute('data-bound-token');
@@ -6639,7 +7003,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const indexedToken = deleteBtn.getAttribute('data-indexed-token'); // e.g., "randInt2"
             const baseArchetype = card.getAttribute('data-token');             // e.g., "rand"
 
-            const tokenDefinition = dynamicVarsTokens.find(t => t.token === baseArchetype);
+            const tokenDefinition = dynamicVarsTokens.find(t => t.token === baseArchetype)
+                || answerFieldsTokens.find(t => t.token === baseArchetype);
             if (!tokenDefinition) return;
 
             let blueprintData = {};
@@ -6896,28 +7261,83 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             return;
         }
-        // 🎯 🌟 ADDED OVERRIDE: Precise visual layout insertion for Matrix dynamic variable sub rows
-        if (inputKey && inputKey.startsWith('sub_')) {
-            wrapper.setAttribute('data-bound-token', chosenTokenString);
 
-            // Hide the text field input safely out of the layout row flex stream
+        // answersOrDne key-row link
+        if (inputKey && String(inputKey).startsWith('aod_answer_')) {
+            const statusLabel = wrapper.querySelector('.link-status-text');
+            if (statusLabel) {
+                statusLabel.textContent = `Linked to: ${rawTokenId}`;
+                statusLabel.style.color = '#0284c7';
+            }
+            wrapper.setAttribute('data-bound-token', chosenTokenString);
+            const existingPill = wrapper.querySelector('.linked-token-pill');
+            if (existingPill) existingPill.remove();
+            const pill = document.createElement('span');
+            pill.className = 'linked-token-pill';
+            pill.style.cssText = 'background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:4px 8px; border-radius:4px; font-family:monospace; font-weight:600; font-size:0.75rem;';
+            pill.textContent = chosenTokenString;
+            if (linkBtn && typeof linkBtn.before === 'function') {
+                linkBtn.before(pill);
+            } else {
+                wrapper.appendChild(pill);
+            }
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+            wrapper.querySelector('.linkable-tokens-dropdown').style.display = 'none';
+            const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
+            if (activeCard) {
+                const dneCb = activeCard.querySelector('.val-aod-dne');
+                if (dneCb) dneCb.checked = false;
+                const keysSection = activeCard.querySelector('.aod-keys-section');
+                if (keysSection) keysSection.style.display = 'flex';
+                const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
+                if (cardId && typeof dispatchWorkspaceBatchSync === 'function') {
+                    dispatchWorkspaceBatchSync(cardId);
+                } else {
+                    updateWorkspaceSimulationPreview();
+                }
+            } else {
+                updateWorkspaceSimulationPreview();
+            }
+            return;
+        }
+        // 🎯 Variable substitution rows (formula + matrix): hide input, show green linked-token-pill
+        if (inputKey && inputKey.startsWith('sub_')) {
+            // Decode HTML entities if the option attribute was entity-encoded
+            let normalizedToken = String(chosenTokenString || '')
+                .replace(/&lt;/gi, '<')
+                .replace(/&gt;/gi, '>')
+                .trim();
+            if (!/^<[^<>]+>$/.test(normalizedToken) && rawTokenId) {
+                normalizedToken = `<${rawTokenId}>`;
+            }
+
+            wrapper.setAttribute('data-bound-token', normalizedToken);
+
             const rawInput = wrapper.querySelector('.val-substitution-input');
             if (rawInput) {
-                rawInput.value = chosenTokenString;
+                rawInput.value = normalizedToken;
                 rawInput.style.display = 'none';
             }
 
-            // Create or update an inline visual token indicator pill tailored for this flex spacing
             let pill = wrapper.querySelector('.linked-token-pill');
             if (!pill) {
                 pill = document.createElement('span');
                 pill.className = 'linked-token-pill';
-                pill.setAttribute('data-indexed-token', rawTokenId);
-                pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; font-family: monospace; font-size: 0.75rem; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-left: 4px; display: inline-block;';
-                
-                // Nest it cleanly inside the inner label wrapper div right after the "=" sign label
+                // Same visual language as the main formula expression linked pill
+                pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center; flex-grow: 1;';
+
                 const innerFlexContainer = wrapper.firstElementChild;
-                if (innerFlexContainer) {
+                const canNestInFirstChild = innerFlexContainer
+                    && innerFlexContainer.tagName !== 'INPUT'
+                    && innerFlexContainer.tagName !== 'SELECT'
+                    && innerFlexContainer.tagName !== 'TEXTAREA'
+                    && !innerFlexContainer.classList.contains('btn-input-link-trigger')
+                    && !innerFlexContainer.classList.contains('linkable-tokens-dropdown');
+
+                if (canNestInFirstChild) {
                     innerFlexContainer.appendChild(pill);
                 } else if (linkBtn && typeof linkBtn.before === 'function') {
                     linkBtn.before(pill);
@@ -6927,19 +7347,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     wrapper.appendChild(pill);
                 }
             }
-            pill.textContent = chosenTokenString;
+            pill.setAttribute('data-indexed-token', rawTokenId || normalizedToken.replace(/[<>]/g, ''));
+            pill.textContent = normalizedToken;
 
-            // Transform the link icon into a red delete cross action button
             linkBtn.innerHTML = '<i class="fas fa-times"></i>';
             linkBtn.className = 'btn-input-link-trigger is-linked';
             linkBtn.style.color = '#ef4444';
             linkBtn.style.borderColor = '#fca5a5';
 
-            // Close the current token picker selection menu drop box viewport
             const dropdown = wrapper.querySelector('.linkable-tokens-dropdown');
             if (dropdown) dropdown.style.display = 'none';
 
-            // Sync alterations upward to layout cache layers
             const activeCard = wrapper.closest('.workspace-block-card') || wrapper.closest('.workspace-component-card');
             if (activeCard) {
                 const cardId = activeCard.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');

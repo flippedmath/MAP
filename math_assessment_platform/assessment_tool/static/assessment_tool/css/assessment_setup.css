@@ -79,3 +79,188 @@
     flex-direction: column; 
     gap: 2px;
 }
+
+/* Right-click context menu for problem rows */
+.problem-context-menu {
+    position: fixed;
+    z-index: 10050;
+    min-width: 190px;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+    padding: 4px;
+}
+
+.problem-context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    border: none;
+    background: transparent;
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #334155;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.problem-context-menu-item:hover,
+.problem-context-menu-item.is-open {
+    background: #f1f5f9;
+    color: #0f172a;
+}
+
+.problem-context-menu-item:disabled,
+.problem-context-menu-item.is-disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+}
+
+.problem-context-menu-item:disabled:hover,
+.problem-context-menu-item.is-disabled:hover {
+    background: transparent;
+    color: #94a3b8;
+}
+
+.problem-context-menu-item i {
+    color: #64748b;
+    width: 14px;
+    font-size: 0.8rem;
+}
+
+.problem-context-menu-item.has-submenu {
+    justify-content: space-between;
+}
+
+.problem-context-menu-item-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.problem-context-menu-item .submenu-caret {
+    width: auto;
+    margin-left: 12px;
+    color: #94a3b8;
+}
+
+.problem-context-submenu-wrap {
+    position: relative;
+}
+
+.problem-context-submenu {
+    position: absolute;
+    top: 0;
+    left: calc(100% + 2px);
+    min-width: 180px;
+    max-width: 260px;
+    max-height: 240px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+    padding: 4px;
+    z-index: 10051;
+}
+
+.problem-context-submenu.is-flipped-left {
+    left: auto;
+    right: calc(100% + 2px);
+}
+
+.problem-context-submenu .problem-context-menu-item {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.problem-context-submenu-empty {
+    padding: 8px 12px;
+    font-size: 0.8rem;
+    color: #94a3b8;
+}
+
+.problem-item-row.context-menu-active {
+    outline: 2px solid #af52de;
+    outline-offset: 1px;
+}
+
+.btn-open-cqd-overlay:hover .cqd-display-identity {
+    color: #1d4ed8;
+}
+
+/* Problem set (CQD) member list overlay */
+.cqd-problems-overlay {
+    z-index: 10040;
+}
+
+/* Problem workspace must stack above the problem-set overlay on this page */
+#problem-workspace-overlay {
+    z-index: 10060 !important;
+}
+
+.cqd-problems-modal {
+    width: min(720px, 94vw);
+    max-height: min(80vh, 800px);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+
+.cqd-overlay-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+}
+
+.cqd-overlay-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: #0f172a;
+}
+
+.cqd-overlay-subtitle {
+    margin: 4px 0 0;
+    font-size: 0.82rem;
+    color: #64748b;
+}
+
+.cqd-overlay-close {
+    border: none;
+    background: #e2e8f0;
+    color: #475569;
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.cqd-overlay-close:hover {
+    background: #cbd5e1;
+    color: #0f172a;
+}
+
+.cqd-overlay-problems-list {
+    padding: 16px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: #ffffff;
+}

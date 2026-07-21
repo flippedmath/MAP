@@ -39,6 +39,162 @@ function escapeHtmlAttr(val) {
         .replace(/>/g, '&gt;');
 }
 
+/**
+ * Split option text into plain + LaTeX segments.
+ * Supported wrappers (explicit only — not $...$):
+ *   \( ... \)
+ *   LATEX(...) / latex(...)  (balanced parentheses; case-insensitive "latex")
+ */
+function splitOptionContentWithLatex(raw) {
+    const s = String(raw ?? '');
+    const parts = [];
+    if (!s) return parts;
+
+    const tryParseLatexFnAt = (pos) => {
+        if (pos > 0 && /[A-Za-z0-9_]/.test(s[pos - 1])) return null;
+        const fnMatch = s.slice(pos).match(/^latex\s*\(/i);
+        if (!fnMatch) return null;
+        let depth = 1;
+        let j = pos + fnMatch[0].length;
+        while (j < s.length && depth > 0) {
+            if (s[j] === '(') depth += 1;
+            else if (s[j] === ')') depth -= 1;
+            if (depth === 0) break;
+            j += 1;
+        }
+        if (depth !== 0) return null;
+        return { value: s.slice(pos + fnMatch[0].length, j), end: j + 1 };
+    };
+
+    const findNextMarker = (from) => {
+        let best = -1;
+        const inlineAt = s.indexOf('\\(', from);
+        if (inlineAt !== -1) best = inlineAt;
+        const re = /\blatex\s*\(/ig;
+        re.lastIndex = from;
+        const m = re.exec(s);
+        if (m && (best === -1 || m.index < best)) best = m.index;
+        return best;
+    };
+
+    let i = 0;
+    while (i < s.length) {
+        if (s.startsWith('\\(', i)) {
+            const end = s.indexOf('\\)', i + 2);
+            if (end !== -1) {
+                parts.push({ type: 'latex', value: s.slice(i + 2, end) });
+                i = end + 2;
+                continue;
+            }
+        }
+
+        const fn = tryParseLatexFnAt(i);
+        if (fn) {
+            parts.push({ type: 'latex', value: fn.value });
+            i = fn.end;
+            continue;
+        }
+
+        const next = findNextMarker(i + 1);
+        if (next === -1 || next <= i) {
+            parts.push({ type: 'text', value: s.slice(i) });
+            break;
+        }
+        parts.push({ type: 'text', value: s.slice(i, next) });
+        i = next;
+    }
+
+    return parts.filter((p) => p.value !== '' || p.type === 'latex');
+}
+
+/** HTML for a typed (non-linked) MC option, with optional explicit LaTeX wrappers. */
+function renderTypedOptionContentHtml(content) {
+    const parts = splitOptionContentWithLatex(content);
+    const hasLatex = parts.some((p) => p.type === 'latex');
+    if (!hasLatex) {
+        return `<span>${escapeHtmlAttr(content || '')}</span>`;
+    }
+    return parts.map((p) => {
+        if (p.type === 'latex') {
+            return `<span class="mc-inline-latex preview-static-latex" style="display:inline-block; padding:0 1px;">${escapeHtmlAttr(p.value)}</span>`;
+        }
+        return `<span>${escapeHtmlAttr(p.value)}</span>`;
+    }).join('');
+}
+
+const EMBEDDED_ENTITY_TOKEN_RE = /(?:&lt;|<)([A-Za-z][A-Za-z0-9_]*\d+)(?:&gt;|>)/g;
+
+/**
+ * Resolve a sequence token to a plain display string for inlining into choice text.
+ * (Numbers / latex strings — not full preview widgets.)
+ */
+function resolveTokenPlainDisplay(cleanToken, ctx = {}) {
+    const token = String(cleanToken || '').replace(/[<>]/g, '').trim();
+    if (!token) return '';
+    const baseArchetype = token.replace(/\d+$/, '');
+    const srcCard = findSourceCard(token);
+    const cache = ctx.formulaLiveLatexCache || {};
+    let displayVal = cache[token];
+    const isServerValueValid = displayVal !== undefined && displayVal !== null && displayVal !== '' && displayVal !== '???';
+
+    if (baseArchetype === 'graph' || baseArchetype === 'slopeFieldGraph') {
+        if (srcCard) {
+            displayVal = srcCard.getAttribute('data-simulated-value')
+                || (typeof ctx.evaluateSingleCardOutput === 'function'
+                    ? ctx.evaluateSingleCardOutput(srcCard, token)
+                    : null);
+        }
+        // Graphs are not meaningful as inline text; keep a short placeholder.
+        if (displayVal && String(displayVal).trim().startsWith('{')) {
+            displayVal = `[${baseArchetype}]`;
+        }
+    } else if (baseArchetype === 'formula' || baseArchetype === 'matrix' || baseArchetype === 'matrixResultByIndex') {
+        if (!isServerValueValid && srcCard) {
+            displayVal = srcCard.getAttribute('data-latex-output')
+                || srcCard.getAttribute('data-simulated-value')
+                || token;
+        } else if (!isServerValueValid) {
+            displayVal = token;
+        }
+    } else if (srcCard) {
+        const loadedLatex = srcCard.getAttribute('data-latex-output') || cache[token];
+        if (loadedLatex && loadedLatex !== '???' && loadedLatex !== '') {
+            displayVal = loadedLatex;
+        } else if (typeof ctx.evaluateSingleCardOutput === 'function') {
+            displayVal = ctx.evaluateSingleCardOutput(srcCard, token);
+        } else {
+            displayVal = srcCard.getAttribute('data-simulated-value') || token;
+        }
+    }
+
+    if (!displayVal || displayVal === '???') {
+        displayVal = token;
+    }
+    return String(displayVal);
+}
+
+/** Substitute embedded <randInt1>-style tokens, then apply LaTeX/plain rendering. */
+function renderTypedOptionContentHtmlWithTokens(content, ctx = {}) {
+    const raw = String(content ?? '');
+    if (!EMBEDDED_ENTITY_TOKEN_RE.test(raw)) {
+        // reset lastIndex after test()
+        EMBEDDED_ENTITY_TOKEN_RE.lastIndex = 0;
+        return renderTypedOptionContentHtml(raw);
+    }
+    EMBEDDED_ENTITY_TOKEN_RE.lastIndex = 0;
+    const expanded = raw.replace(EMBEDDED_ENTITY_TOKEN_RE, (_match, seq) => (
+        resolveTokenPlainDisplay(seq, ctx)
+    ));
+    return renderTypedOptionContentHtml(expanded);
+}
+
+function renderOptionLabelHtml(content, linkCtx = {}) {
+    if (isLinkedContent(content)) {
+        return renderLinkedOptionHtml(content, linkCtx);
+    }
+    return renderTypedOptionContentHtmlWithTokens(content, linkCtx);
+}
+
 function coerceBool(raw, defaultVal = false) {
     if (raw === undefined || raw === null) return defaultVal;
     if (typeof raw === 'boolean') return raw;
@@ -79,7 +235,16 @@ function normalizeSavedOptions(savedValues) {
 }
 
 function isLinkedContent(content) {
-    return typeof content === 'string' && /^<[^>]+>$/.test(content.trim());
+    if (typeof content !== 'string') return false;
+    const trimmed = content.trim()
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>');
+    const match = trimmed.match(/^<([^<>]+)>$/);
+    if (!match) return false;
+    // Real sequence tokens look like archetype + index (formula1, randInt2).
+    // Do NOT wrap arbitrary prose in <> first — that falsely marks it as linked
+    // and sends it through KaTeX (spaces disappear in math mode).
+    return /^[A-Za-z][A-Za-z0-9_]*\d+$/.test(match[1].trim());
 }
 
 function optionRowHtml(opt, forceRadio, soleCorrectId) {
@@ -97,7 +262,7 @@ function optionRowHtml(opt, forceRadio, soleCorrectId) {
             </label>
             <div class="linked-input-wrapper" data-input-key="option_${escapeHtmlAttr(opt.id)}" data-input-type="text" ${linked ? `data-bound-token="${escapeHtmlAttr(linkedToken)}"` : ''} style="position:relative; display:flex; align-items:flex-end; gap:4px; flex-grow:1; min-width:0;">
                 <label class="mc-option-text-label" style="font-size:0.75rem; color:#475569; flex-grow:1; ${linked ? 'display:none;' : ''}">Choice:
-                    <input type="text" class="val-mc-option-content" value="${textValue}" ${linked ? 'disabled' : ''} placeholder="Text or link…" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
+                    <input type="text" class="val-mc-option-content" value="${textValue}" ${linked ? 'disabled' : ''} placeholder="Text, \\(...\\), or &lt;entity&gt;…" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
                 </label>
                 ${linked ? `<span class="linked-token-pill" style="background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; padding:4px 8px; border-radius:4px; font-family:monospace; font-weight:600; font-size:0.8rem; display:inline-block; width:100%; box-sizing:border-box; text-align:center;">${escapeHtmlAttr(linkedToken)}</span>` : ''}
                 <button type="button" class="btn-input-link-trigger ${linked ? 'is-linked' : ''}" title="Link Dynamic Variable" style="background:#ffffff; border:1px solid ${linked ? '#fca5a5' : '#cbd5e1'}; border-radius:4px; color:${linked ? '#ef4444' : '#94a3b8'}; cursor:pointer; font-size:0.75rem; height:26px; width:26px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
@@ -150,6 +315,11 @@ function getFieldsHtml(savedValues) {
                 <div style="font-size:0.65rem; color:#94a3b8; margin-top:2px;">Single correct answer — turn off to mark more answers correct.</div>
             </div>
 
+            <div class="mc-zero-correct-note" style="display:${correctIds.length === 0 ? 'block' : 'none'}; font-size:0.72rem; color:#b45309; background:#fffbeb; border:1px solid #fcd34d; border-radius:4px; padding:6px 8px; line-height:1.35;">
+                No choices are marked correct. Students must leave all answers unchecked to earn full points.
+                Display as radio buttons is unavailable here because a radio selection cannot be cleared.
+            </div>
+
             <div class="mc-options-container" style="display:flex; flex-direction:column; gap:8px; width:100%;">
                 <span style="font-size:0.75rem; font-weight:600; color:#475569;">Choices:</span>
                 ${options.map(opt => optionRowHtml(opt, forceRadio && showRadioToggle, soleCorrectId)).join('')}
@@ -167,6 +337,13 @@ function collectOptionIds(card) {
         .filter(Boolean);
 }
 
+function syncZeroCorrectNote(card) {
+    const noteEl = card.querySelector('.mc-zero-correct-note');
+    if (!noteEl) return;
+    const checkedCount = card.querySelectorAll('.val-mc-option-correct:checked').length;
+    noteEl.style.display = checkedCount === 0 ? 'block' : 'none';
+}
+
 function syncRadioCorrectLocks(card) {
     const forceWrap = card.querySelector('.mc-force-radio-wrap');
     const forceCheckbox = card.querySelector('.val-mc-force-radio');
@@ -176,7 +353,10 @@ function syncRadioCorrectLocks(card) {
         ? checked[0].closest('.mc-option-row')?.getAttribute('data-option-id')
         : null;
 
+    syncZeroCorrectNote(card);
+
     if (forceWrap) {
+        // Radio mode only when exactly one correct — not with zero (cannot uncheck a radio).
         forceWrap.style.display = checked.length === 1 ? 'block' : 'none';
     }
 
@@ -370,23 +550,105 @@ function isLinkCompatible({ inputKey }) {
     return null;
 }
 
-function applyBatchSync({ card, result }) {
+function applyBatchSync(contextData = {}) {
+    const { card, result, formulaLiveLatexCache, renderGraphComponentCanvas, renderSlopeFieldCanvas, getEntityInformation, evaluateSingleCardOutput } = contextData;
     if (!card || !result) return null;
     const targetDisplay = ensureLatexRenderBox(card);
-    if (targetDisplay) {
-        targetDisplay.style.textAlign = 'center';
-        targetDisplay.style.fontSize = '0.85rem';
-        targetDisplay.style.fontWeight = '600';
-        targetDisplay.style.color = '#0f172a';
-        const out = result.evaluated_output;
-        if (out && out !== '???' && !String(out).startsWith('[Invalid') && !String(out).startsWith('⚠️')) {
-            targetDisplay.textContent = out;
-        } else if (result.latex_output && result.latex_output !== '???' && !String(result.latex_output).startsWith('⚠️')) {
-            targetDisplay.textContent = result.latex_output;
-        } else {
-            targetDisplay.textContent = '';
-        }
+    if (!targetDisplay) return true;
+
+    targetDisplay.style.textAlign = 'left';
+    targetDisplay.style.fontSize = '0.85rem';
+    targetDisplay.style.fontWeight = '600';
+    targetDisplay.style.color = '#0f172a';
+    targetDisplay.style.whiteSpace = 'normal';
+
+    const out = result.evaluated_output;
+    if (out && (String(out).startsWith('[Invalid') || String(out).startsWith('⚠️'))) {
+        targetDisplay.textContent = '';
+        return true;
     }
+
+    const collected = {};
+    serialize({ card, inputsCollected: collected });
+    const options = Array.isArray(collected.options) ? collected.options : [];
+    const correct = options.filter((o) => o && o.is_correct);
+
+    if (!correct.length) {
+        targetDisplay.textContent = '(none — leave all unchecked)';
+        targetDisplay.style.fontStyle = 'italic';
+        targetDisplay.style.color = '#64748b';
+        targetDisplay.style.fontWeight = '500';
+        return true;
+    }
+
+    targetDisplay.style.fontStyle = '';
+    targetDisplay.style.color = '#0f172a';
+    targetDisplay.style.fontWeight = '600';
+
+    const linkCtx = {
+        getEntityInformation,
+        evaluateSingleCardOutput,
+        formulaLiveLatexCache: formulaLiveLatexCache || {},
+        renderGraphComponentCanvas,
+        renderSlopeFieldCanvas,
+        registerPreviewGraph: null
+    };
+
+    const pendingGraphs = [];
+    if (typeof renderGraphComponentCanvas === 'function' || typeof renderSlopeFieldCanvas === 'function') {
+        linkCtx.registerPreviewGraph = (job) => {
+            if (job) pendingGraphs.push(job);
+        };
+    }
+
+    const rowsHtml = correct.map((opt) => {
+        const content = opt.content || '';
+        const labelHtml = renderOptionLabelHtml(content, linkCtx);
+        return `<div class="mc-correct-answer-row" style="margin:2px 0; line-height:1.35;">${labelHtml}</div>`;
+    }).join('');
+
+    targetDisplay.innerHTML = rowsHtml;
+
+    if (typeof katex !== 'undefined') {
+        targetDisplay.querySelectorAll('.simulated-math-formula-render').forEach((span) => {
+            try {
+                const expression = (span.textContent || '').trim();
+                if (expression) {
+                    katex.render(expression, span, { displayMode: false, throwOnError: false });
+                }
+            } catch (_) { /* keep text fallback */ }
+        });
+        // Some entity previews leave raw latex on the row itself
+        targetDisplay.querySelectorAll('.preview-static-latex').forEach((span) => {
+            try {
+                katex.render((span.textContent || '').trim(), span, { displayMode: false, throwOnError: false });
+            } catch (_) { /* keep text fallback */ }
+        });
+    }
+
+    pendingGraphs.forEach((job) => {
+        if (!job || !job.canvasId || !job.graphConfig) return;
+        const canvasEl = document.getElementById(job.canvasId);
+        if (!canvasEl) return;
+        const width = Number(job.width) > 0 ? Math.round(job.width) : 220;
+        const height = Number(job.height) > 0 ? Math.round(job.height) : Math.max(100, Math.round(width * (240 / 340)));
+        try {
+            if (job.kind === 'slopeFieldGraph' || job.graphConfig?.archetype === 'slopeFieldGraph') {
+                if (typeof renderSlopeFieldCanvas === 'function') {
+                    renderSlopeFieldCanvas(canvasEl, job.graphConfig, {
+                        mode: 'author',
+                        width,
+                        height
+                    });
+                }
+            } else if (typeof renderGraphComponentCanvas === 'function') {
+                renderGraphComponentCanvas(job.canvasId, job.graphConfig, { width, height });
+            }
+        } catch (err) {
+            console.warn('Failed rendering linked MC correct-answer graph in latex box:', err);
+        }
+    });
+
     return true;
 }
 
@@ -545,9 +807,7 @@ function renderPreviewToken(contextData = {}) {
 
     let displayOptions = options.map(o => ({
         id: o.id,
-        labelHtml: isLinkedContent(normalizeBoundToken(o.content))
-            ? renderLinkedOptionHtml(o.content, linkCtx)
-            : `<span>${escapeHtmlAttr(o.content || o.id)}</span>`
+        labelHtml: renderOptionLabelHtml(o.content || o.id, linkCtx)
     }));
     // Stable shuffle from card seed — re-randomized only when seed changes
     // (overlay card create / refresh icon), not on every preview redraw.

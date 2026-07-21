@@ -1,4 +1,4 @@
-import { ensureLatexRenderBox, escapeHtmlText, extractVariablesFromFormulaString } from './helpers.js';
+import { ensureLatexRenderBox, escapeHtmlText, extractVariablesFromFormulaString, findReservedSympyGreekFunctionsInFormula } from './helpers.js';
 
 /**
  * formula entity module — expression editor with solve methods and substitutions.
@@ -41,6 +41,7 @@ function getFieldsHtml(savedValues) {
                 <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                 <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
             </div>
+            <div class="formula-reserved-greek-fn-note" style="display: none; font-size: 0.72rem; color: #b45309; background: #fffbeb; border: 1px solid #fcd34d; border-radius: 4px; padding: 6px 8px; line-height: 1.35;"></div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                 <div class="linked-input-wrapper" data-input-key="solve method" data-input-type="text" style="display: flex; flex-direction: column; gap: 4px;">
@@ -68,6 +69,13 @@ function getFieldsHtml(savedValues) {
                 </label>
             </div>
 
+            <div class="row-simplify-rhs-only" style="display: none; align-items: center; gap: 8px; width: 100%;">
+                <label style="font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;">
+                    <input type="checkbox" class="val-output-rhs-only" ${savedValues['output rhs only'] === true || savedValues['output rhs only'] === 'true' || savedValues['output rhs only'] === '1' || savedValues['output rhs only'] === 1 ? 'checked' : ''} style="cursor: pointer;">
+                    Output right-hand side only
+                </label>
+            </div>
+
             <div class="row-substitution-target linked-input-wrapper" data-input-key="variable to substitute" data-input-type="text" style="display: none; flex-direction: column; gap: 4px; width: 100%;">
                 <label style="font-size: 0.75rem; color: #475569; width: 100%;">Target Variable to Replace: 
                     <select class="val-input-substitution-target" style="width:100%; box-sizing:border-box; font-size:0.8rem; padding:4px; border:1px solid #cbd5e1; border-radius:4px;">
@@ -82,6 +90,12 @@ function getFieldsHtml(savedValues) {
                     <span style="font-size: 0.75rem; color: #64748b;">Assign value to:</span>
                     <select class="picker-unused-variables" style="flex-grow: 1; font-size: 0.75rem; padding: 3px; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569;">
                     </select>
+                </div>
+                <div class="row-simplify-after-substitution" style="display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 4px;">
+                    <label style="font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;">
+                        <input type="checkbox" class="val-simplify-after-substitution" ${savedValues['simplify after substitution'] === true || savedValues['simplify after substitution'] === 'true' || savedValues['simplify after substitution'] === '1' || savedValues['simplify after substitution'] === 1 ? 'checked' : ''} style="cursor: pointer;">
+                        Simplify after substitution
+                    </label>
                 </div>
             </div>
 
@@ -114,6 +128,9 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
 
     const simplifyWrapper = card.querySelector('.row-simplify-target');
     const simplifySelect = card.querySelector('.val-input-simplify-target');
+    const simplifyRhsOnlyRow = card.querySelector('.row-simplify-rhs-only');
+    const simplifyRhsOnlyCheckbox = card.querySelector('.val-output-rhs-only');
+    const simplifyAfterSubCheckbox = card.querySelector('.val-simplify-after-substitution');
 
     const substitutionsWrapper = card.querySelector('.row-variable-substitutions');
     const substitutionWrapper = card.querySelector('.row-substitution-target');
@@ -132,6 +149,28 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
         variablesField.style.cursor = 'not-allowed';
     }
 
+    function updateReservedGreekFunctionNote() {
+        const noteEl = card.querySelector('.formula-reserved-greek-fn-note');
+        const formulaInput = card.querySelector('.val-input-formula');
+        if (!noteEl || !formulaInput) return;
+
+        const reserved = findReservedSympyGreekFunctionsInFormula(formulaInput.value);
+        if (!reserved.length) {
+            noteEl.style.display = 'none';
+            noteEl.textContent = '';
+            return;
+        }
+
+        const nameList = reserved.map((n) => `<code>${n}</code>`).join(', ');
+        const examples = reserved.map((n) => `<code>${n}_1</code>`).join(' / ');
+        noteEl.style.display = 'block';
+        noteEl.innerHTML = (
+            `${nameList} ${reserved.length === 1 ? 'is a reserved math function' : 'are reserved math functions'} ` +
+            `(not a free variable). To use ${reserved.length === 1 ? 'it' : 'them'} as a variable, add a subscript ` +
+            `such as ${examples}.`
+        );
+    }
+
     function updateVariablesIndexAndSyncUI(preserveExistingVars = false) {
         const formulaInput = card.querySelector('.val-input-formula');
         if (!formulaInput || !variablesField) return;
@@ -141,6 +180,7 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
             variablesField.value = extractedVars.join(', ');
         }
 
+        updateReservedGreekFunctionNote();
         syncSolveForDropdown();
         refreshUnusedVariablesPicker();
     }
@@ -156,6 +196,7 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
         card.setAttribute('data-last-method', selectedMethod);
 
         if (simplifyWrapper) simplifyWrapper.style.display = 'none';
+        if (simplifyRhsOnlyRow) simplifyRhsOnlyRow.style.display = 'none';
         if (substitutionWrapper) substitutionWrapper.style.display = 'none';
         if (substitutionsWrapper) substitutionsWrapper.style.display = 'none';
 
@@ -163,16 +204,44 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
             if (simplifyWrapper) simplifyWrapper.style.display = 'flex';
             if (substitutionSelect) substitutionSelect.value = "";
 
-            card.removeAttribute('data-selected-variable');
-            if (simplifySelect) simplifySelect.value = "";
+            // Preserve the teacher's current target only if it still appears in Variables
+            const preservedTarget = card.getAttribute('data-selected-variable')
+                || (simplifySelect ? simplifySelect.value : "")
+                || savedValues['variable to solve for']
+                || savedValues['variable to simplify']
+                || "";
 
-            populateVariablesDropdown(simplifySelect);
+            populateVariablesDropdown(simplifySelect, preservedTarget);
+            const currentVars = (variablesField?.value || '')
+                .split(',')
+                .map(v => v.trim())
+                .filter(v => v.length > 0);
+            if (preservedTarget && simplifySelect && (currentVars.length === 0 || currentVars.includes(preservedTarget))) {
+                simplifySelect.value = preservedTarget;
+                card.setAttribute('data-selected-variable', preservedTarget);
+            } else if (simplifySelect && preservedTarget && !currentVars.includes(preservedTarget)) {
+                simplifySelect.value = '';
+                card.removeAttribute('data-selected-variable');
+            }
+            syncRhsOnlyAvailability();
         }
         else if (selectedMethod === 'variable substitution') {
             if (substitutionsWrapper) substitutionsWrapper.style.display = 'flex';
 
             if (simplifySelect) simplifySelect.value = "";
             if (substitutionSelect) substitutionSelect.value = "";
+
+            // Repair rows that were linked before the pill UI fix (bound token / token-like
+            // input value present, but no visible linked-token-pill).
+            if (substitutionsContainer) {
+                substitutionsContainer.querySelectorAll('.linked-input-wrapper').forEach(wrapper => {
+                    if (wrapper.querySelector('.linked-token-pill')) return;
+                    const bound = wrapper.getAttribute('data-bound-token');
+                    const inputVal = wrapper.querySelector('.val-substitution-input')?.value;
+                    const token = parseLinkedTokenValue(bound) || parseLinkedTokenValue(inputVal);
+                    if (token) applySubstitutionLinkedPill(wrapper, token);
+                });
+            }
 
             refreshUnusedVariablesPicker();
         }
@@ -182,14 +251,28 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
         }
     }
 
-    function populateVariablesDropdown(targetSelectElement) {
+    function syncRhsOnlyAvailability() {
+        if (!simplifyRhsOnlyRow) return;
+        const method = solveMethodSelect?.value || '';
+        const target = (simplifySelect?.value || '').trim();
+        const hasRealTarget = method === 'simplify' && !!target && target !== '-- N/A --';
+        simplifyRhsOnlyRow.style.display = hasRealTarget ? 'flex' : 'none';
+        if (!hasRealTarget && simplifyRhsOnlyCheckbox) {
+            simplifyRhsOnlyCheckbox.checked = false;
+        }
+    }
+
+    function populateVariablesDropdown(targetSelectElement, preferredSelection = "") {
         if (!targetSelectElement || !variablesField) return;
 
         const currentVars = variablesField.value.split(',')
             .map(v => v.trim())
             .filter(v => v.length > 0);
 
-        const savedTarget = savedValues['variable to solve for'] || "";
+        const savedTarget = preferredSelection
+            || savedValues['variable to solve for']
+            || savedValues['variable to simplify']
+            || "";
 
         targetSelectElement.innerHTML = '<option value="">-- N/A --</option>';
         currentVars.forEach(v => {
@@ -201,6 +284,20 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
             }
             targetSelectElement.appendChild(opt);
         });
+
+        // Only keep a stale saved target when the variables list is still empty
+        // (e.g. before the first batch sync). Once we know the real symbols,
+        // drop targets that are not in the formula.
+        if (savedTarget && currentVars.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = savedTarget;
+            opt.textContent = savedTarget;
+            opt.selected = true;
+            targetSelectElement.appendChild(opt);
+        } else if (savedTarget && !currentVars.includes(savedTarget)) {
+            targetSelectElement.value = '';
+            card.removeAttribute('data-selected-variable');
+        }
     }
 
     function refreshUnusedVariablesPicker() {
@@ -229,6 +326,53 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
         }
     }
 
+    function parseLinkedTokenValue(raw) {
+        if (raw == null) return null;
+        let s = String(raw).trim()
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>');
+        const bracketed = s.match(/^<([^<>]+)>$/);
+        if (bracketed) return `<${bracketed[1]}>`;
+        // Bare sequence tokens saved without brackets (e.g. randInt1)
+        if (/^[A-Za-z][A-Za-z0-9_]*\d+$/.test(s)) return `<${s}>`;
+        return null;
+    }
+
+    function applySubstitutionLinkedPill(wrapper, tokenString) {
+        if (!wrapper || !tokenString) return;
+        const linkBtn = wrapper.querySelector('.btn-input-link-trigger');
+        const rawInput = wrapper.querySelector('.val-substitution-input');
+        const rawTokenId = String(tokenString).replace(/[<>]/g, '');
+
+        wrapper.setAttribute('data-bound-token', tokenString);
+        if (rawInput) {
+            rawInput.value = tokenString;
+            rawInput.style.display = 'none';
+        }
+
+        let pill = wrapper.querySelector('.linked-token-pill');
+        if (!pill) {
+            pill = document.createElement('span');
+            pill.className = 'linked-token-pill';
+            // Match the main formula expression linked-token-pill look
+            pill.style.cssText = 'background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.8rem; display: inline-block; width: 100%; box-sizing: border-box; text-align: center; flex-grow: 1;';
+            if (linkBtn && typeof linkBtn.before === 'function') {
+                linkBtn.before(pill);
+            } else {
+                wrapper.insertBefore(pill, linkBtn || wrapper.firstChild);
+            }
+        }
+        pill.setAttribute('data-indexed-token', rawTokenId);
+        pill.textContent = tokenString;
+
+        if (linkBtn) {
+            linkBtn.innerHTML = '<i class="fas fa-times"></i>';
+            linkBtn.className = 'btn-input-link-trigger is-linked';
+            linkBtn.style.color = '#ef4444';
+            linkBtn.style.borderColor = '#fca5a5';
+        }
+    }
+
     function createSubstitutionRow(varName, initialValue = "", silent = false) {
         if (substitutionsContainer.querySelector(`[data-var-name="${varName}"]`)) {
             return;
@@ -239,17 +383,29 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
         row.setAttribute('data-var-name', varName);
         row.style.cssText = 'display: flex; align-items: center; gap: 6px; width: 100%; margin-bottom: 4px;';
 
+        const linkedToken = parseLinkedTokenValue(initialValue);
+        const isLinked = !!linkedToken;
+        const plainValue = isLinked ? '' : String(initialValue ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
         row.innerHTML = `
-            <span style="font-size: 0.8rem; font-family: monospace; font-weight: bold; min-width: 24px; text-align: right; color: #334155;">${varName} =</span>
+            <span style="font-size: 0.8rem; font-family: monospace; font-weight: bold; min-width: 24px; text-align: right; color: #334155; flex-shrink: 0;">${varName} =</span>
             
-            <div class="linked-input-wrapper" data-input-key="sub_${varName}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1;">
-                <input type="text" class="val-substitution-input" value="${initialValue}" placeholder="Value or expression" style="flex-grow: 1; font-size: 0.8rem; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px;">
+            <div class="linked-input-wrapper" data-input-key="sub_${varName}" data-input-type="text" style="position: relative; display: flex; align-items: center; gap: 4px; flex-grow: 1; min-width: 0;">
+                <input type="text" class="val-substitution-input" value="${plainValue}" placeholder="Value or expression" style="flex-grow: 1; font-size: 0.8rem; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px; min-width: 0;">
                 <button type="button" class="btn-input-link-trigger" title="Link token dependency" style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 0.7rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"><i class="fas fa-link"></i></button>
                 <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
             </div>
 
-            <button type="button" class="btn-delete-substitution-row" title="Remove assignment" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 4px; transition: color 0.15s;"><i class="fas fa-times-circle"></i></button>
+            <button type="button" class="btn-delete-substitution-row" title="Remove assignment" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem; padding: 4px; flex-shrink: 0; transition: color 0.15s;"><i class="fas fa-times-circle"></i></button>
         `;
+
+        if (isLinked) {
+            applySubstitutionLinkedPill(row.querySelector('.linked-input-wrapper'), linkedToken);
+        }
 
         const delBtn = row.querySelector('.btn-delete-substitution-row');
         delBtn.addEventListener('click', () => {
@@ -292,6 +448,12 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
 
         updateVariablesIndexAndSyncUI(true);
 
+        // Restore from nested substitutions map and/or flat sub_* keys
+        if (savedValues.substitutions && typeof savedValues.substitutions === 'object' && !Array.isArray(savedValues.substitutions)) {
+            Object.entries(savedValues.substitutions).forEach(([varName, vVal]) => {
+                createSubstitutionRow(varName, vVal, true);
+            });
+        }
         Object.entries(savedValues).forEach(([key, vVal]) => {
             if (key.startsWith('sub_')) {
                 createSubstitutionRow(key.replace('sub_', ''), vVal, true);
@@ -354,10 +516,26 @@ function bindLiveFormulaEvaluation(card, savedValues = {}) {
     [simplifySelect, substitutionSelect].forEach(selectEl => {
         if (selectEl) {
             selectEl.addEventListener('change', () => {
+                if (selectEl === simplifySelect) {
+                    card.setAttribute('data-selected-variable', selectEl.value || '');
+                    syncRhsOnlyAvailability();
+                }
                 card.dispatchEvent(new Event('change', { bubbles: true }));
             });
         }
     });
+
+    if (simplifyRhsOnlyCheckbox) {
+        simplifyRhsOnlyCheckbox.addEventListener('change', () => {
+            card.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+    }
+
+    if (simplifyAfterSubCheckbox) {
+        simplifyAfterSubCheckbox.addEventListener('change', () => {
+            card.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+    }
 }
 
 function evaluate({ card, tokenIdentifier, visitedTokens = [], getLiveComponentValue, formulaLiveLatexCache }) {
@@ -380,6 +558,7 @@ function serialize({ card, inputsCollected }) {
 
     const simplifySelect = card.querySelector('.val-input-simplify-target');
     const substitutionSelect = card.querySelector('.val-input-substitution-target');
+    const rhsOnlyCheckbox = card.querySelector('.val-output-rhs-only');
 
     const simplifyVal = simplifySelect && simplifySelect.selectedIndex >= 0 ?
         simplifySelect.options[simplifySelect.selectedIndex].value : "";
@@ -389,6 +568,17 @@ function serialize({ card, inputsCollected }) {
 
     inputsCollected["variable to simplify"] = simplifyVal;
     inputsCollected["variable to substitute"] = substitutionVal;
+    inputsCollected["output rhs only"] = !!(
+        rhsOnlyCheckbox
+        && rhsOnlyCheckbox.checked
+        && solveMethod === 'simplify'
+        && simplifyVal
+        && simplifyVal !== '-- N/A --'
+    );
+    const simplifyAfterSubCheckbox = card.querySelector('.val-simplify-after-substitution');
+    inputsCollected["simplify after substitution"] = !!(
+        simplifyAfterSubCheckbox && simplifyAfterSubCheckbox.checked && solveMethod === 'variable substitution'
+    );
 
     const chosenTarget = (solveMethod === 'simplify') ? simplifyVal : ((solveMethod === 'variable substitution') ? substitutionVal : "");
     inputsCollected["variable substitution"] = chosenTarget;

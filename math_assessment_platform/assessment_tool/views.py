@@ -5,11 +5,11 @@ from .models import Course, UsersInCourse, UserProfile
 from .models import (
     BranchGroup, Assessment, Problem, 
     CustomQuestionDistribution, AssessmentQuestionGroup, 
-    CustomQuestionDistribution, 
+    CustomQuestionDistribution, CqdPair,
     QuestionBlock, EntitySegment,
     EntityType, EntityUserInput
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity
 import html
 import json
 from django.http import JsonResponse
@@ -759,10 +759,10 @@ def rename_item(request):
                 
             item_full_path = obj.get_parent_path() + obj.name + "/"
             parent = obj.parent
+            exclude_branch_id = obj.id
         else:
             # 🚀 UPDATED: Fetch independent items and defer to your global clearance engine
-            # The 'obj' is a BranchGroup item, not the 'problem' item
-            obj = get_object_or_404(model_class, id=item_id)
+            obj = get_object_or_404(model_class.objects.select_related('branch_location'), id=item_id)
             
             if item_type == 'problem':
                 # Pass your problem record straight to your specialized security matrix mapping routine
@@ -773,12 +773,18 @@ def rename_item(request):
                 if request.user.user_type != 'IT_Support' and obj.branch_location and obj.branch_location.owner != request.user:
                     return JsonResponse({'error': 'You do not have permission to rename this resource.'}, status=403)
 
-            item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
-            parent = obj.branch_location
+            if not obj.branch_location:
+                return JsonResponse({'error': 'Item is missing its linked folder location.'}, status=400)
 
-        # Check to make sure the 'new_name' doesn't contain unallowed structures via business rules
-        bg_context_node = obj if item_type == 'folder' else parent
-        new_name, error = get_valid_unique_name(BranchGroup, bg_context_node.parent if item_type == 'folder' else bg_context_node, new_name)
+            item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
+            # Sibling uniqueness is among folders under the same parent (AQG section, etc.)
+            parent = obj.branch_location.parent
+            exclude_branch_id = obj.branch_location_id
+
+        # Uniqueness among sibling BranchGroup folders under `parent`, excluding this node
+        new_name, error = get_valid_unique_name(
+            BranchGroup, parent, new_name, exclude_id=exclude_branch_id
+        )
         if error:
             return JsonResponse({'error': error}, status=400)
 
@@ -799,26 +805,6 @@ def rename_item(request):
         if item_full_path.startswith(f"/Users/{username}_root/Courses/") and not request.resolver_match.view_name == 'course_list':
             if request.user.user_type != 'IT_Support' and item_type == 'folder' and obj.name in ['Courses', 'Trash']:
                 return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
-
-        # Automatic Suffix Incrementor Collision Management Logic
-        base_name = new_name
-        counter = 1
-        
-        while True:
-            duplicate_query = {field_name: new_name}
-            if parent:
-                if item_type in ['folder', 'course', 'assessment']:
-                    duplicate_exists = BranchGroup.objects.filter(parent=parent, name=new_name).exclude(id=obj.id if item_type == 'folder' else obj.id).exists()
-                else:
-                    duplicate_exists = model_class.objects.filter(branch_location=parent, **duplicate_query).exclude(id=obj.id).exists()
-            else:
-                duplicate_exists = BranchGroup.objects.filter(parent__isnull=True, owner=obj.owner, name=new_name).exclude(id=obj.id if item_type == 'folder' else obj.id).exists()
-
-            if not duplicate_exists:
-                break
-            
-            new_name = f"{base_name} ({counter})"
-            counter += 1
 
         # --- EXECUTE SYNCHRONIZED DATABASE ATOMIC WRITE ---
         with transaction.atomic():
@@ -844,15 +830,19 @@ def rename_item(request):
                     obj.assessment.save()
 
             elif item_type == 'problem':
-                setattr(obj, field_name, new_name)  # updates obj.title
+                branch = obj.branch_location
+                obj.title = new_name
                 obj.save()
 
-                if obj.branch_location:
-                    obj.branch_location.name = new_name
-                    obj.branch_location.save()
+                # Keep the linked BranchGroup folder name in lockstep with the problem title
+                branch.name = new_name
+                branch.save()
             else:
                 setattr(obj, field_name, new_name)
                 obj.save()
+                if getattr(obj, 'branch_location', None):
+                    obj.branch_location.name = new_name
+                    obj.branch_location.save()
 
         return JsonResponse({'status': 'success', 'new_name': new_name})
     
@@ -1491,6 +1481,346 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
 
 
 @login_required
+@require_POST
+def duplicate_problem_in_aqg_ajax(request, course_id, assessment_id):
+    """
+    Duplicate an existing problem inside the same Assessment Question Group section.
+    Creates a fully independent copy (question body + entities) titled 'Copy of …'.
+    """
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'error': 'Unauthorized.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        problem_id = data.get('problem_id')
+        if not problem_id:
+            return JsonResponse({'error': 'Missing problem_id.'}, status=400)
+
+        source_problem = get_object_or_404(
+            Problem.objects.select_related('branch_location', 'aqg', 'aqg__assessment'),
+            id=problem_id,
+            aqg__assessment_id=assessment_id,
+            aqg__assessment__course_id=course_id,
+        )
+
+        if not verify_workspace_clearance(request.user, source_problem):
+            return JsonResponse({'error': 'You do not have permission to duplicate this problem.'}, status=403)
+
+        new_problem, err = duplicate_problem_in_aqg(source_problem, request.user)
+        if err:
+            return JsonResponse({'error': err}, status=400)
+
+        problem_html = render_to_string(
+            'assessment_tool/components/problem_card.html',
+            {'prob': new_problem},
+            request=request,
+        )
+
+        return JsonResponse({
+            'status': 'success',
+            'problem_id': new_problem.id,
+            'branch_id': new_problem.branch_location_id,
+            'allocated_name': new_problem.title,
+            'html': problem_html,
+        }, status=201)
+
+    except Exception as e:
+        return JsonResponse({'error': f"Duplication failed: {str(e)}"}, status=400)
+
+
+@login_required
+@require_POST
+def move_problem_to_aqg_ajax(request, course_id, assessment_id):
+    """
+    Move an existing problem to another Assessment Question Group section
+    within the same assessment, appending it to the end of that section.
+    """
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'error': 'Unauthorized.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        problem_id = data.get('problem_id')
+        target_aqg_id = data.get('target_aqg_id')
+        if not problem_id or not target_aqg_id:
+            return JsonResponse({'error': 'Missing problem_id or target_aqg_id.'}, status=400)
+
+        problem = get_object_or_404(
+            Problem.objects.select_related('branch_location', 'aqg', 'aqg__assessment'),
+            id=problem_id,
+            aqg__assessment_id=assessment_id,
+            aqg__assessment__course_id=course_id,
+        )
+
+        if not verify_workspace_clearance(request.user, problem):
+            return JsonResponse({'error': 'You do not have permission to move this problem.'}, status=403)
+
+        target_aqg = get_object_or_404(
+            AssessmentQuestionGroup.objects.select_related('branch_location'),
+            id=target_aqg_id,
+            assessment_id=assessment_id,
+            assessment__course_id=course_id,
+        )
+
+        moved_problem, err = move_problem_to_aqg(problem, target_aqg)
+        if err:
+            return JsonResponse({'error': err}, status=400)
+
+        return JsonResponse({
+            'status': 'success',
+            'problem_id': moved_problem.id,
+            'branch_id': moved_problem.branch_location_id,
+            'target_aqg_id': target_aqg.id,
+            'allocated_name': moved_problem.title,
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f"Move failed: {str(e)}"}, status=400)
+
+
+@login_required
+@require_POST
+def move_problem_to_cqd_ajax(request, course_id, assessment_id):
+    """
+    Move an existing problem into a problem set (CQD) folder within the assessment.
+    """
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'error': 'Unauthorized.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        problem_id = data.get('problem_id')
+        target_cqd_id = data.get('target_cqd_id')
+        if not problem_id or not target_cqd_id:
+            return JsonResponse({'error': 'Missing problem_id or target_cqd_id.'}, status=400)
+
+        problem = get_object_or_404(
+            Problem.objects.select_related('branch_location', 'aqg', 'aqg__assessment', 'cqd'),
+            id=problem_id,
+        )
+
+        if not verify_workspace_clearance(request.user, problem):
+            return JsonResponse({'error': 'You do not have permission to move this problem.'}, status=403)
+
+        # Ensure problem belongs to this assessment (via aqg, or via current folder ancestry)
+        problem_assessment_id = None
+        if problem.aqg_id:
+            problem_assessment_id = problem.aqg.assessment_id
+        elif problem.branch_location and problem.branch_location.parent_id:
+            parent = problem.branch_location.parent
+            parent_aqg = AssessmentQuestionGroup.objects.filter(branch_location_id=parent.id).first()
+            if not parent_aqg and parent.parent_id:
+                parent_aqg = AssessmentQuestionGroup.objects.filter(branch_location_id=parent.parent_id).first()
+            if parent_aqg:
+                problem_assessment_id = parent_aqg.assessment_id
+
+        if problem_assessment_id != assessment_id:
+            return JsonResponse({'error': 'Problem does not belong to this assessment.'}, status=400)
+
+        target_cqd = get_object_or_404(
+            CustomQuestionDistribution.objects.select_related('assigned_folder', 'assigned_folder__parent'),
+            id=target_cqd_id,
+        )
+        cqd_aqg = AssessmentQuestionGroup.objects.filter(
+            branch_location_id=target_cqd.assigned_folder.parent_id,
+            assessment_id=assessment_id,
+            assessment__course_id=course_id,
+        ).first()
+        if not cqd_aqg:
+            return JsonResponse({'error': 'Problem set is not part of this assessment.'}, status=400)
+
+        old_cqd_id = problem.cqd_id
+        moved_problem, err = move_problem_to_cqd(problem, target_cqd)
+        if err:
+            return JsonResponse({'error': err}, status=400)
+
+        old_display = None
+        old_count = None
+        if old_cqd_id and old_cqd_id != target_cqd.id:
+            old_cqd = CustomQuestionDistribution.objects.filter(id=old_cqd_id).first()
+            if old_cqd:
+                old_display, old_count = refresh_cqd_identity(old_cqd)
+
+        return JsonResponse({
+            'status': 'success',
+            'problem_id': moved_problem.id,
+            'branch_id': moved_problem.branch_location_id,
+            'target_cqd_id': target_cqd.id,
+            'allocated_name': moved_problem.title,
+            'cqd_display_name': getattr(moved_problem, '_cqd_display_name', target_cqd.get_display_name()),
+            'cqd_count': getattr(moved_problem, '_cqd_count', None),
+            'old_cqd_id': old_cqd_id if old_cqd_id != target_cqd.id else None,
+            'old_cqd_display_name': old_display,
+            'old_cqd_count': old_count,
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f"Move to problem set failed: {str(e)}"}, status=400)
+
+
+@login_required
+@require_POST
+def remove_problem_from_cqd_ajax(request, course_id, assessment_id):
+    """
+    Remove a problem from its problem set and place it immediately after that
+    set inside the same question group section.
+    """
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'error': 'Unauthorized.'}, status=403)
+
+    try:
+        data = json.loads(request.body)
+        problem_id = data.get('problem_id')
+        if not problem_id:
+            return JsonResponse({'error': 'Missing problem_id.'}, status=400)
+
+        problem = get_object_or_404(
+            Problem.objects.select_related(
+                'branch_location',
+                'branch_location__parent',
+                'aqg',
+                'aqg__assessment',
+                'cqd',
+                'cqd__assigned_folder',
+            ),
+            id=problem_id,
+        )
+
+        if not verify_workspace_clearance(request.user, problem):
+            return JsonResponse({'error': 'You do not have permission to move this problem.'}, status=403)
+
+        # Resolve the problem set / section before mutating so we can authorize
+        cqd = problem.cqd
+        if not cqd and problem.branch_location and problem.branch_location.parent_id:
+            cqd = CustomQuestionDistribution.objects.filter(
+                assigned_folder_id=problem.branch_location.parent_id
+            ).select_related('assigned_folder').first()
+        if not cqd or not cqd.assigned_folder_id:
+            return JsonResponse({'error': 'Problem is not inside a problem set.'}, status=400)
+
+        section_aqg = AssessmentQuestionGroup.objects.filter(
+            branch_location_id=cqd.assigned_folder.parent_id,
+            assessment_id=assessment_id,
+            assessment__course_id=course_id,
+        ).first()
+        if not section_aqg:
+            return JsonResponse({'error': 'Problem set is not part of this assessment.'}, status=400)
+
+        moved_problem, err = remove_problem_from_cqd(problem)
+        if err:
+            return JsonResponse({'error': err}, status=400)
+
+        return JsonResponse({
+            'status': 'success',
+            'problem_id': moved_problem.id,
+            'branch_id': moved_problem.branch_location_id,
+            'aqg_id': getattr(moved_problem, '_aqg_id', section_aqg.id),
+            'source_cqd_id': getattr(moved_problem, '_source_cqd_id', cqd.id),
+            'allocated_name': moved_problem.title,
+            'cqd_display_name': getattr(moved_problem, '_cqd_display_name', None),
+            'cqd_count': getattr(moved_problem, '_cqd_count', None),
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f"Remove from problem set failed: {str(e)}"}, status=400)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def cqd_problems_list_ajax(request, course_id, assessment_id, cqd_id):
+    """
+    Return rendered problem cards for all problems inside a problem set (CQD).
+    """
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+        return JsonResponse({'error': 'Unauthorized.'}, status=403)
+
+    try:
+        cqd = get_object_or_404(
+            CustomQuestionDistribution.objects.select_related('assigned_folder'),
+            id=cqd_id,
+        )
+        section_aqg = AssessmentQuestionGroup.objects.filter(
+            branch_location_id=cqd.assigned_folder.parent_id,
+            assessment_id=assessment_id,
+            assessment__course_id=course_id,
+        ).first()
+        if not section_aqg:
+            return JsonResponse({'error': 'Problem set is not part of this assessment.'}, status=404)
+
+        child_branches = list(
+            BranchGroup.objects.filter(parent=cqd.assigned_folder)
+            .order_by('order', 'id')
+        )
+        branch_ids = [b.id for b in child_branches]
+        problems_by_branch = {
+            p.branch_location_id: p
+            for p in Problem.objects.filter(branch_location_id__in=branch_ids).select_related('branch_location')
+        }
+
+        cards_html = []
+        for branch in child_branches:
+            prob = problems_by_branch.get(branch.id)
+            if not prob:
+                continue
+            cards_html.append(
+                render_to_string(
+                    'assessment_tool/components/problem_card.html',
+                    {'prob': prob},
+                    request=request,
+                )
+            )
+
+        display_name, count = refresh_cqd_identity(cqd)
+
+        return JsonResponse({
+            'status': 'success',
+            'cqd_id': cqd.id,
+            'display_name': display_name,
+            'count': count,
+            'aqg_id': section_aqg.id,
+            'html': ''.join(cards_html),
+        }, status=200)
+
+    except Exception as e:
+        return JsonResponse({'error': f"Failed to load problem set: {str(e)}"}, status=400)
+
+
+@login_required
 def add_cqd_to_aqg_ajax(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'Method not allowed'}, status=405)
@@ -1630,9 +1960,16 @@ def reorder_nested_item_ajax(request):
 
         is_course_teacher = False
         if not is_privileged and not is_owner:
+            # Direct child of an AQG section, or nested under a CQD inside an AQG
             parent_aqg = AssessmentQuestionGroup.objects.filter(
                 branch_location_id=target_node.parent_id
             ).select_related('assessment').first()
+            if not parent_aqg and target_node.parent_id:
+                parent_folder = BranchGroup.objects.filter(id=target_node.parent_id).first()
+                if parent_folder and parent_folder.parent_id:
+                    parent_aqg = AssessmentQuestionGroup.objects.filter(
+                        branch_location_id=parent_folder.parent_id
+                    ).select_related('assessment').first()
             if parent_aqg:
                 is_course_teacher = UsersInCourse.objects.filter(
                     course_id=parent_aqg.assessment.course_id,
@@ -2086,6 +2423,8 @@ def save_problem_workspace(request, problem_id):
     Incomplete / invalid work is allowed. When unfinished reasons exist and the
     client has not confirmed draft save, return needs_confirmation with reasons.
     Confirmed unfinished saves set problem_status='draft'; clean saves set 'complete'.
+    With force_complete_div0 + confirm_draft, division-by-zero / non-finite warnings
+    are ignored for status so the problem can still be marked complete.
     """
     try:
         payload = json.loads(request.body)
@@ -2093,7 +2432,7 @@ def save_problem_workspace(request, problem_id):
         return JsonResponse({"success": False, "error": "Malformed JSON payload specification request."}, status=400)
 
     try:
-        problem = Problem.objects.get(pk=problem_id)
+        problem = Problem.objects.select_related('branch_location').get(pk=problem_id)
     except Problem.DoesNotExist:
         return JsonResponse({"success": False, "error": f"Problem reference ID {problem_id} not found."}, status=404)
 
@@ -2103,6 +2442,7 @@ def save_problem_workspace(request, problem_id):
     user_inputs = payload.get("inputs", [])
     body_html = payload.get("body_html", "").strip()
     confirm_draft = bool(payload.get("confirm_draft", False))
+    force_complete_div0 = bool(payload.get("force_complete_div0", False))
 
     if not isinstance(user_inputs, list):
         return JsonResponse({"success": False, "error": "The workspace inputs block layout must be an array list structure."}, status=400)
@@ -2228,6 +2568,20 @@ def save_problem_workspace(request, problem_id):
                         'variable to solve for', ''
                     ).strip()
 
+        # Formula/matrix substitutions live under sub_* / substitutions — merge so
+        # evaluate_output and structural checks see the same links as the preview.
+        # Prefer the nested substitutions map (serialize always brackets tokens) over
+        # any bare sub_* values collected from data-bound-token.
+        if token_id in ('formula', 'matrix') and substitutions_map:
+            cleaned_provided_fields.update(substitutions_map)
+        if token_id in ('formula', 'matrix') and isinstance(provided_fields.get('substitutions'), dict):
+            cleaned_provided_fields['substitutions'] = provided_fields['substitutions']
+            for sub_k, sub_v in provided_fields['substitutions'].items():
+                if sub_v is None or sub_v == '':
+                    continue
+                cleaned_provided_fields[f'sub_{sub_k}'] = sub_v
+                substitutions_map[f'sub_{sub_k}'] = sub_v
+
         runtime_payload = []
         for entity in sorted_user_inputs:
             entity_copy = dict(entity)
@@ -2236,6 +2590,10 @@ def save_problem_workspace(request, problem_id):
                 entity_copy["is_validated_dependency"] = True
                 entity_copy["outstanding_errors"] = False
             runtime_payload.append(entity_copy)
+
+        # Ensure nested formula expansion can identify this card
+        if sequence_token:
+            cleaned_provided_fields.setdefault('sequence_token', sequence_token)
 
         validator = get_entity_validator(
             token_id,
@@ -2249,9 +2607,31 @@ def save_problem_workspace(request, problem_id):
         # Schema/syntax checks replace linked tokens with placeholders, so an
         # entity can pass is_valid() and still blow up when the resolved sympy
         # form is evaluated (e.g. formula referencing another Integral result).
-        if is_valid and token_id in ('formula', 'matrix', 'graph', 'matrixResultByIndex', 'slopeFieldGraph'):
+        if is_valid and token_id in ('formula', 'matrix', 'graph', 'matrixResultByIndex', 'slopeFieldGraph', 'graphBetweenPoints'):
             try:
-                validator.evaluate_output()
+                eval_result = validator.evaluate_output()
+                # Sample evaluation can yield zoo/oo without raising — treat as unfinished.
+                if token_id == 'formula':
+                    result_obj = getattr(validator, 'last_computed_sympy_result', None)
+                    zoo_hit = False
+                    try:
+                        if result_obj is not None and hasattr(result_obj, 'has'):
+                            zoo_hit = bool(
+                                result_obj.has(sp.zoo)
+                                or result_obj.has(sp.oo)
+                                or result_obj.has(-sp.oo)
+                                or result_obj.has(sp.nan)
+                            )
+                    except Exception:
+                        zoo_hit = False
+                    if not zoo_hit and isinstance(eval_result, str):
+                        lowered = eval_result.strip().lower()
+                        zoo_hit = lowered in ('zoo', 'nan', 'oo', 'complex_infinity') or 'zoo' in lowered
+                    if zoo_hit:
+                        is_valid = False
+                        validator.errors["evaluation"] = (
+                            "Expression evaluates to a non-finite value (possible division by zero)."
+                        )
             except Exception as eval_err:
                 is_valid = False
                 validator.errors["evaluation"] = (
@@ -2259,9 +2639,38 @@ def save_problem_workspace(request, problem_id):
                     f"entities: {eval_err}"
                 )
 
+        # Structural range check: linked rand/randInt mins/maxes can force a zero denominator.
+        # Prefer an actionable message that includes a min/max Suggestion over an upstream
+        # free-variable-only warning (same issue, but the downstream card can propose a fix).
+        div0_only_failure = False
+        if token_id == 'formula' and hasattr(validator, 'check_possible_division_by_zero'):
+            already_has_actionable_div0 = any(
+                'Possible division by zero' in reason and 'Suggestion:' in reason
+                for reason in unfinished_reasons
+            )
+            if not already_has_actionable_div0:
+                try:
+                    div0_msg = validator.check_possible_division_by_zero()
+                except Exception:
+                    div0_msg = None
+                if div0_msg:
+                    is_valid = False
+                    div0_only_failure = True
+                    labeled = f"[{label}] {div0_msg}"
+                    if 'Suggestion:' in div0_msg:
+                        unfinished_reasons = [
+                            r for r in unfinished_reasons
+                            if 'Possible division by zero' not in r
+                        ]
+                        unfinished_reasons.append(labeled)
+                    elif not any('Possible division by zero' in r for r in unfinished_reasons):
+                        unfinished_reasons.append(labeled)
+
         if not is_valid:
-            error_details = "; ".join([f"{k}: {v}" for k, v in validator.errors.items()])
-            unfinished_reasons.append(f"[{label}] {error_details}")
+            if not div0_only_failure:
+                error_details = "; ".join([f"{k}: {v}" for k, v in validator.errors.items()])
+                if error_details:
+                    unfinished_reasons.append(f"[{label}] {error_details}")
             # Persist raw teacher inputs so unfinished drafts can be reopened exactly
             draft_content = dict(cleaned_provided_fields)
             for sub_key, sub_value in substitutions_map.items():
@@ -2274,11 +2683,25 @@ def save_problem_workspace(request, problem_id):
             if token_id in ['formula', 'matrix']:
                 for sub_key, sub_value in substitutions_map.items():
                     content_source[sub_key] = sub_value
+            # Keep formula / shortAnswer UI checkboxes even when blueprint hasn't been re-seeded yet
+            if token_id == 'formula':
+                for checkbox_key in ('output rhs only', 'simplify after substitution'):
+                    if checkbox_key in cleaned_provided_fields:
+                        content_source[checkbox_key] = cleaned_provided_fields[checkbox_key]
+                    elif checkbox_key not in content_source:
+                        content_source[checkbox_key] = False
+            elif token_id == 'shortAnswer':
+                for checkbox_key in ('accept_rounded_decimals',):
+                    if checkbox_key in cleaned_provided_fields:
+                        content_source[checkbox_key] = cleaned_provided_fields[checkbox_key]
+                    elif checkbox_key not in content_source:
+                        content_source[checkbox_key] = False
 
         persistable_engines.append({
             "token_id": token_id,
             "sequence_token": sequence_token,
             "shuffle_seed": entity_data.get("shuffle_seed", ""),
+            "points": entity_data.get("points"),
             "blueprint": blueprint,
             "content_source": content_source,
             "is_valid": is_valid,
@@ -2293,6 +2716,19 @@ def save_problem_workspace(request, problem_id):
             unique_reasons.append(reason)
     unfinished_reasons = unique_reasons
 
+    def _is_div0_unfinished_reason(reason):
+        text = str(reason or "")
+        return (
+            "Possible division by zero" in text
+            or "non-finite value (possible division by zero)" in text
+        )
+
+    # Teacher may acknowledge zoo / structural div0 warnings and still mark complete.
+    # Other unfinished issues continue to force draft status.
+    status_reasons = unfinished_reasons
+    if force_complete_div0 and confirm_draft:
+        status_reasons = [r for r in unfinished_reasons if not _is_div0_unfinished_reason(r)]
+
     if unfinished_reasons and not confirm_draft:
         return JsonResponse({
             "success": False,
@@ -2301,12 +2737,17 @@ def save_problem_workspace(request, problem_id):
             "message": "Problem is unfinished and requires draft confirmation before saving."
         }, status=200)
 
-    problem_status = 'draft' if unfinished_reasons else 'complete'
+    problem_status = 'draft' if status_reasons else 'complete'
 
     with transaction.atomic():
         problem.title = payload.get("title", problem.title)
         problem.problem_status = problem_status
         problem.save()
+
+        # Keep linked folder name aligned when workspace save changes the title
+        if problem.branch_location_id and problem.branch_location.name != problem.title:
+            problem.branch_location.name = problem.title
+            problem.branch_location.save()
 
         structured_json_string = json.dumps({"html_content": body_html})
         q_block, created = QuestionBlock.objects.get_or_create(
@@ -2326,7 +2767,9 @@ def save_problem_workspace(request, problem_id):
             blueprint = engine_item["blueprint"]
             content_payload = dict(engine_item["content_source"])
 
-            points_value = entity_data.get("points")
+            # Use this engine item's own points — not leftover entity_data from the
+            # validation loop (which incorrectly copied the last entity's Pts onto all).
+            points_value = engine_item.get("points")
             if points_value is None:
                 points_value = content_payload.get("points")
             if points_value is None:

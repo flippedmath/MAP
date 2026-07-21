@@ -484,10 +484,13 @@ class CustomQuestionDistribution(models.Model):
         else:
             try:
                 # Fall back to your database relation (using standard reverse naming layout)
-                num = self.cqdpair.count()
+                num = self.cqdpair_set.count()
             except (AttributeError, ValueError):
-                # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
-                num = 0
+                try:
+                    num = self.cqdpair.count()
+                except (AttributeError, ValueError):
+                    # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
+                    num = 0
                 
         return f"ID ({self.id}) - Count = {num}"
     
@@ -497,10 +500,13 @@ class CustomQuestionDistribution(models.Model):
         else:
             try:
                 # Fall back to your database relation (using standard reverse naming layout)
-                num = self.cqdpair.count()
+                num = self.cqdpair_set.count()
             except (AttributeError, ValueError):
-                # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
-                num = 0
+                try:
+                    num = self.cqdpair.count()
+                except (AttributeError, ValueError):
+                    # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
+                    num = 0
         return f"Problem Set Count = {num}"
                 
 

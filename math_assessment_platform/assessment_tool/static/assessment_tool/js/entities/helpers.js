@@ -77,40 +77,37 @@ export function ensureLatexRenderBox(card) {
 
 const GREEK_VAR_REGEX_STR = '^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)';
 
+/** Bare names reserved as SymPy special functions — not allowed as plain variables. */
+export const RESERVED_SYMPY_GREEK_FUNCTIONS = ['beta', 'gamma', 'zeta'];
+
 /**
  * Shared algebraic variable extraction used by formula cards and matrix cells.
  * Rejects reserved SymPy constants E/I; accepts single-letter, subscript, and greek forms.
+ * Bare beta/gamma/zeta are excluded (SymPy functions); use beta_1 / gamma2 / etc. instead.
  * Linked tokens `<tokenId>` recurse into the source card's `.val-input-variables` when present.
  *
  * @param {string} formulaStr
  * @returns {string[]}
  */
-export function extractVariablesFromFormulaString(formulaStr) {
-    if (!formulaStr) return [];
+function findWorkspaceCardByIndexedToken(indexedTokenName) {
+    const clean = String(indexedTokenName || '').replace(/[<>]/g, '').trim();
+    if (!clean) return null;
+    // data-indexed-token lives on the delete button (and pills), not the card root.
+    return Array.from(document.querySelectorAll('.workspace-component-card, .workspace-block-card'))
+        .find((card) => {
+            const delBtn = card.querySelector('.btn-delete-workspace-component');
+            return delBtn && delBtn.getAttribute('data-indexed-token') === clean;
+        }) || null;
+}
 
-    const cleanStr = String(formulaStr).trim();
-    const tokenMatch = cleanStr.match(/^<([^>]+)>$/);
-
-    if (tokenMatch) {
-        const targetTokenIndexName = tokenMatch[1].strip ? tokenMatch[1].strip() : tokenMatch[1];
-        const sourceCard = document.querySelector(
-            `[data-indexed-token="${targetTokenIndexName}"], [data-token="${targetTokenIndexName}"]`
-        );
-        if (sourceCard) {
-            const sourceVarsInput = sourceCard.querySelector('.val-input-variables');
-            if (sourceVarsInput && sourceVarsInput.value) {
-                return sourceVarsInput.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
-            }
-        }
-        return [];
-    }
-
-    const allWordMatches = cleanStr.match(/\b[a-zA-Z][a-zA-Z0-9_]*\b/g) || [];
-
-    const variableMatches = allWordMatches.filter(word => {
+function filterAlgebraicVariableTokens(wordMatches) {
+    return wordMatches.filter((word) => {
         const lowerWord = word.toLowerCase();
 
         if (word === 'E' || word === 'I') return false;
+
+        // SymPy special functions — not extractable as free variables
+        if (RESERVED_SYMPY_GREEK_FUNCTIONS.includes(lowerWord)) return false;
 
         if (/^[a-zA-Z][0-9]*$/.test(word)) return true;
         if (/^[a-zA-Z]_[0-9]+$/.test(word)) return true;
@@ -121,8 +118,54 @@ export function extractVariablesFromFormulaString(formulaStr) {
 
         return false;
     });
+}
 
-    return [...new Set(variableMatches)];
+/**
+ * Bare beta / gamma / zeta tokens appearing in a formula (not beta_1, gamma2, …).
+ * @param {string} formulaStr
+ * @returns {string[]} sorted unique reserved names found
+ */
+export function findReservedSympyGreekFunctionsInFormula(formulaStr) {
+    if (!formulaStr) return [];
+    const words = String(formulaStr).match(/\b[a-zA-Z][a-zA-Z0-9_]*\b/g) || [];
+    const found = new Set();
+    words.forEach((word) => {
+        const lower = word.toLowerCase();
+        if (RESERVED_SYMPY_GREEK_FUNCTIONS.includes(lower)) {
+            found.add(lower);
+        }
+    });
+    return [...found].sort();
+}
+
+export function extractVariablesFromFormulaString(formulaStr) {
+    if (!formulaStr) return [];
+
+    const cleanStr = String(formulaStr).trim();
+    const tokenMatch = cleanStr.match(/^<([^>]+)>$/);
+
+    if (tokenMatch) {
+        const targetTokenIndexName = (tokenMatch[1] || '').trim();
+        const sourceCard = findWorkspaceCardByIndexedToken(targetTokenIndexName);
+        if (sourceCard) {
+            const sourceVarsInput = sourceCard.querySelector('.val-input-variables');
+            if (sourceVarsInput && sourceVarsInput.value) {
+                return sourceVarsInput.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
+            }
+            // Fall back to scraping free symbols from the upstream evaluated preview text
+            const previewText = sourceCard.querySelector('.latex-render-box')?.textContent
+                || sourceCard.getAttribute('data-simulated-value')
+                || '';
+            if (previewText) {
+                const fromPreview = extractVariablesFromFormulaString(previewText);
+                if (fromPreview.length) return fromPreview;
+            }
+        }
+        return [];
+    }
+
+    const allWordMatches = cleanStr.match(/\b[a-zA-Z][a-zA-Z0-9_]*\b/g) || [];
+    return [...new Set(filterAlgebraicVariableTokens(allWordMatches))];
 }
 
 /**

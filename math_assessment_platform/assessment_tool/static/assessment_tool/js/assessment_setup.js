@@ -606,11 +606,64 @@ document.addEventListener("DOMContentLoaded", function() {
             const deleteBtn = e.target.closest('.btn-delete-item');
             if (deleteBtn) {
                 e.preventDefault();
-                
+                e.stopPropagation();
+
                 const itemRow = deleteBtn.closest('.cqd-item-row, .problem-item-row');
-                const itemId = itemRow.getAttribute('data-id');
-                const itemType = deleteBtn.getAttribute('data-type'); // Evaluates to 'cqd'
-                
+                if (!itemRow) return;
+
+                const itemType = deleteBtn.getAttribute('data-type');
+                const itemId = itemRow.getAttribute('data-problem-id') || itemRow.getAttribute('data-id');
+
+                if (itemType === 'problem') {
+                    const problemTitle = itemRow.querySelector('.problem-title-input')?.value || "this problem";
+                    if (!confirm(`Are you sure you want to permanently delete "${problemTitle}"?`)) return;
+
+                    deleteBtn.disabled = true;
+                    const originalIcon = deleteBtn.innerHTML;
+                    deleteBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+
+                    try {
+                        const response = await fetch('/delete-item/', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': getCookie('csrftoken')
+                            },
+                            body: JSON.stringify({
+                                id: parseInt(itemId, 10),
+                                type: 'problem'
+                            })
+                        });
+                        const data = await response.json();
+                        if (response.ok && data.status === 'success') {
+                            const listWrapper = itemRow.parentElement;
+                            const sourceCard = itemRow.closest('.aqg-section-card');
+                            const inOverlay = !!itemRow.closest('#cqd-overlay-problems-list');
+                            const openCqdId = cqdProblemsOverlay?.getAttribute('data-cqd-id');
+                            itemRow.remove();
+
+                            if (inOverlay) {
+                                updateOverlayEmptyState();
+                                if (openCqdId) {
+                                    refreshCqdCardLabel(openCqdId);
+                                }
+                            } else {
+                                restoreEmptyPlaceholderIfNeeded(sourceCard);
+                            }
+                        } else {
+                            alert(data.error || "Failed to remove the problem item.");
+                            deleteBtn.disabled = false;
+                            deleteBtn.innerHTML = originalIcon;
+                        }
+                    } catch (err) {
+                        console.error("Deletion connection error:", err);
+                        alert("A critical networking transmission failure occurred.");
+                        deleteBtn.disabled = false;
+                        deleteBtn.innerHTML = originalIcon;
+                    }
+                    return;
+                }
+
                 if (confirm("Are you sure you want to delete this problem group?")) {
                     try {
                         const response = await fetch(`/delete-item/${itemType}/${itemId}/`, {
@@ -623,8 +676,12 @@ document.addEventListener("DOMContentLoaded", function() {
                         
                         const data = await response.json();
                         if (response.ok) {
-                            // Smoothly remove the card row layout from the viewport canvas
+                            const sourceCard = itemRow.closest('.aqg-section-card');
                             itemRow.remove();
+                            restoreEmptyPlaceholderIfNeeded(sourceCard);
+                            if (cqdProblemsOverlay?.getAttribute('data-cqd-id') === String(itemId)) {
+                                closeCqdOverlay();
+                            }
                         } else {
                             alert(`Error: ${data.error}`);
                         }
@@ -632,6 +689,18 @@ document.addEventListener("DOMContentLoaded", function() {
                         console.error("Assessment setup request failed:", err);
                         alert("A network transmission error occurred during deletion.");
                     }
+                }
+                return;
+            }
+
+            // Open problem-set overlay
+            const openCqdBtn = e.target.closest('.btn-open-cqd-overlay');
+            if (openCqdBtn) {
+                e.preventDefault();
+                const cqdRow = openCqdBtn.closest('.cqd-item-row');
+                const cqdId = cqdRow?.getAttribute('data-cqd-id') || cqdRow?.getAttribute('data-id');
+                if (cqdId) {
+                    openCqdOverlay(cqdId);
                 }
                 return;
             }
@@ -756,6 +825,735 @@ document.addEventListener("DOMContentLoaded", function() {
                 if (menuOverlay) {
                     menuOverlay.style.display = 'none';
                 }
+            }
+        });
+    }
+
+    // -------------------------------------------------------------
+    // Right-click context menu + problem-set overlay
+    // -------------------------------------------------------------
+    const problemContextMenu = document.getElementById('problem-context-menu');
+    const moveSectionSubmenu = document.getElementById('problem-move-section-submenu');
+    const moveSectionToggle = problemContextMenu
+        ? problemContextMenu.querySelector('[data-action="move-to-section-toggle"]')
+        : null;
+    const addToSetSubmenu = document.getElementById('problem-add-to-set-submenu');
+    const addToSetToggle = problemContextMenu
+        ? problemContextMenu.querySelector('[data-action="add-to-set-toggle"]')
+        : null;
+    const addToSetMenuWrap = document.getElementById('add-to-set-menu-wrap');
+    const removeFromSetBtn = document.getElementById('menu-remove-from-set');
+    const cqdProblemsOverlay = document.getElementById('cqd-problems-overlay');
+    const cqdOverlayList = document.getElementById('cqd-overlay-problems-list');
+    const cqdOverlayTitle = document.getElementById('cqd-overlay-title');
+    const closeCqdOverlayBtn = document.getElementById('close-cqd-overlay');
+    let contextMenuTargetRow = null;
+
+    function hideSubmenu(submenu, toggle) {
+        if (!submenu || !toggle) return;
+        submenu.style.display = 'none';
+        submenu.hidden = true;
+        submenu.classList.remove('is-flipped-left');
+        toggle.classList.remove('is-open');
+        toggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function hideMoveSectionSubmenu() {
+        hideSubmenu(moveSectionSubmenu, moveSectionToggle);
+    }
+
+    function hideAddToSetSubmenu() {
+        hideSubmenu(addToSetSubmenu, addToSetToggle);
+    }
+
+    function hideProblemContextMenu() {
+        hideMoveSectionSubmenu();
+        hideAddToSetSubmenu();
+        if (problemContextMenu) {
+            problemContextMenu.style.display = 'none';
+        }
+        if (contextMenuTargetRow) {
+            contextMenuTargetRow.classList.remove('context-menu-active');
+            contextMenuTargetRow = null;
+        }
+    }
+
+    function positionProblemContextMenu(clientX, clientY) {
+        if (!problemContextMenu) return;
+
+        problemContextMenu.style.display = 'block';
+        problemContextMenu.style.left = '0px';
+        problemContextMenu.style.top = '0px';
+
+        const menuRect = problemContextMenu.getBoundingClientRect();
+        const pad = 8;
+        let left = clientX;
+        let top = clientY;
+
+        if (left + menuRect.width > window.innerWidth - pad) {
+            left = Math.max(pad, window.innerWidth - menuRect.width - pad);
+        }
+        if (top + menuRect.height > window.innerHeight - pad) {
+            top = Math.max(pad, window.innerHeight - menuRect.height - pad);
+        }
+
+        problemContextMenu.style.left = `${left}px`;
+        problemContextMenu.style.top = `${top}px`;
+    }
+
+    function showFlyoutSubmenu(submenu, toggle) {
+        if (!submenu || !toggle || toggle.disabled) return;
+        submenu.hidden = false;
+        submenu.style.display = 'block';
+        submenu.classList.remove('is-flipped-left');
+        toggle.classList.add('is-open');
+        toggle.setAttribute('aria-expanded', 'true');
+
+        const submenuRect = submenu.getBoundingClientRect();
+        if (submenuRect.right > window.innerWidth - 8) {
+            submenu.classList.add('is-flipped-left');
+        }
+    }
+
+    function collectOtherSections(currentAqgId, includeCurrent) {
+        const sections = [];
+        document.querySelectorAll('.aqg-section-card').forEach((card) => {
+            const aqgId = card.getAttribute('data-id');
+            if (!aqgId) return;
+            if (!includeCurrent && String(aqgId) === String(currentAqgId)) return;
+            const titleInput = card.querySelector('.aqg-title-input');
+            const name = (titleInput?.value || titleInput?.getAttribute('data-previous') || `Section ${aqgId}`).trim();
+            sections.push({ id: aqgId, name });
+        });
+        return sections;
+    }
+
+    function resolveSectionCardForRow(row) {
+        return row.closest('.aqg-section-card')
+            || (cqdProblemsOverlay?.classList.contains('is-visible')
+                ? canvasList?.querySelector(`.aqg-section-card[data-id="${cqdProblemsOverlay.getAttribute('data-aqg-id')}"]`)
+                : null);
+    }
+
+    function collectProblemSetsInSection(sectionCard, excludeCqdId) {
+        const sets = [];
+        if (!sectionCard) return sets;
+        sectionCard.querySelectorAll('.cqd-item-row').forEach((row) => {
+            const cqdId = row.getAttribute('data-cqd-id') || row.getAttribute('data-id');
+            if (!cqdId || String(cqdId) === String(excludeCqdId)) return;
+            const name = (row.querySelector('.cqd-display-identity')?.textContent || `Problem Set ${cqdId}`).trim();
+            sets.push({ id: cqdId, name });
+        });
+        return sets;
+    }
+
+    function populateMoveSectionSubmenu(currentAqgId, includeCurrentSection) {
+        if (!moveSectionSubmenu || !moveSectionToggle) return;
+
+        const sections = collectOtherSections(currentAqgId, !!includeCurrentSection);
+        moveSectionSubmenu.innerHTML = '';
+
+        if (sections.length === 0) {
+            moveSectionToggle.disabled = true;
+            moveSectionToggle.classList.add('is-disabled');
+            moveSectionSubmenu.innerHTML = '<div class="problem-context-submenu-empty">No other sections</div>';
+            return;
+        }
+
+        moveSectionToggle.disabled = false;
+        moveSectionToggle.classList.remove('is-disabled');
+
+        sections.forEach((section) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'problem-context-menu-item';
+            btn.setAttribute('data-action', 'move-to-section');
+            btn.setAttribute('data-aqg-id', section.id);
+            btn.setAttribute('role', 'menuitem');
+            btn.title = section.name;
+            btn.textContent = section.name;
+            moveSectionSubmenu.appendChild(btn);
+        });
+    }
+
+    function populateAddToSetSubmenu(sectionCard, excludeCqdId) {
+        if (!addToSetSubmenu || !addToSetToggle) return;
+
+        const sets = collectProblemSetsInSection(sectionCard, excludeCqdId);
+        addToSetSubmenu.innerHTML = '';
+
+        if (sets.length === 0) {
+            addToSetToggle.disabled = true;
+            addToSetToggle.classList.add('is-disabled');
+            addToSetSubmenu.innerHTML = '<div class="problem-context-submenu-empty">No problem sets in this section</div>';
+            return;
+        }
+
+        addToSetToggle.disabled = false;
+        addToSetToggle.classList.remove('is-disabled');
+
+        sets.forEach((set) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'problem-context-menu-item';
+            btn.setAttribute('data-action', 'add-to-set');
+            btn.setAttribute('data-cqd-id', set.id);
+            btn.setAttribute('role', 'menuitem');
+            btn.title = set.name;
+            btn.textContent = set.name;
+            addToSetSubmenu.appendChild(btn);
+        });
+    }
+
+    function ensureTargetSectionList(targetCard) {
+        const problemsBody = targetCard.querySelector('.aqg-problems-body');
+        if (!problemsBody) return null;
+
+        let listWrapper = problemsBody.querySelector('.problems-list-wrapper');
+        const emptyPlaceholder = problemsBody.querySelector('.empty-problems-placeholder');
+        if (emptyPlaceholder) emptyPlaceholder.remove();
+
+        if (!listWrapper) {
+            problemsBody.innerHTML = '';
+            listWrapper = document.createElement('div');
+            listWrapper.className = 'problems-list-wrapper';
+            listWrapper.style.display = 'flex';
+            listWrapper.style.flexDirection = 'column';
+            listWrapper.style.gap = '8px';
+            problemsBody.appendChild(listWrapper);
+            initializeSortableOnNestedList(listWrapper);
+        }
+        return listWrapper;
+    }
+
+    function restoreEmptyPlaceholderIfNeeded(sourceCard) {
+        if (!sourceCard) return;
+        const problemsBody = sourceCard.querySelector('.aqg-problems-body');
+        if (!problemsBody) return;
+
+        const listWrapper = problemsBody.querySelector('.problems-list-wrapper');
+        if (listWrapper && listWrapper.querySelectorAll('.problem-item-row, .cqd-item-row').length === 0) {
+            listWrapper.remove();
+            problemsBody.innerHTML = `
+                <div class="empty-problems-placeholder" style="text-align: center; color: #94a3b8;">
+                    No problems added to this section yet. Click "+ Add Problems" to start building.
+                </div>
+            `;
+        }
+    }
+
+    function refreshCqdCardLabel(cqdId, displayName) {
+        const card = canvasList?.querySelector(`.cqd-item-row[data-cqd-id="${cqdId}"], .cqd-item-row[data-id="${cqdId}"]`);
+        if (!card) return;
+        const label = card.querySelector('.cqd-display-identity');
+        if (label && displayName) {
+            label.textContent = displayName;
+        } else if (label && !displayName) {
+            // Soft refresh: bump count text from current overlay list length when available
+            const count = cqdOverlayList
+                ? cqdOverlayList.querySelectorAll('.problem-item-row[data-problem-id]').length
+                : null;
+            if (count !== null && String(cqdProblemsOverlay?.getAttribute('data-cqd-id')) === String(cqdId)) {
+                label.textContent = `Problem Set Count = ${count}`;
+            }
+        }
+        if (cqdOverlayTitle && String(cqdProblemsOverlay?.getAttribute('data-cqd-id')) === String(cqdId) && displayName) {
+            cqdOverlayTitle.textContent = displayName;
+        }
+    }
+
+    function updateOverlayEmptyState() {
+        if (!cqdOverlayList) return;
+        const hasProblems = cqdOverlayList.querySelectorAll('.problem-item-row[data-problem-id]').length > 0;
+        let empty = cqdOverlayList.querySelector('.cqd-overlay-empty');
+        if (hasProblems) {
+            if (empty) empty.remove();
+            return;
+        }
+        if (!empty) {
+            cqdOverlayList.innerHTML = `
+                <div class="cqd-overlay-empty" style="text-align: center; color: #94a3b8; padding: 24px 12px;">
+                    No problems in this problem set yet.
+                </div>
+            `;
+        }
+    }
+
+    function closeCqdOverlay() {
+        if (!cqdProblemsOverlay) return;
+        cqdProblemsOverlay.classList.remove('is-visible');
+        cqdProblemsOverlay.setAttribute('aria-hidden', 'true');
+        cqdProblemsOverlay.removeAttribute('data-cqd-id');
+        cqdProblemsOverlay.removeAttribute('data-aqg-id');
+        hideProblemContextMenu();
+    }
+
+    async function openCqdOverlay(cqdId) {
+        if (!cqdProblemsOverlay || !cqdOverlayList || !window.AQG_CONFIG?.problemSetProblemsUrlTemplate) {
+            alert("Problem set overlay is not available.");
+            return;
+        }
+
+        const url = window.AQG_CONFIG.problemSetProblemsUrlTemplate.replace('{cqd_id}', String(cqdId));
+        cqdOverlayList.innerHTML = `
+            <div style="text-align: center; color: #94a3b8; padding: 24px 12px;">
+                <i class="fas fa-spinner fa-spin"></i> Loading problems...
+            </div>
+        `;
+        cqdProblemsOverlay.classList.add('is-visible');
+        cqdProblemsOverlay.setAttribute('aria-hidden', 'false');
+        cqdProblemsOverlay.setAttribute('data-cqd-id', String(cqdId));
+
+        try {
+            const response = await fetch(url, {
+                method: 'GET',
+                headers: { 'X-CSRFToken': getCookie('csrftoken') }
+            });
+            const data = await response.json();
+            if (!response.ok || data.status !== 'success') {
+                alert(data.error || "Failed to load problem set.");
+                closeCqdOverlay();
+                return;
+            }
+
+            if (data.aqg_id) {
+                cqdProblemsOverlay.setAttribute('data-aqg-id', String(data.aqg_id));
+            }
+            if (cqdOverlayTitle) {
+                cqdOverlayTitle.textContent = data.display_name || 'Problem Set';
+            }
+            refreshCqdCardLabel(cqdId, data.display_name);
+
+            cqdOverlayList.innerHTML = data.html || '';
+            if (!data.html) {
+                updateOverlayEmptyState();
+            } else {
+                cqdOverlayList.querySelectorAll('.problem-title-input').forEach((input) => {
+                    attachProblemInputListeners(input);
+                });
+                initializeSortableOnNestedList(cqdOverlayList);
+            }
+        } catch (err) {
+            console.error("Failed to open problem set overlay:", err);
+            alert("A network error occurred while loading the problem set.");
+            closeCqdOverlay();
+        }
+    }
+
+    function openContextMenuForRow(row, clientX, clientY) {
+        hideProblemContextMenu();
+        contextMenuTargetRow = row;
+        row.classList.add('context-menu-active');
+
+        const sectionCard = resolveSectionCardForRow(row);
+        const currentAqgId = sectionCard?.getAttribute('data-id')
+            || cqdProblemsOverlay?.getAttribute('data-aqg-id');
+        const currentCqdId = cqdProblemsOverlay?.classList.contains('is-visible')
+            ? cqdProblemsOverlay.getAttribute('data-cqd-id')
+            : null;
+
+        populateMoveSectionSubmenu(currentAqgId, !!currentCqdId);
+
+        if (currentCqdId) {
+            if (addToSetMenuWrap) addToSetMenuWrap.style.display = 'none';
+            if (removeFromSetBtn) removeFromSetBtn.style.display = 'flex';
+            hideAddToSetSubmenu();
+        } else {
+            if (addToSetMenuWrap) addToSetMenuWrap.style.display = '';
+            if (removeFromSetBtn) removeFromSetBtn.style.display = 'none';
+            populateAddToSetSubmenu(sectionCard, null);
+        }
+
+        positionProblemContextMenu(clientX, clientY);
+    }
+
+    if (problemContextMenu) {
+        const contextMenuRoots = [canvasList, cqdOverlayList].filter(Boolean);
+        contextMenuRoots.forEach((root) => {
+            root.addEventListener('contextmenu', function(e) {
+                const row = e.target.closest('.problem-item-row[data-problem-id]');
+                if (!row || !root.contains(row)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                openContextMenuForRow(row, e.clientX, e.clientY);
+            });
+        });
+
+        problemContextMenu.addEventListener('click', async function(e) {
+            const actionBtn = e.target.closest('[data-action]');
+            if (!actionBtn || !contextMenuTargetRow) return;
+
+            const action = actionBtn.getAttribute('data-action');
+            const sourceRow = contextMenuTargetRow;
+            const problemId = sourceRow.getAttribute('data-problem-id');
+            const sourceCard = resolveSectionCardForRow(sourceRow);
+            const inOverlay = !!sourceRow.closest('#cqd-overlay-problems-list');
+
+            if (action === 'move-to-section-toggle') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (actionBtn.disabled) return;
+                hideAddToSetSubmenu();
+                if (moveSectionSubmenu && moveSectionSubmenu.style.display === 'block') {
+                    hideMoveSectionSubmenu();
+                } else {
+                    showFlyoutSubmenu(moveSectionSubmenu, moveSectionToggle);
+                }
+                return;
+            }
+
+            if (action === 'add-to-set-toggle') {
+                e.preventDefault();
+                e.stopPropagation();
+                if (actionBtn.disabled) return;
+                hideMoveSectionSubmenu();
+                if (addToSetSubmenu && addToSetSubmenu.style.display === 'block') {
+                    hideAddToSetSubmenu();
+                } else {
+                    showFlyoutSubmenu(addToSetSubmenu, addToSetToggle);
+                }
+                return;
+            }
+
+            if (action === 'move-to-section') {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const targetAqgId = actionBtn.getAttribute('data-aqg-id');
+                const targetCard = canvasList.querySelector(`.aqg-section-card[data-id="${targetAqgId}"]`);
+                const openCqdId = cqdProblemsOverlay?.getAttribute('data-cqd-id');
+
+                hideProblemContextMenu();
+
+                if (!problemId || !targetAqgId || !window.AQG_CONFIG?.moveProblemUrl) {
+                    alert("Move is not available right now.");
+                    return;
+                }
+                if (!targetCard) {
+                    alert("Could not find the target section.");
+                    return;
+                }
+
+                try {
+                    const response = await fetch(window.AQG_CONFIG.moveProblemUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken')
+                        },
+                        body: JSON.stringify({
+                            problem_id: parseInt(problemId, 10),
+                            target_aqg_id: parseInt(targetAqgId, 10)
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok || data.status !== 'success') {
+                        alert(data.error || "Failed to move the problem.");
+                        return;
+                    }
+
+                    const targetList = ensureTargetSectionList(targetCard);
+                    if (!targetList) {
+                        alert("Could not place the problem in the target section.");
+                        return;
+                    }
+
+                    targetList.appendChild(sourceRow);
+                    if (data.allocated_name) {
+                        const titleInput = sourceRow.querySelector('.problem-title-input');
+                        if (titleInput) {
+                            titleInput.value = data.allocated_name;
+                            titleInput.setAttribute('data-previous', data.allocated_name);
+                        }
+                    }
+
+                    if (inOverlay) {
+                        updateOverlayEmptyState();
+                        if (openCqdId) refreshCqdCardLabel(openCqdId);
+                    } else {
+                        restoreEmptyPlaceholderIfNeeded(sourceCard);
+                    }
+                } catch (err) {
+                    console.error("Problem move failed:", err);
+                    alert("A network error occurred while moving the problem.");
+                }
+                return;
+            }
+
+            if (action === 'add-to-set') {
+                e.preventDefault();
+                e.stopPropagation();
+
+                const targetCqdId = actionBtn.getAttribute('data-cqd-id');
+                const openCqdId = cqdProblemsOverlay?.getAttribute('data-cqd-id');
+                hideProblemContextMenu();
+
+                if (!problemId || !targetCqdId || !window.AQG_CONFIG?.moveProblemToSetUrl) {
+                    alert("Add to problem set is not available right now.");
+                    return;
+                }
+
+                try {
+                    const response = await fetch(window.AQG_CONFIG.moveProblemToSetUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken')
+                        },
+                        body: JSON.stringify({
+                            problem_id: parseInt(problemId, 10),
+                            target_cqd_id: parseInt(targetCqdId, 10)
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok || data.status !== 'success') {
+                        alert(data.error || "Failed to add the problem to the set.");
+                        return;
+                    }
+
+                    if (data.allocated_name) {
+                        const titleInput = sourceRow.querySelector('.problem-title-input');
+                        if (titleInput) {
+                            titleInput.value = data.allocated_name;
+                            titleInput.setAttribute('data-previous', data.allocated_name);
+                        }
+                    }
+
+                    // If the destination set overlay is open, keep the row there; otherwise remove from current list
+                    if (cqdProblemsOverlay?.classList.contains('is-visible')
+                        && String(cqdProblemsOverlay.getAttribute('data-cqd-id')) === String(targetCqdId)) {
+                        const empty = cqdOverlayList.querySelector('.cqd-overlay-empty');
+                        if (empty) empty.remove();
+                        cqdOverlayList.appendChild(sourceRow);
+                    } else {
+                        sourceRow.remove();
+                        if (inOverlay) {
+                            updateOverlayEmptyState();
+                        } else {
+                            restoreEmptyPlaceholderIfNeeded(sourceCard);
+                        }
+                    }
+
+                    if (data.cqd_display_name) {
+                        refreshCqdCardLabel(targetCqdId, data.cqd_display_name);
+                    }
+                    if (data.old_cqd_id && data.old_cqd_display_name) {
+                        refreshCqdCardLabel(data.old_cqd_id, data.old_cqd_display_name);
+                    } else if (inOverlay && openCqdId && String(openCqdId) !== String(targetCqdId)) {
+                        refreshCqdCardLabel(openCqdId);
+                    }
+                } catch (err) {
+                    console.error("Add to problem set failed:", err);
+                    alert("A network error occurred while adding the problem to the set.");
+                }
+                return;
+            }
+
+            if (action === 'remove-from-set') {
+                e.preventDefault();
+                e.stopPropagation();
+                hideProblemContextMenu();
+
+                if (!problemId || !window.AQG_CONFIG?.removeProblemFromSetUrl) {
+                    alert("Remove from problem set is not available right now.");
+                    return;
+                }
+
+                const openCqdId = cqdProblemsOverlay?.getAttribute('data-cqd-id');
+                const sectionAqgId = cqdProblemsOverlay?.getAttribute('data-aqg-id')
+                    || sourceCard?.getAttribute('data-id');
+
+                try {
+                    const response = await fetch(window.AQG_CONFIG.removeProblemFromSetUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCookie('csrftoken')
+                        },
+                        body: JSON.stringify({
+                            problem_id: parseInt(problemId, 10)
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (!response.ok || data.status !== 'success') {
+                        alert(data.error || "Failed to remove the problem from the set.");
+                        return;
+                    }
+
+                    if (data.allocated_name) {
+                        const titleInput = sourceRow.querySelector('.problem-title-input');
+                        if (titleInput) {
+                            titleInput.value = data.allocated_name;
+                            titleInput.setAttribute('data-previous', data.allocated_name);
+                        }
+                    }
+
+                    const aqgId = data.aqg_id || sectionAqgId;
+                    const targetCard = aqgId
+                        ? canvasList.querySelector(`.aqg-section-card[data-id="${aqgId}"]`)
+                        : sourceCard;
+                    const cqdId = data.source_cqd_id || openCqdId;
+                    const cqdRow = cqdId
+                        ? targetCard?.querySelector(`.cqd-item-row[data-cqd-id="${cqdId}"], .cqd-item-row[data-id="${cqdId}"]`)
+                        : null;
+
+                    const targetList = targetCard ? ensureTargetSectionList(targetCard) : null;
+                    if (targetList && cqdRow) {
+                        cqdRow.insertAdjacentElement('afterend', sourceRow);
+                    } else if (targetList) {
+                        targetList.appendChild(sourceRow);
+                    }
+
+                    if (inOverlay) {
+                        updateOverlayEmptyState();
+                    }
+
+                    if (cqdId && data.cqd_display_name) {
+                        refreshCqdCardLabel(cqdId, data.cqd_display_name);
+                    } else if (cqdId) {
+                        refreshCqdCardLabel(cqdId);
+                    }
+                } catch (err) {
+                    console.error("Remove from problem set failed:", err);
+                    alert("A network error occurred while removing the problem from the set.");
+                }
+                return;
+            }
+
+            hideProblemContextMenu();
+
+            if (action !== 'duplicate') return;
+            if (!problemId || !window.AQG_CONFIG?.duplicateProblemUrl) {
+                alert("Duplicate is not available right now.");
+                return;
+            }
+
+            try {
+                const response = await fetch(window.AQG_CONFIG.duplicateProblemUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({ problem_id: parseInt(problemId, 10) })
+                });
+
+                const data = await response.json();
+                if (!response.ok || !(data.status === 'success' || data.html)) {
+                    alert(data.error || "Failed to duplicate the problem.");
+                    return;
+                }
+
+                const listWrapper = sourceRow.closest('.problems-list-wrapper')
+                    || sourceRow.parentElement;
+                if (!listWrapper) {
+                    alert("Could not place the duplicated problem in the list.");
+                    return;
+                }
+
+                const empty = listWrapper.querySelector('.cqd-overlay-empty');
+                if (empty) empty.remove();
+
+                sourceRow.insertAdjacentHTML('afterend', data.html);
+                const newRow = sourceRow.nextElementSibling;
+                if (newRow) {
+                    attachProblemInputListeners(newRow.querySelector('.problem-title-input'));
+                }
+
+                if (inOverlay) {
+                    const openCqdId = cqdProblemsOverlay.getAttribute('data-cqd-id');
+                    if (openCqdId) refreshCqdCardLabel(openCqdId);
+                }
+            } catch (err) {
+                console.error("Problem duplicate failed:", err);
+                alert("A network error occurred while duplicating the problem.");
+            }
+        });
+
+        document.addEventListener('click', function(e) {
+            if (!problemContextMenu || problemContextMenu.style.display === 'none') return;
+            if (problemContextMenu.contains(e.target)) return;
+            hideProblemContextMenu();
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                if (problemContextMenu && problemContextMenu.style.display !== 'none') {
+                    hideProblemContextMenu();
+                    return;
+                }
+                if (cqdProblemsOverlay?.classList.contains('is-visible')) {
+                    closeCqdOverlay();
+                }
+            }
+        });
+
+        window.addEventListener('scroll', hideProblemContextMenu, true);
+        window.addEventListener('resize', hideProblemContextMenu);
+    }
+
+    if (cqdProblemsOverlay) {
+        if (closeCqdOverlayBtn) {
+            closeCqdOverlayBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                closeCqdOverlay();
+            });
+        }
+
+        cqdProblemsOverlay.addEventListener('click', async function(e) {
+            if (e.target === cqdProblemsOverlay) {
+                closeCqdOverlay();
+                return;
+            }
+
+            const deleteBtn = e.target.closest('.btn-delete-item[data-type="problem"]');
+            if (!deleteBtn) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            const itemRow = deleteBtn.closest('.problem-item-row');
+            if (!itemRow || !cqdOverlayList?.contains(itemRow)) return;
+
+            const itemId = itemRow.getAttribute('data-problem-id') || itemRow.getAttribute('data-id');
+            const problemTitle = itemRow.querySelector('.problem-title-input')?.value || "this problem";
+            if (!confirm(`Are you sure you want to permanently delete "${problemTitle}"?`)) return;
+
+            deleteBtn.disabled = true;
+            const originalIcon = deleteBtn.innerHTML;
+            deleteBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i>`;
+
+            try {
+                const response = await fetch('/delete-item/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({
+                        id: parseInt(itemId, 10),
+                        type: 'problem'
+                    })
+                });
+                const data = await response.json();
+                if (response.ok && data.status === 'success') {
+                    const openCqdId = cqdProblemsOverlay.getAttribute('data-cqd-id');
+                    itemRow.remove();
+                    updateOverlayEmptyState();
+                    if (openCqdId) refreshCqdCardLabel(openCqdId);
+                } else {
+                    alert(data.error || "Failed to remove the problem item.");
+                    deleteBtn.disabled = false;
+                    deleteBtn.innerHTML = originalIcon;
+                }
+            } catch (err) {
+                console.error("Overlay deletion error:", err);
+                alert("A critical networking transmission failure occurred.");
+                deleteBtn.disabled = false;
+                deleteBtn.innerHTML = originalIcon;
             }
         });
     }

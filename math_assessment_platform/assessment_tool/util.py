@@ -16,14 +16,51 @@ import json
 import math
 import sympy as sp
 from sympy import Matrix as SymPyMatrix
+from sympy.core.relational import Relational
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.parsing.latex import parse_latex
 from django.core.exceptions import ValidationError
 
 logger = logging.getLogger(__name__)
 
+# Bare names reserved as SymPy special functions — not allowed as free variables.
+# Authors must use a subscript/number suffix (beta_1, gamma2, zeta_3).
+RESERVED_SYMPY_GREEK_FUNCTIONS = frozenset({"beta", "gamma", "zeta"})
+GREEK_VAR_BASE_PATTERN = (
+    r"(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|"
+    r"mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)"
+)
 
-def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder'):
+
+def _is_valid_algebraic_variable_name(item):
+    """
+    Return (ok: bool, error_message: str|None) for a declared variable identifier.
+    """
+    if not item:
+        return False, "Empty variable identifier."
+    if item in ("E", "I", "i"):
+        return False, (
+            f"'{item}' is a reserved mathematical constant in SymPy and cannot be "
+            f"used as a variable identifier."
+        )
+    item_lower = item.lower()
+    if item_lower in RESERVED_SYMPY_GREEK_FUNCTIONS:
+        return False, (
+            f"'{item}' is a reserved SymPy function (not a free variable). "
+            f"Use a subscripted form such as '{item_lower}_1' if you need it as a variable."
+        )
+    is_standard = bool(re.match(r"^[a-zA-Z][0-9]*$", item))
+    is_subscript = bool(re.match(r"^[a-zA-Z]_[0-9]+$", item))
+    greek = GREEK_VAR_BASE_PATTERN
+    is_greek_base = bool(re.match(rf"^{greek}$", item_lower))
+    is_greek_num = bool(re.match(rf"^{greek}[0-9]+$", item_lower))
+    is_greek_sub = bool(re.match(rf"^{greek}_[0-9]+$", item_lower))
+    if not (is_standard or is_subscript or is_greek_base or is_greek_num or is_greek_sub):
+        return False, f"'{item}' is not a valid algebraic variable identifier."
+    return True, None
+
+
+def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='name', item_type='folder', exclude_id=None):
     # 1. Basic Validation: Alphanumeric and single internal spaces
     clean_name = requested_name.strip()
     # I am using a negated character set here: '()_' are not allowed, 
@@ -42,12 +79,15 @@ def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='n
         lookup = {field_name: new_name}
         if item_type == 'folder':
             # Folders check against 'parent'
-            duplicate_exists = model_class.objects.filter(parent=parent_obj, **lookup).exists()
+            qs = model_class.objects.filter(parent=parent_obj, **lookup)
         else:
             # Items (Course, etc) check against 'branch_location'
-            duplicate_exists = model_class.objects.filter(branch_location=parent_obj, **lookup).exists()
+            qs = model_class.objects.filter(branch_location=parent_obj, **lookup)
 
-        if not duplicate_exists:
+        if exclude_id is not None:
+            qs = qs.exclude(id=exclude_id)
+
+        if not qs.exists():
             break
         
         new_name = f"{base_name} ({counter})"
@@ -135,7 +175,417 @@ def clone_problem_payload(old_prob, new_folder, new_owner, context):
     # TODO: placeholder for replicating any sub-tables connected to problem
             
     new_prob.save()
+    copy_problem_content(old_prob, new_prob)
     return new_prob
+
+
+def copy_problem_content(old_prob, new_prob):
+    """
+    Deep-copy QuestionBlock and EntitySegment rows from old_prob onto new_prob.
+    Remaps parent_entity FKs so nested entity graphs stay intact on the clone.
+    """
+    QuestionBlock = apps.get_model('assessment_tool', 'QuestionBlock')
+    EntitySegment = apps.get_model('assessment_tool', 'EntitySegment')
+
+    def as_json_text(value):
+        # Postgres json/jsonb columns may arrive as dict/list via the driver even
+        # when the Django field is TextField; re-serialize so INSERTs stay valid JSON.
+        if value is None:
+            return None
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)
+        return value
+
+    for qb in QuestionBlock.objects.filter(problem=old_prob):
+        QuestionBlock.objects.create(
+            problem=new_prob,
+            content=as_json_text(qb.content),
+            space_allocation=as_json_text(qb.space_allocation),
+        )
+
+    old_segments = list(EntitySegment.objects.filter(problem=old_prob).order_by('id'))
+    id_map = {}
+    for seg in old_segments:
+        new_seg = EntitySegment.objects.create(
+            problem=new_prob,
+            problem_type_id_originator=seg.problem_type_id_originator,
+            content=as_json_text(seg.content),
+            points=seg.points,
+            default_answer=seg.default_answer,
+            is_answer_to_multi_choice=seg.is_answer_to_multi_choice,
+            space_allocation=as_json_text(seg.space_allocation),
+            parent_entity=None,
+        )
+        id_map[seg.id] = new_seg
+
+    for seg in old_segments:
+        if seg.parent_entity_id and seg.parent_entity_id in id_map:
+            new_seg = id_map[seg.id]
+            new_seg.parent_entity = id_map[seg.parent_entity_id]
+            new_seg.save(update_fields=['parent_entity'])
+
+
+def duplicate_problem_in_aqg(source_problem, owner):
+    """
+    Create an independent copy of source_problem under the same parent folder
+    (AQG section or CQD problem-set folder). Title/branch name become
+    'Copy of <original>' (uniquified).
+    Returns (new_problem, None) on success or (None, error_message) on failure.
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    Problem = apps.get_model('assessment_tool', 'Problem')
+    AssessmentQuestionGroup = apps.get_model('assessment_tool', 'AssessmentQuestionGroup')
+    CustomQuestionDistribution = apps.get_model('assessment_tool', 'CustomQuestionDistribution')
+
+    if not source_problem.branch_location_id:
+        return None, "Problem is missing its folder location."
+
+    source_branch = source_problem.branch_location
+    parent_directory = source_branch.parent
+    if not parent_directory:
+        return None, "Problem folder is missing its parent location."
+
+    aqg = source_problem.aqg
+    cqd = source_problem.cqd
+
+    # Resolve AQG / CQD from folder ancestry when FKs are incomplete
+    if not aqg:
+        aqg = AssessmentQuestionGroup.objects.filter(branch_location_id=parent_directory.id).first()
+        if not aqg and parent_directory.parent_id:
+            aqg = AssessmentQuestionGroup.objects.filter(
+                branch_location_id=parent_directory.parent_id
+            ).first()
+    if not cqd and getattr(parent_directory, 'folder_type', None) == 'cqd':
+        cqd = CustomQuestionDistribution.objects.filter(assigned_folder=parent_directory).first()
+
+    requested_name = f"Copy of {source_problem.title}".strip()
+    # get_valid_unique_name rejects parentheses; strip a trailing " (N)" uniquifier first
+    if '(' in requested_name:
+        parts = requested_name.split()
+        if parts and parts[-1].startswith('(') and parts[-1].endswith(')'):
+            requested_name = " ".join(parts[:-1]).strip()
+    if len(requested_name) > 255:
+        requested_name = requested_name[:255].rstrip()
+
+    final_name, name_err = get_valid_unique_name(
+        model_class=BranchGroup,
+        parent_obj=parent_directory,
+        requested_name=requested_name,
+    )
+    if name_err:
+        return None, name_err
+
+    next_sibling = (
+        BranchGroup.objects.filter(parent=parent_directory, order__gt=source_branch.order or "")
+        .order_by('order')
+        .first()
+    )
+    new_order = calculate_midpoint_order(
+        source_branch.order or "",
+        next_sibling.order if next_sibling else "",
+    )
+
+    with transaction.atomic():
+        new_branch = BranchGroup.objects.create(
+            owner=owner,
+            name=final_name,
+            parent=parent_directory,
+            folder_type='problem',
+            order=new_order,
+        )
+        new_problem = Problem.objects.create(
+            branch_location=new_branch,
+            title=final_name,
+            aqg=aqg,
+            cqd=cqd,
+            problem_status=source_problem.problem_status or 'draft',
+        )
+        copy_problem_content(source_problem, new_problem)
+        if cqd:
+            _ensure_cqd_pair(cqd, new_problem, new_branch)
+            refresh_cqd_identity(cqd)
+
+    return new_problem, None
+
+
+def _strip_name_uniquifier(name):
+    requested_name = (name or "").strip()
+    if '(' in requested_name:
+        parts = requested_name.split()
+        if parts and parts[-1].startswith('(') and parts[-1].endswith(')'):
+            requested_name = " ".join(parts[:-1]).strip()
+    return requested_name
+
+
+def _ensure_cqd_pair(cqd, problem, branch):
+    CqdPair = apps.get_model('assessment_tool', 'CqdPair')
+    pair = CqdPair.objects.filter(parent_aqd=cqd, problem=problem).first()
+    if pair:
+        if pair.branch_id != branch.id:
+            pair.branch = branch
+            pair.save(update_fields=['branch'])
+        return pair
+    return CqdPair.objects.create(parent_aqd=cqd, problem=problem, branch=branch)
+
+
+def _clear_cqd_membership(problem):
+    """Detach problem from any CQD membership rows and clear problem.cqd."""
+    CqdPair = apps.get_model('assessment_tool', 'CqdPair')
+    old_cqd = problem.cqd
+    CqdPair.objects.filter(problem=problem).delete()
+    if problem.cqd_id:
+        problem.cqd = None
+    return old_cqd
+
+
+def refresh_cqd_identity(cqd):
+    """
+    Recompute problem-set count from folder children and sync display/folder names.
+    Returns (display_name, count).
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    if not cqd or not cqd.assigned_folder_id:
+        return ("Problem Set", 0)
+
+    count = BranchGroup.objects.filter(
+        parent=cqd.assigned_folder,
+        folder_type='problem',
+    ).count()
+    cqd.num_pairs = count
+    display_name = cqd.get_display_name()
+    folder_name = cqd.get_unique_name()
+    folder = cqd.assigned_folder
+    if folder.name != folder_name:
+        folder.name = folder_name
+        folder.save()
+    return display_name, count
+
+
+def count_problems_in_cqd(cqd):
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    if not cqd or not cqd.assigned_folder_id:
+        return 0
+    return BranchGroup.objects.filter(parent=cqd.assigned_folder, folder_type='problem').count()
+
+
+def move_problem_to_aqg(problem, target_aqg):
+    """
+    Move a problem into another Assessment Question Group section on the same
+    assessment (top-level of that section, not inside a problem set).
+    Appends to the end of the target section's child list.
+    Returns (problem, None) on success or (None, error_message) on failure.
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+
+    if not problem.branch_location_id:
+        return None, "Problem is missing its folder location."
+
+    branch = problem.branch_location
+    target_parent = target_aqg.branch_location
+    if not target_parent:
+        return None, "Target question group section is missing its folder location."
+
+    source_aqg = problem.aqg
+    if source_aqg and source_aqg.assessment_id != target_aqg.assessment_id:
+        return None, "Target section belongs to a different assessment."
+
+    already_top_level = (
+        branch.parent_id == target_parent.id
+        and not problem.cqd_id
+    )
+    if already_top_level:
+        return None, "Problem is already in that section."
+
+    requested_name = _strip_name_uniquifier(problem.title or branch.name or "Problem")
+    final_name, name_err = get_valid_unique_name(
+        model_class=BranchGroup,
+        parent_obj=target_parent,
+        requested_name=requested_name,
+        exclude_id=branch.id,
+    )
+    if name_err:
+        return None, name_err
+
+    last_child = (
+        BranchGroup.objects.filter(parent=target_parent)
+        .exclude(id=branch.id)
+        .order_by('order')
+        .last()
+    )
+    new_order = calculate_midpoint_order(last_child.order if last_child else "", "")
+
+    with transaction.atomic():
+        old_cqd = _clear_cqd_membership(problem)
+
+        branch.parent = target_parent
+        branch.order = new_order
+        branch.name = final_name
+        branch.save()
+
+        problem.aqg = target_aqg
+        problem.title = final_name
+        problem.save()
+
+        if old_cqd:
+            refresh_cqd_identity(old_cqd)
+
+    return problem, None
+
+
+def move_problem_to_cqd(problem, target_cqd):
+    """
+    Move a problem into a Custom Question Distribution (problem set) folder.
+    Appends to the end of that set's child list and records a CqdPair row.
+    Returns (problem, None) or (None, error_message).
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    AssessmentQuestionGroup = apps.get_model('assessment_tool', 'AssessmentQuestionGroup')
+
+    if not problem.branch_location_id:
+        return None, "Problem is missing its folder location."
+
+    target_parent = target_cqd.assigned_folder
+    if not target_parent:
+        return None, "Problem set is missing its folder location."
+
+    branch = problem.branch_location
+
+    # CQD must live under an AQG section
+    section_aqg = AssessmentQuestionGroup.objects.filter(
+        branch_location_id=target_parent.parent_id
+    ).select_related('assessment').first()
+    if not section_aqg:
+        return None, "Problem set is not inside a question group section."
+
+    if problem.aqg_id and problem.aqg.assessment_id != section_aqg.assessment_id:
+        return None, "Problem set belongs to a different assessment."
+
+    if branch.parent_id == target_parent.id and problem.cqd_id == target_cqd.id:
+        return None, "Problem is already in that problem set."
+
+    requested_name = _strip_name_uniquifier(problem.title or branch.name or "Problem")
+    final_name, name_err = get_valid_unique_name(
+        model_class=BranchGroup,
+        parent_obj=target_parent,
+        requested_name=requested_name,
+        exclude_id=branch.id,
+    )
+    if name_err:
+        return None, name_err
+
+    last_child = (
+        BranchGroup.objects.filter(parent=target_parent)
+        .exclude(id=branch.id)
+        .order_by('order')
+        .last()
+    )
+    new_order = calculate_midpoint_order(last_child.order if last_child else "", "")
+
+    with transaction.atomic():
+        old_cqd = problem.cqd if problem.cqd_id != target_cqd.id else None
+        if old_cqd:
+            apps.get_model('assessment_tool', 'CqdPair').objects.filter(
+                parent_aqd=old_cqd, problem=problem
+            ).delete()
+
+        branch.parent = target_parent
+        branch.order = new_order
+        branch.name = final_name
+        branch.save()
+
+        problem.aqg = section_aqg
+        problem.cqd = target_cqd
+        problem.title = final_name
+        problem.save()
+
+        _ensure_cqd_pair(target_cqd, problem, branch)
+        display_name, count = refresh_cqd_identity(target_cqd)
+        if old_cqd:
+            refresh_cqd_identity(old_cqd)
+
+    problem._cqd_display_name = display_name
+    problem._cqd_count = count
+    return problem, None
+
+
+def remove_problem_from_cqd(problem):
+    """
+    Move a problem out of its problem set back to the parent AQG section,
+    inserting it immediately after the problem-set folder in sibling order.
+    Returns (problem, None) or (None, error_message).
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    AssessmentQuestionGroup = apps.get_model('assessment_tool', 'AssessmentQuestionGroup')
+    CustomQuestionDistribution = apps.get_model('assessment_tool', 'CustomQuestionDistribution')
+
+    if not problem.branch_location_id:
+        return None, "Problem is missing its folder location."
+
+    branch = problem.branch_location
+    cqd = problem.cqd
+    if not cqd and branch.parent_id:
+        cqd = CustomQuestionDistribution.objects.filter(
+            assigned_folder_id=branch.parent_id
+        ).select_related('assigned_folder').first()
+
+    if not cqd or not cqd.assigned_folder_id:
+        return None, "Problem is not inside a problem set."
+
+    cqd_folder = cqd.assigned_folder
+    section_parent = cqd_folder.parent
+    if not section_parent:
+        return None, "Problem set is missing its parent section folder."
+
+    section_aqg = AssessmentQuestionGroup.objects.filter(
+        branch_location_id=section_parent.id
+    ).first()
+    if not section_aqg:
+        return None, "Could not resolve the parent question group section."
+
+    if branch.parent_id != cqd_folder.id:
+        return None, "Problem is not currently inside that problem set folder."
+
+    requested_name = _strip_name_uniquifier(problem.title or branch.name or "Problem")
+    final_name, name_err = get_valid_unique_name(
+        model_class=BranchGroup,
+        parent_obj=section_parent,
+        requested_name=requested_name,
+        exclude_id=branch.id,
+    )
+    if name_err:
+        return None, name_err
+
+    next_sibling = (
+        BranchGroup.objects.filter(parent=section_parent, order__gt=cqd_folder.order or "")
+        .exclude(id=branch.id)
+        .order_by('order')
+        .first()
+    )
+    new_order = calculate_midpoint_order(
+        cqd_folder.order or "",
+        next_sibling.order if next_sibling else "",
+    )
+
+    with transaction.atomic():
+        _clear_cqd_membership(problem)
+
+        branch.parent = section_parent
+        branch.order = new_order
+        branch.name = final_name
+        branch.save()
+
+        problem.aqg = section_aqg
+        problem.cqd = None
+        problem.title = final_name
+        problem.save()
+
+        display_name, count = refresh_cqd_identity(cqd)
+
+    problem._cqd_display_name = display_name
+    problem._cqd_count = count
+    problem._source_cqd_id = cqd.id
+    problem._aqg_id = section_aqg.id
+    return problem, None
 
 
 def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starter_node=False):
@@ -773,7 +1223,7 @@ class BaseEntity:
             r'sinh|cosh|tanh|coth|csch|sech|'
             r'asinh|acosh|atanh|acoth|acsch|asech|'
             r'sin|cos|tan|cot|csc|sec|'
-            r'exp|log|ln|sqrt|'
+            r'exp|log|ln|sqrt|conjugate|'
             r'Integral|Derivative|Limit|Sum|Product|'
             r'diff|integrate|limit'
             r')'
@@ -799,6 +1249,11 @@ class BaseEntity:
 
         # 7. Numbers before functions
         s = re.sub(r'(\d)(' + funcs + r')\b', r'\1*\2', s)
+
+        # 8. Lowercase standalone i is the imaginary unit (SymPy I), not a free
+        # variable. Run after digit/letter splits so e.g. 4i → 4*i → 4*I.
+        # Word boundaries keep sin/pi/limit/xi/etc. intact.
+        s = re.sub(r'\bi\b', 'I', s)
 
         return s
 
@@ -1434,6 +1889,23 @@ class FormulaEntity(BaseEntity):
     """
     Validation and evaluation engine for the 'formula' token pattern.
     """
+    def _wants_output_rhs_only(self):
+        """Checkbox: emit only the solved/simplified right-hand side (e.g. 2 instead of c = 2)."""
+        raw = self.data.get("output rhs only", self.runtime_values.get("output rhs only", False))
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _wants_simplify_after_substitution(self):
+        """Checkbox: run SymPy simplify after variable substitution (default off)."""
+        raw = self.data.get(
+            "simplify after substitution",
+            self.runtime_values.get("simplify after substitution", False),
+        )
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
     def is_valid(self):
         if not super().is_valid():
             return False
@@ -1473,34 +1945,24 @@ class FormulaEntity(BaseEntity):
 
         parsed_variables = []
         if variables_str:
-            # 🎯 Compiled regex pattern matching any lowercase Greek letter base name
-            greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
-            
             raw_elements = [v.strip() for v in str(variables_str).split(",") if v.strip()]
             for item in raw_elements:
-                # 🎯 FIX: Block SymPy internal protected constants E and I from being used as variables
-                if item in ('E', 'I'):
-                    self.errors["variables"] = f"'{item}' is a reserved mathematical constant in SymPy and cannot be used as a variable identifier."
+                ok, err = _is_valid_algebraic_variable_name(item)
+                if not ok:
+                    self.errors["variables"] = err
                     break
-
-                item_lower = item.lower()
-                # Standard character checks (e.g., x, y3, z_2)
-                is_standard = bool(re.match(r'^[a-zA-Z][0-9]*$', item))
-                is_subscript = bool(re.match(r'^[a-zA-Z]_[0-9]+$', item))
-                
-                # 🎯 FIXED: Greek character checks supporting subscripts (e.g., alpha, alpha3, alpha_3)
-                is_greek_base = bool(re.match(greek_pattern + r'$', item_lower))
-                is_greek_num  = bool(re.match(greek_pattern + r'[0-9]+$', item_lower))
-                is_greek_sub  = bool(re.match(greek_pattern + r'_[0-9]+$', item_lower))
-                
-                if not (is_standard or is_subscript or is_greek_base or is_greek_num or is_greek_sub):
-                    self.errors["variables"] = f"'{item}' is not a valid algebraic variable identifier."
-                    break
-                    
                 parsed_variables.append(item)
         
         if "variables" not in self.errors:
             self.runtime_values["parsed_variables_array"] = parsed_variables
+
+        # Persist UI checkboxes into cleaned_data so saves keep them (even before reseed)
+        solve_for_target_clean = (solve_for_target or "").strip()
+        wants_rhs = self._wants_output_rhs_only() and solve_method == "simplify" and bool(solve_for_target_clean)
+        self.cleaned_data["output rhs only"] = wants_rhs
+        self.cleaned_data["simplify after substitution"] = self._wants_simplify_after_substitution()
+        self.runtime_values["output rhs only"] = wants_rhs
+        self.runtime_values["simplify after substitution"] = self.cleaned_data["simplify after substitution"]
 
         # 🎯 UPDATED BLOCK: ENFORCING N/A RECONCILIATION FOR SIMPLIFY METHOD
         if solve_method == "simplify":
@@ -1533,6 +1995,11 @@ class FormulaEntity(BaseEntity):
         solve_method = str(self.runtime_values.get("solve method", "leave as formula")).strip()
         var_list = self.runtime_values.get("parsed_variables_array", [])
         solve_for_target = self.runtime_values.get("variable to solve for", "").strip()
+        # When last_computed_sympy_result is a (lhs, rhs) pair, latex uses this op
+        # (<=, >=, <, >, =) instead of always hard-coding "=".
+        self.last_relation_display_op = None
+        # Multi-root simplify solutions for downstream expanders (e.g. answersOrDne).
+        self.last_solution_list = None
 
         if solve_for_target in ["-- N/A --", "-- choose variable --"]:
             solve_for_target = ""
@@ -1541,15 +2008,8 @@ class FormulaEntity(BaseEntity):
         if not formula_str:
             return "0"
 
-        # Build local substitutions structures
-        subs_map = self.data.get('substitutions', {}) or {}
-        if not isinstance(subs_map, dict):
-            subs_map = {}
-            
-        for k, v in self.data.items():
-            if k.startswith('sub_') and v is not None:
-                var_name = k.replace('sub_', '').strip()
-                subs_map[var_name] = v
+        # Build local substitutions structures (same merge/normalize as div0 check)
+        subs_map = self._collect_formula_substitutions()
 
         resolved_subs = {}
         for var_name, var_value in subs_map.items():
@@ -1576,6 +2036,7 @@ class FormulaEntity(BaseEntity):
         local_dict = {var: sp.Symbol(var) for var in var_list}
         if 'pi' not in local_dict: local_dict['pi'] = sp.pi
         if 'exp' not in local_dict: local_dict['exp'] = sp.exp
+        if 'I' not in local_dict: local_dict['I'] = sp.I
 
         if solve_method in ['leave as formula', 'variable substitution', 'simplify']:
             local_dict['integrate'] = sp.Integral
@@ -1658,17 +2119,29 @@ class FormulaEntity(BaseEntity):
 
         # 🎯 PROCESS SIMPLIFY STRATEGIES
         if solve_method == 'simplify':
+            # RHS-only only applies when isolating a chosen target variable
+            output_rhs_only = self._wants_output_rhs_only() and bool(solve_for_target)
             try:
                 if not solve_for_target:
                     if not has_relation:
                         parsed_expr = parse_segment(processed_formula_clean)
                         result = sp.simplify(parsed_expr.doit())
+                        self.last_extracted_free_symbols = (
+                            result.free_symbols if hasattr(result, 'free_symbols') else set()
+                        )
                     else:
                         left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
                         left_parsed = parse_segment(left_raw)
                         right_parsed = parse_segment(right_raw)
                         left_simplified = sp.simplify(left_parsed.doit())
                         right_simplified = sp.simplify(right_parsed.doit())
+                        self.last_extracted_free_symbols = (
+                            left_simplified.free_symbols.union(right_simplified.free_symbols)
+                        )
+                        if output_rhs_only and display_op == "=":
+                            self.last_computed_sympy_result = right_simplified
+                            return str(right_simplified)
+                        self.last_relation_display_op = display_op
                         self.last_computed_sympy_result = (left_simplified, right_simplified)
                         return f"{left_simplified} {display_op} {right_simplified}"
                 else:
@@ -1677,6 +2150,8 @@ class FormulaEntity(BaseEntity):
                         parsed_expr = parse_segment(processed_formula_clean)
                         equation = sp.Eq(parsed_expr.doit(), 0)
                         rel_op = "="
+                        left_parsed = equation.lhs
+                        right_parsed = equation.rhs
                     else:
                         left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
                         left_parsed = parse_segment(left_raw).doit()
@@ -1687,6 +2162,10 @@ class FormulaEntity(BaseEntity):
                         elif rel_op == ">":   equation = sp.Gt(left_parsed, right_parsed)
                         elif rel_op == ">=":  equation = sp.Ge(left_parsed, right_parsed)
 
+                    # Variables UI should list symbols available in the linked/input
+                    # equation — not free symbols of a bogus numeric solve result.
+                    self.last_extracted_free_symbols = equation.free_symbols if hasattr(equation, 'free_symbols') else set()
+
                     if rel_op in ["<", "<=", ">", ">="]:
                         try:
                             solved_rel = sp.reduce_inequalities(equation, target_symbol)
@@ -1696,13 +2175,54 @@ class FormulaEntity(BaseEntity):
                             solutions = sp.solve(equation, target_symbol)
                     else:
                         solutions = sp.solve(equation, target_symbol)
-                    
+
                     if isinstance(solutions, list):
-                        if len(solutions) == 1: resolved_right_side = solutions[0]
-                        elif len(solutions) > 1: resolved_right_side = f"[{', '.join(str(s) for s in solutions)}]"
-                        else: resolved_right_side = "0"
+                        if len(solutions) == 1:
+                            resolved_right_side = solutions[0]
+                            self.last_solution_list = [solutions[0]]
+                        elif len(solutions) > 1:
+                            resolved_right_side = f"[{', '.join(str(s) for s in solutions)}]"
+                            self.last_solution_list = list(solutions)
+                        else:
+                            # Empty solve: never invent 0 (e.g. solve for `c` when only `b`
+                            # appears). Surface the input equation instead.
+                            if output_rhs_only and display_op == "=":
+                                self.last_computed_sympy_result = right_parsed
+                                return str(right_parsed)
+                            if has_relation:
+                                self.last_relation_display_op = display_op
+                                self.last_computed_sympy_result = (left_parsed, right_parsed)
+                            else:
+                                self.last_computed_sympy_result = equation
+                            return processed_formula_clean
                     else:
                         resolved_right_side = solutions
+                        if solutions is not None:
+                            self.last_solution_list = (
+                                list(solutions) if isinstance(solutions, (list, tuple, set, frozenset))
+                                else [solutions]
+                            )
+
+                    if resolved_right_side is None:
+                        if output_rhs_only and display_op == "=":
+                            self.last_computed_sympy_result = right_parsed
+                            return str(right_parsed)
+                        if has_relation:
+                            self.last_relation_display_op = display_op
+                            self.last_computed_sympy_result = (left_parsed, right_parsed)
+                        else:
+                            self.last_computed_sympy_result = equation
+                        return processed_formula_clean
+
+                    if output_rhs_only:
+                        # Emit only the solved value (e.g. "0" instead of "c = 0").
+                        # Never leave last_computed_sympy_result as None — sp.latex(None)
+                        # renders as \text{None} in the card preview.
+                        try:
+                            self.last_computed_sympy_result = sp.sympify(resolved_right_side)
+                        except Exception:
+                            self.last_computed_sympy_result = sp.Integer(0)
+                        return str(resolved_right_side)
 
                     if not isinstance(resolved_right_side, str):
                         self.last_computed_sympy_result = sp.Eq(target_symbol, resolved_right_side)
@@ -1726,6 +2246,7 @@ class FormulaEntity(BaseEntity):
                 left_raw, right_raw = processed_formula_clean.split(rel_op, 1)
                 left_parsed = parse_segment(left_raw)
                 right_parsed = parse_segment(right_raw)
+                self.last_relation_display_op = display_op
                 self.last_computed_sympy_result = (left_parsed, right_parsed)
                 return f"{left_parsed} {display_op} {right_parsed}"
             
@@ -1748,27 +2269,791 @@ class FormulaEntity(BaseEntity):
                     else:
                         if v_val != "":
                             sympy_subs_map[sp.Symbol(v_name)] = v_val
-                
+
+                simplify_after = self._wants_simplify_after_substitution()
+
                 if sympy_subs_map:
                     with sp.evaluate(False):
                         if isinstance(parsed_expr, tuple):
                             result_left = parsed_expr[0].subs(sympy_subs_map)
                             result_right = parsed_expr[1].subs(sympy_subs_map)
-                            self.last_computed_sympy_result = (result_left, result_right)
-                            return f"{result_left} {display_op} {result_right}"
                         else:
                             result = parsed_expr.subs(sympy_subs_map)
+
+                    if isinstance(parsed_expr, tuple):
+                        if simplify_after:
+                            result_left = sp.simplify(result_left)
+                            result_right = sp.simplify(result_right)
+                        self.last_relation_display_op = display_op
+                        self.last_computed_sympy_result = (result_left, result_right)
+                        return f"{result_left} {display_op} {result_right}"
+
+                    if simplify_after:
+                        result = sp.simplify(result)
                 else:
                     if isinstance(parsed_expr, tuple):
-                        self.last_computed_sympy_result = parsed_expr
-                        return f"{parsed_expr[0]} {display_op} {parsed_expr[1]}"
+                        result_left, result_right = parsed_expr
+                        if simplify_after:
+                            result_left = sp.simplify(result_left)
+                            result_right = sp.simplify(result_right)
+                        self.last_relation_display_op = display_op
+                        self.last_computed_sympy_result = (result_left, result_right)
+                        return f"{result_left} {display_op} {result_right}"
                     result = parsed_expr
+                    if simplify_after:
+                        result = sp.simplify(result)
             else:
                 result = parsed_expr
+
+        if isinstance(result, tuple) and len(result) >= 2 and has_relation:
+            if self.last_relation_display_op is None:
+                self.last_relation_display_op = display_op
+            self.last_computed_sympy_result = result
+            op = self.last_relation_display_op or "="
+            return f"{result[0]} {op} {result[1]}"
 
         self.last_computed_sympy_result = result
         return str(result)
 
+    # ------------------------------------------------------------------
+    # Save-Draft: possible division-by-zero via interval arithmetic
+    # ------------------------------------------------------------------
+
+    def _payload_by_sequence_token(self, clean_token):
+        clean = str(clean_token or "").replace("<", "").replace(">", "").strip()
+        if not clean:
+            return None
+        return next(
+            (
+                item
+                for item in (self.all_entities_payload or [])
+                if (item.get("sequence_token") or item.get("indexed_token") or "") == clean
+            ),
+            None,
+        )
+
+    def _resolve_bound_endpoint(self, raw, side="low", visiting=None):
+        """
+        Resolve a rand/randInt min or max field to a float endpoint.
+        Linked tokens use the upstream random's outer min (side=low) or max (side=high).
+        """
+        visiting = visiting or set()
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)):
+            return float(raw)
+
+        s = str(raw).strip()
+        token_match = re.match(r"^<([^>]+)>$", s)
+        if token_match:
+            tok = token_match.group(1).strip()
+            if tok in visiting:
+                return None
+            iv = self._random_entity_interval(tok, visiting | {tok})
+            if not iv:
+                return None
+            return iv[0] if side == "low" else iv[1]
+        try:
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    def _random_entity_interval(self, clean_token, visiting=None):
+        """Return (min, max) for a rand/randInt token, or None."""
+        visiting = visiting or set()
+        payload = self._payload_by_sequence_token(clean_token)
+        if not payload:
+            return None
+        arch = payload.get("token")
+        if arch not in ("rand", "randInt"):
+            return None
+        inputs = payload.get("inputs", {}) or {}
+        lo = self._resolve_bound_endpoint(inputs.get("min"), side="low", visiting=visiting)
+        hi = self._resolve_bound_endpoint(inputs.get("max"), side="high", visiting=visiting)
+        if lo is None or hi is None:
+            return None
+        if lo > hi:
+            lo, hi = hi, lo
+        return (lo, hi)
+
+    def _normalize_formula_sub_value(self, raw):
+        """
+        Normalize substitution values so linked workspace tokens always use <token>
+        form. Save payloads often send both substitutions={x:'<randInt4>'} and
+        sub_x='randInt4' (or HTML-entity encoded); bare / encoded forms must not
+        defeat interval analysis or dependency resolution.
+        """
+        if raw is None or not isinstance(raw, str):
+            return raw
+        s = (
+            raw.strip()
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&LT;", "<")
+            .replace("&GT;", ">")
+        )
+        bracketed = re.match(r"^<([^<>]+)>$", s)
+        if bracketed:
+            return f"<{bracketed.group(1).strip()}>"
+        # Bare sequence token (randInt4, formula1, ...)
+        if re.match(r"^[A-Za-z][A-Za-z0-9_]*\d+$", s):
+            return f"<{s}>"
+        return raw
+
+    def _collect_formula_substitutions(self):
+        """
+        Merge sub_* keys and the substitutions dict. The nested substitutions
+        map wins when both are present (it is produced by formula serialize with
+        proper <token> brackets); sub_* is only a fallback.
+        """
+        subs_map = {}
+        for k, v in self.data.items():
+            if not k.startswith("sub_") or v is None or v == "":
+                continue
+            name = k.replace("sub_", "", 1).strip()
+            if name:
+                subs_map[name] = self._normalize_formula_sub_value(v)
+
+        nested = self.data.get("substitutions", {}) or {}
+        if isinstance(nested, dict):
+            for name, v in nested.items():
+                if v is None or v == "":
+                    continue
+                key = str(name).strip()
+                if key:
+                    subs_map[key] = self._normalize_formula_sub_value(v)
+        return subs_map
+
+    def _expand_token_to_sympy(self, clean_token, ranges, token_by_sym, visiting):
+        """
+        Expand a workspace token into a SymPy expression.
+        rand/randInt → unique symbol with interval in `ranges`.
+        formula → recursively expanded expression with its own substitutions.
+        """
+        clean = str(clean_token or "").replace("<", "").replace(">", "").strip()
+        payload = self._payload_by_sequence_token(clean)
+        if not payload:
+            return sp.Symbol(clean)
+
+        arch = payload.get("token")
+        if arch in ("rand", "randInt"):
+            sym = sp.Symbol(f"_rnd_{clean}")
+            iv = self._random_entity_interval(clean)
+            if iv is not None:
+                ranges[sym] = iv
+                token_by_sym[sym] = clean
+            return sym
+
+        if arch == "formula":
+            if clean in visiting:
+                return sp.Symbol(f"_cyc_{clean}")
+            nested_inputs = dict(payload.get("inputs", {}) or {})
+            # No DB blueprint needed for structural expand — inputs come from payload.
+            nested = FormulaEntity(
+                nested_inputs,
+                {"name": "formula", "inputs": {}},
+                all_entities_payload=self.all_entities_payload,
+            )
+            nested.data["sequence_token"] = clean
+            expr, nested_ranges, nested_tokens = nested._build_range_aware_sympy_expr(
+                visiting | {clean}
+            )
+            ranges.update(nested_ranges)
+            token_by_sym.update(nested_tokens)
+            return expr
+
+        # Fallback: try a concrete dependency resolve (sample), else leave symbolic
+        try:
+            resolved = self.resolve_token_dependency(f"<{clean}>")
+            return sp.sympify(resolved)
+        except Exception:
+            return sp.Symbol(clean)
+
+    def _build_range_aware_sympy_expr(self, visiting=None):
+        """
+        Build a SymPy expression for this formula where linked rand/randInt
+        values are symbols annotated with [min, max] intervals (no sampling).
+        Returns (expr, ranges_dict, token_by_symbol).
+        """
+        visiting = set(visiting or set())
+        my_token = (
+            self.data.get("sequence_token")
+            or self.runtime_values.get("sequence_token")
+            or ""
+        )
+        my_token = str(my_token).replace("<", "").replace(">", "").strip()
+        if my_token:
+            visiting = visiting | {my_token}
+
+        ranges = {}
+        token_by_sym = {}
+        # Prefer raw teacher inputs. BaseEntity.is_valid() resolves bare <token>
+        # links into runtime_values via sample evaluation — using that here made
+        # Save-Draft div0 checks flaky (dependent on the rolled random seed).
+        formula_str = str(
+            self.data.get("formula")
+            or self.runtime_values.get("formula", "")
+            or ""
+        ).strip()
+        if not formula_str:
+            return sp.Integer(0), ranges, token_by_sym
+
+        local_dict = {}
+        placeholder_exprs = {}
+
+        def bracket_replacer(match):
+            tok = (match.group(1) or match.group(2) or "").strip()
+            ph_name = f"_ph_{tok}"
+            if ph_name not in local_dict:
+                ph_sym = sp.Symbol(ph_name)
+                local_dict[ph_name] = ph_sym
+                placeholder_exprs[ph_sym] = self._expand_token_to_sympy(
+                    tok, ranges, token_by_sym, visiting
+                )
+            return ph_name
+
+        processed = re.sub(r"&lt;([^&>]+)&gt;|<([^>]+)>", bracket_replacer, formula_str)
+        processed = self.insert_implicit_multiplication(processed)
+
+        # Strip a single outer wrapping pair only when it truly wraps the whole
+        # expression. Naively checking startswith('(') and endswith(')') breaks
+        # forms like (x-y)/(w-z) into the unparseable "x-y)/(w-z".
+        processed_clean = processed.strip()
+
+        def _fully_wrapped_parens(s):
+            if not (s.startswith("(") and s.endswith(")")):
+                return False
+            depth = 0
+            for i, ch in enumerate(s):
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0 and i < len(s) - 1:
+                        return False
+            return depth == 0
+
+        if _fully_wrapped_parens(processed_clean):
+            processed_clean = processed_clean[1:-1].strip()
+
+        exprs_to_parse = []
+        rel_match = re.search(r"(<=|>=|==|<|>|=)", processed_clean)
+        if rel_match and processed_clean.count("(") == processed_clean.count(")"):
+            op = rel_match.group(1)
+            left, right = processed_clean.split(op, 1)
+            exprs_to_parse.extend([left.strip(), right.strip()])
+        else:
+            exprs_to_parse.append(processed_clean)
+
+        parsed_parts = []
+        for piece in exprs_to_parse:
+            if not piece:
+                continue
+            try:
+                part = sp.parse_expr(piece, local_dict=local_dict, evaluate=False)
+            except Exception:
+                continue
+            if placeholder_exprs:
+                part = part.subs(placeholder_exprs)
+            parsed_parts.append(part)
+
+        if not parsed_parts:
+            return sp.Integer(0), ranges, token_by_sym
+
+        expr = parsed_parts[0]
+        if len(parsed_parts) > 1:
+            # Sum sides so denominators on either side of an equation are visible
+            expr = parsed_parts[0] + parsed_parts[1]
+
+        # Apply variable substitutions (literals or linked tokens)
+        subs_map = self._collect_formula_substitutions()
+        for var_name, var_value in subs_map.items():
+            if not var_name:
+                continue
+            target = sp.Symbol(str(var_name).strip())
+            if isinstance(var_value, str) and re.match(r"^<([^>]+)>$", var_value.strip()):
+                tok = var_value.strip()[1:-1].strip()
+                replacement = self._expand_token_to_sympy(
+                    tok, ranges, token_by_sym, visiting
+                )
+            elif var_value is None or var_value == "":
+                continue
+            else:
+                try:
+                    replacement = sp.parse_expr(
+                        self.insert_implicit_multiplication(str(var_value)),
+                        evaluate=False,
+                    )
+                except Exception:
+                    continue
+            try:
+                expr = expr.subs(target, replacement)
+            except Exception:
+                pass
+
+        return expr, ranges, token_by_sym
+
+    @staticmethod
+    def _interval_add(a, b):
+        return (a[0] + b[0], a[1] + b[1])
+
+    @staticmethod
+    def _interval_sub(a, b):
+        return (a[0] - b[1], a[1] - b[0])
+
+    @staticmethod
+    def _interval_mul(a, b):
+        products = []
+        for x in (a[0], a[1]):
+            for y in (b[0], b[1]):
+                p = x * y
+                # 0 * ±inf → nan; treat as covering unbounded contribution
+                if isinstance(p, float) and math.isnan(p):
+                    return (float("-inf"), float("inf"))
+                products.append(p)
+        return (min(products), max(products))
+
+    @classmethod
+    def _interval_pow_int(cls, base, exp):
+        """Integer power of an interval (conservative)."""
+        e = int(exp)
+        if e == 0:
+            return (1.0, 1.0)
+        if e < 0:
+            # 1 / base^|e| — if base contains 0, result is unbounded
+            if base[0] <= 0 <= base[1]:
+                return (float("-inf"), float("inf"))
+            inv = (1.0 / base[1], 1.0 / base[0]) if base[0] > 0 else (1.0 / base[1], 1.0 / base[0])
+            lo, hi = (min(inv), max(inv))
+            return cls._interval_pow_int((lo, hi), -e) if e != -1 else (lo, hi)
+        # positive integer
+        if e == 1:
+            return base
+        # For even powers, negatives fold; use endpoint sampling of monotonic pieces
+        samples = [base[0] ** e, base[1] ** e]
+        if e % 2 == 0 and base[0] < 0 < base[1]:
+            samples.append(0.0)
+        return (min(samples), max(samples))
+
+    def _eval_expr_interval(self, expr, ranges):
+        """
+        Conservative interval evaluation of a SymPy expression.
+        Returns (lo, hi) or None if the expression depends on unbound symbols
+        or uses unsupported operations.
+        """
+        try:
+            expr = sp.sympify(expr)
+        except Exception:
+            return None
+
+        if expr.is_Number:
+            try:
+                v = float(expr)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(v):
+                return None
+            return (v, v)
+
+        if expr.is_Symbol:
+            if expr in ranges:
+                lo, hi = ranges[expr]
+                return (float(lo), float(hi))
+            return None
+
+        if expr.is_Add:
+            acc = (0.0, 0.0)
+            for arg in expr.args:
+                iv = self._eval_expr_interval(arg, ranges)
+                if iv is None:
+                    return None
+                acc = self._interval_add(acc, iv)
+            return acc
+
+        if expr.is_Mul:
+            acc = (1.0, 1.0)
+            for arg in expr.args:
+                iv = self._eval_expr_interval(arg, ranges)
+                if iv is None:
+                    return None
+                acc = self._interval_mul(acc, iv)
+            return acc
+
+        if expr.is_Pow:
+            base_iv = self._eval_expr_interval(expr.base, ranges)
+            if base_iv is None:
+                return None
+            if expr.exp.is_Number and expr.exp.is_integer:
+                return self._interval_pow_int(base_iv, int(expr.exp))
+            return None
+
+        # Unsupported node (functions, etc.)
+        return None
+
+    def _bind_orphan_token_symbols(self, expr, ranges, token_by_sym):
+        """
+        If a bare token name (e.g. Symbol('randInt4')) remains in the expression
+        because a substitution lacked <brackets>, attach its [min,max] range.
+        """
+        free = getattr(expr, "free_symbols", set()) or set()
+        for sym in list(free):
+            if sym in ranges:
+                continue
+            name = str(sym)
+            if name.startswith("_rnd_"):
+                tok = name[len("_rnd_"):]
+            elif re.match(r"^[A-Za-z][A-Za-z0-9_]*\d+$", name):
+                tok = name
+            else:
+                continue
+            iv = self._random_entity_interval(tok)
+            if iv is None:
+                continue
+            ranges[sym] = iv
+            token_by_sym[sym] = tok
+        return ranges, token_by_sym
+
+    @staticmethod
+    def _interval_contains_zero(iv):
+        if iv is None:
+            return False
+        lo, hi = iv
+        return (
+            not (math.isfinite(lo) and math.isfinite(hi))
+            or (lo <= 0 <= hi)
+        )
+
+    def _token_is_randint(self, clean_token):
+        payload = self._payload_by_sequence_token(clean_token)
+        return bool(payload and payload.get("token") == "randInt")
+
+    @staticmethod
+    def _format_range_endpoint(value, as_int):
+        if as_int:
+            return str(int(round(value)))
+        text = f"{float(value):.6g}"
+        return text
+
+    def _minimal_translation_for_symbol(self, denom, base_ranges, sym, as_int, max_steps=250):
+        """
+        Smallest |δ| translating sym's [lo,hi] → [lo+δ, hi+δ] so denom's
+        interval no longer contains 0. Returns (abs_delta, delta, new_lo, new_hi) or None.
+        """
+        lo, hi = base_ranges.get(sym, (None, None))
+        if lo is None or hi is None:
+            return None
+        if not (math.isfinite(lo) and math.isfinite(hi)):
+            return None
+
+        step = 1.0 if as_int else max(abs(hi - lo) / 50.0, 0.01)
+
+        for step_i in range(1, max_steps + 1):
+            for sign in (1, -1):
+                delta = sign * step_i * step
+                if as_int:
+                    delta = float(int(round(delta)))
+                new_lo, new_hi = lo + delta, hi + delta
+                if as_int:
+                    new_lo, new_hi = float(int(round(new_lo))), float(int(round(new_hi)))
+                trial = dict(base_ranges)
+                trial[sym] = (new_lo, new_hi)
+                iv = self._eval_expr_interval(denom, trial)
+                if iv is not None and not self._interval_contains_zero(iv):
+                    return (abs(delta), delta, new_lo, new_hi)
+        return None
+
+    def _suggest_range_shift_for_denom(self, denom, eval_ranges, token_by_sym, ranged_syms):
+        """
+        Prefer a single linked random whose min/max can be shifted together
+        (same δ) by the smallest amount so 0 leaves the denominator hull.
+        """
+        best = None  # (abs_delta, token, old_lo, old_hi, new_lo, new_hi, as_int)
+        for sym in ranged_syms:
+            tok = token_by_sym.get(sym)
+            if not tok:
+                continue
+            lo, hi = eval_ranges.get(sym, (None, None))
+            if lo is None or not (math.isfinite(lo) and math.isfinite(hi)):
+                continue
+            as_int = self._token_is_randint(tok)
+            found = self._minimal_translation_for_symbol(
+                denom, eval_ranges, sym, as_int=as_int
+            )
+            if not found:
+                continue
+            abs_delta, _delta, new_lo, new_hi = found
+            candidate = (abs_delta, tok, lo, hi, new_lo, new_hi, as_int)
+            if best is None or candidate[0] < best[0] or (
+                candidate[0] == best[0] and tok < best[1]
+            ):
+                best = candidate
+
+        if not best:
+            return None
+
+        abs_delta, tok, lo, hi, new_lo, new_hi, as_int = best
+        return {
+            "token": tok,
+            "old_min": self._format_range_endpoint(lo, as_int),
+            "old_max": self._format_range_endpoint(hi, as_int),
+            "new_min": self._format_range_endpoint(new_lo, as_int),
+            "new_max": self._format_range_endpoint(new_hi, as_int),
+            "shift": self._format_range_endpoint(
+                new_lo - lo if math.isfinite(new_lo - lo) else abs_delta,
+                as_int,
+            ),
+        }
+
+    def _format_div0_message(self, denom_display, token_list, free_names, suggestion):
+        if free_names:
+            free_list = ", ".join(free_names)
+            msg = (
+                f"Possible division by zero: denominator ({denom_display}) can be 0 for some "
+                f"values of {token_list} within their min/max ranges "
+                f"(and some values of free variable(s) {free_list})."
+            )
+        else:
+            msg = (
+                f"Possible division by zero: denominator ({denom_display}) can be 0 for some "
+                f"values of {token_list} within their min/max ranges."
+            )
+
+        if suggestion:
+            msg += (
+                f" Suggestion: shift <{suggestion['token']}> from "
+                f"[{suggestion['old_min']}, {suggestion['old_max']}] to "
+                f"[{suggestion['new_min']}, {suggestion['new_max']}] "
+                f"(translate min/max by {suggestion['shift']}) to avoid a zero denominator."
+            )
+        elif not free_names:
+            msg += (
+                " No single-entity min/max translation avoids this; "
+                "adjust multiple ranges or the formula."
+            )
+        else:
+            msg += (
+                " Bind the free variable(s) (or adjust ranges on a downstream card "
+                "that substitutes them) — shifting random min/max alone cannot fix "
+                "an unbound variable in the denominator."
+            )
+        return msg
+
+    def _find_division_by_zero_issue(self, visiting=None):
+        """
+        Locate a denominator that can contain 0 under linked random ranges.
+        Returns a dict with message fields, or None.
+        """
+        visiting = set(visiting or set())
+        my_token = (
+            self.data.get("sequence_token")
+            or self.runtime_values.get("sequence_token")
+            or ""
+        )
+        my_token = str(my_token).replace("<", "").replace(">", "").strip()
+        if my_token:
+            if my_token in visiting:
+                return None
+            visiting = visiting | {my_token}
+
+        try:
+            expr, ranges, token_by_sym = self._build_range_aware_sympy_expr(visiting)
+            ranges, token_by_sym = self._bind_orphan_token_symbols(expr, ranges, token_by_sym)
+        except Exception:
+            return None
+
+        try:
+            denoms = self._collect_denominators(expr)
+        except Exception:
+            return None
+
+        for denom in denoms:
+            free = getattr(denom, "free_symbols", set()) or set()
+
+            if not free:
+                try:
+                    if denom == 0 or (denom.is_Number and float(denom) == 0):
+                        return {
+                            "has_unranged": False,
+                            "message": (
+                                "Possible division by zero: denominator evaluates to 0."
+                            ),
+                        }
+                except Exception:
+                    pass
+                continue
+
+            ranged_syms = {s for s in free if s in ranges}
+            unranged_syms = free - ranged_syms
+            if not ranged_syms:
+                continue
+
+            eval_ranges = dict(ranges)
+            for s in unranged_syms:
+                eval_ranges[s] = (float("-inf"), float("inf"))
+
+            iv = self._eval_expr_interval(denom, eval_ranges)
+            if not self._interval_contains_zero(iv):
+                continue
+
+            involved = sorted({token_by_sym[s] for s in ranged_syms if s in token_by_sym})
+            token_list = ", ".join(f"<{t}>" for t in involved) or "linked random entities"
+            free_names = sorted(str(s) for s in unranged_syms)
+            denom_display = str(denom)
+            for sym, tok in token_by_sym.items():
+                denom_display = denom_display.replace(str(sym), f"<{tok}>")
+
+            # Suggestions only use finite ranged symbols (not the ±∞ stand-ins).
+            suggestion = None
+            if not unranged_syms:
+                suggestion = self._suggest_range_shift_for_denom(
+                    denom, eval_ranges, token_by_sym, ranged_syms
+                )
+
+            return {
+                "has_unranged": bool(unranged_syms),
+                "message": self._format_div0_message(
+                    denom_display, token_list, free_names, suggestion
+                ),
+            }
+        return None
+
+    def check_possible_division_by_zero(self, visiting=None):
+        """
+        Structural Save-Draft check: using interval arithmetic over linked
+        rand/randInt [min, max] ranges (ignoring step/exclude), detect whether
+        any denominator can contain 0.
+
+        Attribution: defer to an upstream formula only when that upstream has a
+        fully-ranged (actionable) div0 issue. Mixed free-variable issues are
+        reported on the card that binds the remaining variables when possible.
+
+        Returns an error string, or None if no issue / analysis inapplicable.
+        """
+        visiting = set(visiting or set())
+        my_token = (
+            self.data.get("sequence_token")
+            or self.runtime_values.get("sequence_token")
+            or ""
+        )
+        my_token = str(my_token).replace("<", "").replace(">", "").strip()
+        if my_token and my_token in visiting:
+            return None
+
+        # Include self while probing upstream so cyclic formula links cannot recurse.
+        defer_visiting = visiting | {my_token} if my_token else set(visiting)
+        for dep_tok in self._iter_linked_formula_tokens():
+            if dep_tok in defer_visiting:
+                continue
+            upstream = self._make_formula_validator_for_token(dep_tok)
+            if not upstream:
+                continue
+            try:
+                upstream_issue = upstream._find_division_by_zero_issue(defer_visiting)
+            except Exception:
+                upstream_issue = None
+            if upstream_issue and not upstream_issue.get("has_unranged"):
+                return None
+
+        try:
+            # Parent visiting only — _find adds this card's token itself.
+            issue = self._find_division_by_zero_issue(visiting)
+        except Exception:
+            return None
+        if not issue:
+            return None
+        # Mixed free-variable issues cannot be fixed by shifting random min/max alone.
+        # Leave those to a downstream card that binds the free vars (actionable Suggestion).
+        if issue.get("has_unranged"):
+            return None
+        return issue.get("message")
+
+    def _collect_denominators(self, expr):
+        dens = set()
+
+        def walk(e):
+            if e is None:
+                return
+            try:
+                e = sp.sympify(e)
+            except Exception:
+                return
+            if e.is_Pow and e.exp.is_Number and e.exp < 0:
+                dens.add(sp.simplify(e.base))
+                walk(e.base)
+            elif e.is_Add or e.is_Mul:
+                for arg in e.args:
+                    walk(arg)
+            elif e.is_Pow:
+                walk(e.base)
+                walk(e.exp)
+            elif getattr(e, "args", None):
+                for arg in e.args:
+                    walk(arg)
+            try:
+                _num, den = sp.fraction(sp.together(e))
+                if den is not None and den != 1:
+                    dens.add(sp.simplify(den))
+                    walk(den)
+            except Exception:
+                pass
+
+        walk(expr)
+        # Drop trivial dens
+        cleaned = set()
+        for d in dens:
+            if d is None:
+                continue
+            try:
+                if d == 0:
+                    cleaned.add(d)
+                    continue
+                if d.is_Number and float(d) != 0:
+                    continue
+            except Exception:
+                pass
+            cleaned.add(d)
+        return cleaned
+
+    def _iter_linked_formula_tokens(self):
+        """Sequence tokens of formula entities linked from this card (expression or subs)."""
+        found = []
+        seen = set()
+
+        def consider(raw):
+            if not isinstance(raw, str):
+                return
+            for match in re.finditer(r"&lt;([^&>]+)&gt;|<([^>]+)>", raw):
+                tok = (match.group(1) or match.group(2) or "").strip()
+                if not tok or tok in seen:
+                    continue
+                payload = self._payload_by_sequence_token(tok)
+                if payload and payload.get("token") == "formula":
+                    seen.add(tok)
+                    found.append(tok)
+
+        formula_str = str(
+            self.data.get("formula")
+            or self.runtime_values.get("formula", "")
+            or ""
+        )
+        consider(formula_str)
+        for _var, val in self._collect_formula_substitutions().items():
+            consider(val)
+        return found
+
+    def _make_formula_validator_for_token(self, clean_token):
+        payload = self._payload_by_sequence_token(clean_token)
+        if not payload or payload.get("token") != "formula":
+            return None
+        nested_inputs = dict(payload.get("inputs", {}) or {})
+        nested_inputs.setdefault("sequence_token", clean_token)
+        return FormulaEntity(
+            nested_inputs,
+            {"name": "formula", "inputs": {}},
+            all_entities_payload=self.all_entities_payload,
+        )
 
 
 class GraphEntity(BaseEntity):
@@ -2020,23 +3305,11 @@ class MatrixEntity(BaseEntity):
                 self.errors["variables"] = "Failed to parse variables object schema."
                 return False
 
-            greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
-            
             for item, raw_val in variables_dict.items():
                 item = item.strip()
-                if item in ('E', 'I'):
-                    self.errors["variables"] = f"'{item}' is a reserved mathematical constant in SymPy."
-                    break
-
-                item_lower = item.lower()
-                is_standard = bool(re.match(r'^[a-zA-Z][0-9]*$', item))
-                is_subscript = bool(re.match(r'^[a-zA-Z]_[0-9]+$', item))
-                is_greek_base = bool(re.match(greek_pattern + r'$', item_lower))
-                is_greek_num  = bool(re.match(greek_pattern + r'[0-9]+$', item_lower))
-                is_greek_sub  = bool(re.match(greek_pattern + r'_[0-9]+$', item_lower))
-                
-                if not (is_standard or is_subscript or is_greek_base or is_greek_num or is_greek_sub):
-                    self.errors["variables"] = f"'{item}' is not a valid algebraic variable identifier."
+                ok, err = _is_valid_algebraic_variable_name(item)
+                if not ok:
+                    self.errors["variables"] = err
                     break
                     
                 parsed_variables.append(item)
@@ -2206,6 +3479,8 @@ class MatrixEntity(BaseEntity):
             local_dict['pi'] = sp.pi
         if 'exp' not in local_dict:
             local_dict['exp'] = sp.exp
+        if 'I' not in local_dict:
+            local_dict['I'] = sp.I
         return local_dict
 
     def evaluate_output(self):
@@ -2449,14 +3724,22 @@ class NumAnswerEntity(BaseEntity):
             return None
         try:
             if hasattr(raw, "evalf") and not isinstance(raw, (int, float)):
-                raw = float(sp.N(raw))
+                val = float(sp.N(raw))
             else:
-                raw = float(raw)
+                val = float(raw)
         except (TypeError, ValueError):
+            # Accept fraction / expression strings (e.g. -1/2) the same way shortAnswer does.
+            trimmed = str(raw).strip()
+            if not trimmed:
+                return None
+            try:
+                expr = self.parse_math_expression(trimmed, evaluate=True)
+                val = float(sp.N(expr))
+            except Exception:
+                return None
+        if not math.isfinite(val):
             return None
-        if not math.isfinite(raw):
-            return None
-        return raw
+        return val
 
     def is_valid(self):
         if not super().is_valid():
@@ -2571,7 +3854,51 @@ class ShortAnswerEntity(BaseEntity):
     Exact match uses trim + lowercase; sympy path uses trimmed original-case
     strings and requires equivalence without needing further simplification
     (count_ops(student) <= count_ops(correct)). Comparison helpers live on BaseEntity.
+
+    Optional accept_rounded_decimals: after the normal rules fail, evaluate both
+    sides numerically and accept if round(student, 3) == round(correct, 3).
     """
+
+    ROUNDED_DECIMAL_PLACES = 3
+
+    def _coerce_bool(self, raw):
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _wants_accept_rounded_decimals(self):
+        raw = self.data.get(
+            "accept_rounded_decimals",
+            self.runtime_values.get("accept_rounded_decimals", False),
+        )
+        return self._coerce_bool(raw)
+
+    def _expr_to_float(self, raw):
+        """
+        Parse a student/key string to a finite float.
+        Accepts plain decimals and sympy-evaluable expressions (e.g. 8/9).
+        Equations and non-numeric text return None.
+        """
+        trimmed = self._trim_str(raw)
+        if not trimmed:
+            return None
+        try:
+            direct = float(trimmed)
+            if math.isfinite(direct):
+                return direct
+        except (TypeError, ValueError):
+            pass
+
+        expr = self._to_sympy(trimmed)
+        if expr is None or isinstance(expr, sp.Equality):
+            return None
+        try:
+            numeric = float(sp.N(expr))
+        except Exception:
+            return None
+        if not math.isfinite(numeric):
+            return None
+        return numeric
 
     def is_valid(self):
         if not super().is_valid():
@@ -2584,9 +3911,12 @@ class ShortAnswerEntity(BaseEntity):
             return False
 
         simplified = self._simplify_key(trimmed)
+        accept_rounded = self._wants_accept_rounded_decimals()
         self.runtime_values["resolved_value"] = trimmed
         self.runtime_values["simplified_key"] = simplified
+        self.runtime_values["accept_rounded_decimals"] = accept_rounded
         self.cleaned_data["value"] = self.data.get("value", trimmed)
+        self.cleaned_data["accept_rounded_decimals"] = accept_rounded
         return True
 
     def evaluate_output(self):
@@ -2628,6 +3958,25 @@ class ShortAnswerEntity(BaseEntity):
             if student_trimmed.lower() == self._trim_str(correct_key).lower():
                 return {"earned": pts, "max": pts, "detail": "Exact match"}
             return {"earned": pts, "max": pts, "detail": "Equivalent (simplified form)"}
+
+        # Optional: accept when both evaluate to the same value at 3 decimal places
+        accept_rounded = self.runtime_values.get("accept_rounded_decimals")
+        if accept_rounded is None:
+            accept_rounded = self._wants_accept_rounded_decimals()
+        if accept_rounded:
+            places = self.ROUNDED_DECIMAL_PLACES
+            student_num = self._expr_to_float(student_trimmed)
+            correct_num = self._expr_to_float(correct_key)
+            if (
+                student_num is not None
+                and correct_num is not None
+                and round(student_num, places) == round(correct_num, places)
+            ):
+                return {
+                    "earned": pts,
+                    "max": pts,
+                    "detail": f"Correct (rounded to {places} decimals)",
+                }
 
         # Match prior detail when sympy-equivalent but not simplified enough
         student_expr = self._to_sympy(student_trimmed)
@@ -2959,11 +4308,11 @@ class MatrixAnswerEntity(BaseEntity):
 
 class ArrayMatchingUnorderedEntity(BaseEntity):
     """
-    Answer-field unordered comma-separated list matching.
-    Segments split on commas outside parentheses. Each segment is compared
-    with shortAnswer rules (exact trim+lowercase, else sympy formula
-    equivalence with count_ops gate). Numeric round-to-3 fallback preserved.
-    Multiset matching. Optional partial credit with ±sub / −½ sub penalties.
+    Answer-field comma-separated list matching (unordered by default).
+    Outer () or [] wrappers around the whole string are stripped before parse.
+    Segments split on commas outside parentheses/brackets. Each segment uses
+    shortAnswer rules (exact trim+lowercase, else sympy with count_ops gate).
+    Optional ordered matching and partial credit.
     """
 
     def _coerce_bool(self, raw):
@@ -2980,22 +4329,54 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
             return ", ".join(str(x) for x in raw)
         return str(raw)
 
+    def _is_fully_wrapped(self, s, open_ch, close_ch):
+        """True iff s is one balanced outer open_ch...close_ch pair."""
+        if len(s) < 2 or s[0] != open_ch or s[-1] != close_ch:
+            return False
+        depth = 0
+        for i, ch in enumerate(s):
+            if ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0 and i != len(s) - 1:
+                    return False
+                if depth < 0:
+                    return False
+        return depth == 0
+
+    def _strip_outer_wrappers(self, s):
+        """
+        If the entire trimmed string is wrapped in (...) or [...], peel those
+        layers before comma-splitting (e.g. "[2,3]" / "(2,3)" → "2,3").
+        """
+        s = str(s).strip()
+        while len(s) >= 2:
+            if self._is_fully_wrapped(s, "(", ")"):
+                s = s[1:-1].strip()
+                continue
+            if self._is_fully_wrapped(s, "[", "]"):
+                s = s[1:-1].strip()
+                continue
+            break
+        return s
+
     def _split_paren_aware(self, raw):
         """
-        Split on commas only when not inside (...).
-        Commas inside parentheses stay part of the same segment.
+        Split on commas only when not inside (...) or [...].
+        Commas inside nesting stay part of the same segment.
         """
-        s = self._raw_to_str(raw).strip()
+        s = self._strip_outer_wrappers(self._raw_to_str(raw))
         if not s:
             return []
         parts = []
         buf = []
         depth = 0
         for ch in s:
-            if ch == "(":
+            if ch in "([":
                 depth += 1
                 buf.append(ch)
-            elif ch == ")":
+            elif ch in ")]":
                 depth = max(0, depth - 1)
                 buf.append(ch)
             elif ch == "," and depth == 0:
@@ -3014,9 +4395,19 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
         return self._split_paren_aware(raw)
 
     def _items_match(self, student_piece, key_piece):
-        """Match via shortAnswer formula/text rules, then numeric round-3."""
+        """Match via shortAnswer formula/text rules, then numeric round-3 (incl. oo)."""
         if self._grade_short_answer_text(student_piece, key_piece):
             return True
+        # Infinity endpoints: oo / -oo
+        try:
+            sa = str(student_piece).strip().lower().replace("∞", "oo").replace("infty", "oo")
+            sb = str(key_piece).strip().lower().replace("∞", "oo").replace("infty", "oo")
+            if sa in ("oo", "+oo", "inf", "+inf") and sb in ("oo", "+oo", "inf", "+inf"):
+                return True
+            if sa in ("-oo", "-inf") and sb in ("-oo", "-inf"):
+                return True
+        except Exception:
+            pass
         try:
             na = float(str(student_piece).strip())
             nb = float(str(key_piece).strip())
@@ -3024,13 +4415,21 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
                 return round(na, 3) == round(nb, 3)
         except (TypeError, ValueError):
             pass
+        # SymPy parse (fractions / oo)
+        try:
+            ea = self._to_sympy(student_piece)
+            eb = self._to_sympy(key_piece)
+            if ea is not None and eb is not None and self._exprs_equivalent(ea, eb):
+                return True
+        except Exception:
+            pass
         return False
 
     def _format_list(self, items):
         return ", ".join(str(t) for t in items)
 
-    def _match_counts(self, key_items, student_items):
-        """Greedy multiset match with formula-aware equality. Returns (matches, missing, extras)."""
+    def _match_counts_unordered(self, key_items, student_items):
+        """Greedy multiset match. Returns (matches, missing, extras)."""
         remaining = list(student_items)
         matches = 0
         for key in key_items:
@@ -3045,6 +4444,23 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
         missing = len(key_items) - matches
         extras = len(remaining)
         return matches, missing, extras
+
+    def _match_counts_ordered(self, key_items, student_items):
+        """Positional match. Returns (matches, missing, extras)."""
+        n = len(key_items)
+        m = len(student_items)
+        matches = 0
+        for i in range(min(n, m)):
+            if self._items_match(student_items[i], key_items[i]):
+                matches += 1
+        missing = n - matches
+        extras = max(0, m - n)
+        return matches, missing, extras
+
+    def _match_counts(self, key_items, student_items, ordered=False):
+        if ordered:
+            return self._match_counts_ordered(key_items, student_items)
+        return self._match_counts_unordered(key_items, student_items)
 
     def is_valid(self):
         if not super().is_valid():
@@ -3062,12 +4478,20 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
                 self.runtime_values.get("partial_credit", False),
             )
         )
+        ordered = self._coerce_bool(
+            self.data.get(
+                "ordered",
+                self.runtime_values.get("ordered", False),
+            )
+        )
 
         self.runtime_values["key_items"] = key_items
         self.runtime_values["key_display"] = self._format_list(key_items)
         self.runtime_values["partial_credit"] = partial
+        self.runtime_values["ordered"] = ordered
         self.cleaned_data["results"] = self.data.get("results", raw_results)
         self.cleaned_data["partial_credit"] = partial
+        self.cleaned_data["ordered"] = ordered
         return True
 
     def evaluate_output(self):
@@ -3104,7 +4528,13 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
             return {"earned": 0.0, "max": pts, "detail": "No student input"}
 
         student_items = self._parse_list(student_str)
-        matches, missing, extras = self._match_counts(key_items, student_items)
+        ordered = self._coerce_bool(
+            self.runtime_values.get(
+                "ordered",
+                self.data.get("ordered", False),
+            )
+        )
+        matches, missing, extras = self._match_counts(key_items, student_items, ordered=ordered)
         partial = self._coerce_bool(
             self.runtime_values.get(
                 "partial_credit",
@@ -3112,9 +4542,10 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
             )
         )
 
+        order_note = "ordered" if ordered else "unordered"
         if not partial:
-            if matches == n and extras == 0:
-                return {"earned": pts, "max": pts, "detail": "All correct"}
+            if matches == n and extras == 0 and missing == 0:
+                return {"earned": pts, "max": pts, "detail": f"All correct ({order_note})"}
             return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
 
         sub = pts / n
@@ -3124,7 +4555,756 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
         return {
             "earned": earned,
             "max": pts,
-            "detail": f"{matches}/{n} matched (partial)",
+            "detail": f"{matches}/{n} matched ({order_note}, partial)",
+        }
+
+
+class AnswersOrDneEntity(BaseEntity):
+    """
+    Answer field: either Correct-is-DNE, or one-or-more linked answer keys
+    (shortAnswer / arrayMatchingUnordered / numAnswer / formula-with-simplify).
+
+    A linked formula (solve method = simplify with a target variable) expands into
+    multiple virtual keys from the Or/And/Eq solution: equalities → point answers,
+    bound conjunctions → ordered coordinate intervals (e.g. [-oo, -1]).
+
+    Student submits DNE or typed entries; unordered multiset match via graders /
+    cross shortAnswer↔numAnswer equivalence.
+    """
+
+    ALLOWED_KEY_ARCHETYPES = (
+        "shortAnswer",
+        "arrayMatchingUnordered",
+        "numAnswer",
+        "formula",
+    )
+    STUDENT_ENTRY_TYPES = ("shortAnswer", "arrayMatchingUnordered", "numAnswer")
+    GRADING_MODES = ("all_or_nothing", "per_answer")
+
+    def _coerce_bool(self, raw, default=False):
+        if raw is None:
+            return default
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _normalize_answers_list(self, raw):
+        if raw is None or raw is False:
+            return []
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return []
+            if s.startswith("["):
+                try:
+                    raw = json.loads(s)
+                except Exception:
+                    # single token string
+                    return [s] if re.match(r"^<[^>]+>$", s) else []
+            elif re.match(r"^<[^>]+>$", s):
+                return [s]
+            else:
+                return []
+        if not isinstance(raw, (list, tuple)):
+            return []
+        out = []
+        for item in raw:
+            if item is None:
+                continue
+            if isinstance(item, dict):
+                tok = item.get("token") or item.get("value") or ""
+            else:
+                tok = str(item).strip()
+            tok = tok.replace("&lt;", "<").replace("&gt;", ">").strip()
+            if not tok:
+                continue
+            if not tok.startswith("<"):
+                tok = f"<{tok}>"
+            if not tok.endswith(">"):
+                tok = f"{tok}>"
+            if re.match(r"^<[^>]+>$", tok):
+                out.append(tok)
+        return out
+
+    def _find_payload(self, sequence_token):
+        clean = str(sequence_token or "").replace("<", "").replace(">", "").strip()
+        if not clean:
+            return None
+        return next(
+            (
+                item
+                for item in (self.all_entities_payload or [])
+                if (item.get("sequence_token") or item.get("indexed_token") or "") == clean
+            ),
+            None,
+        )
+
+    def _validator_for_payload(self, payload):
+        archetype = payload.get("token")
+        blueprint = get_blueprint_for_token(archetype)
+        return get_entity_validator(
+            archetype,
+            payload.get("inputs", {}) or {},
+            blueprint,
+            all_entities_payload=self.all_entities_payload,
+        )
+
+    # ------------------------------------------------------------------
+    # Formula simplify → answer slots (points + intervals)
+    # ------------------------------------------------------------------
+
+    def _format_slot_endpoint(self, value):
+        if value is None:
+            return None
+        if value == sp.oo or value is sp.oo:
+            return "oo"
+        if value == -sp.oo or value is -sp.oo:
+            return "-oo"
+        try:
+            if isinstance(value, sp.Rational) and value.q != 1:
+                return str(value)
+            if isinstance(value, sp.Integer):
+                return str(int(value))
+            simplified = sp.simplify(value)
+            return str(simplified)
+        except Exception:
+            return str(value)
+
+    def _format_interval_slot(self, lo, lo_closed, hi, hi_closed):
+        # Unbounded ends conventionally use matching brackets in student entry
+        # (e.g. [-oo,-1] even though -oo is open).
+        left = "[" if (lo_closed or lo == -sp.oo) else "("
+        right = "]" if (hi_closed or hi == sp.oo) else ")"
+        return f"{left}{self._format_slot_endpoint(lo)},{self._format_slot_endpoint(hi)}{right}"
+
+    def _relational_bound_on_symbol(self, rel, symbol):
+        """
+        If rel constrains `symbol`, return (side, bound, closed) where side is
+        'lo' or 'hi'. Otherwise None.
+        """
+        if not isinstance(rel, Relational) or isinstance(rel, sp.Equality):
+            return None
+        lhs, rhs = rel.lhs, rel.rhs
+        # symbol on left: x < a, x <= a, x > a, x >= a
+        if lhs == symbol and symbol not in getattr(rhs, "free_symbols", set()):
+            bound = rhs
+            if isinstance(rel, (sp.StrictLessThan, sp.LessThan)):
+                return ("hi", bound, isinstance(rel, sp.LessThan))
+            if isinstance(rel, (sp.StrictGreaterThan, sp.GreaterThan)):
+                return ("lo", bound, isinstance(rel, sp.GreaterThan))
+        # symbol on right: a < x, a <= x, a > x, a >= x
+        if rhs == symbol and symbol not in getattr(lhs, "free_symbols", set()):
+            bound = lhs
+            if isinstance(rel, (sp.StrictLessThan, sp.LessThan)):
+                return ("lo", bound, isinstance(rel, sp.LessThan))
+            if isinstance(rel, (sp.StrictGreaterThan, sp.GreaterThan)):
+                return ("hi", bound, isinstance(rel, sp.GreaterThan))
+        return None
+
+    def _and_to_interval(self, expr, symbol):
+        """
+        Parse And of inequalities on `symbol` into (lo, lo_closed, hi, hi_closed).
+        Defaults: lo=-oo (open), hi=+oo (open).
+        """
+        lo, lo_closed = -sp.oo, False
+        hi, hi_closed = sp.oo, False
+        saw_bound = False
+        for rel in sp.And.make_args(expr):
+            parsed = self._relational_bound_on_symbol(rel, symbol)
+            if parsed is None:
+                return None
+            side, bound, closed = parsed
+            saw_bound = True
+            if side == "lo":
+                # Tightest lower bound
+                try:
+                    if bound == -sp.oo:
+                        lo, lo_closed = -sp.oo, False
+                    elif lo == -sp.oo or sp.simplify(bound - lo) >= 0:
+                        lo, lo_closed = bound, closed
+                    elif sp.simplify(bound - lo) == 0:
+                        lo_closed = lo_closed and closed
+                except Exception:
+                    lo, lo_closed = bound, closed
+            else:
+                try:
+                    if bound == sp.oo:
+                        hi, hi_closed = sp.oo, False
+                    elif hi == sp.oo or sp.simplify(hi - bound) >= 0:
+                        hi, hi_closed = bound, closed
+                    elif sp.simplify(hi - bound) == 0:
+                        hi_closed = hi_closed and closed
+                except Exception:
+                    hi, hi_closed = bound, closed
+        if not saw_bound:
+            return None
+        return (lo, lo_closed, hi, hi_closed)
+
+    def _solution_expr_to_slots(self, expr, symbol):
+        """
+        Flatten Or/And/Eq/Relational/list solution into slot descriptors:
+          ("point", sympy_value) or ("interval", (lo, lo_closed, hi, hi_closed))
+        """
+        if expr is None:
+            return []
+        if expr is True or expr == sp.true:
+            return [("interval", (-sp.oo, False, sp.oo, False))]
+        if expr is False or expr == sp.false:
+            return []
+
+        # Multi-root list / set forms: x = [-4/3, -1, 0]
+        if isinstance(expr, (list, tuple, set, frozenset, sp.FiniteSet)):
+            slots = []
+            for item in expr:
+                slots.extend(self._solution_expr_to_slots(item, symbol))
+            return slots
+
+        if isinstance(expr, sp.Or):
+            slots = []
+            for arg in sp.Or.make_args(expr):
+                slots.extend(self._solution_expr_to_slots(arg, symbol))
+            return slots
+
+        if isinstance(expr, sp.Equality):
+            lhs, rhs = expr.lhs, expr.rhs
+            # Eq(x, list-like) shouldn't happen; handle FiniteSet on one side
+            if isinstance(rhs, (list, tuple, set, frozenset, sp.FiniteSet)) and lhs == symbol:
+                return [("point", sp.simplify(s)) for s in rhs]
+            if isinstance(lhs, (list, tuple, set, frozenset, sp.FiniteSet)) and rhs == symbol:
+                return [("point", sp.simplify(s)) for s in lhs]
+            if lhs == symbol:
+                return [("point", sp.simplify(rhs))]
+            if rhs == symbol:
+                return [("point", sp.simplify(lhs))]
+            # Eq rearranged: try solve
+            try:
+                sols = sp.solve(expr, symbol)
+                if isinstance(sols, (list, tuple)):
+                    return [("point", sp.simplify(s)) for s in sols]
+                if sols is not None:
+                    return [("point", sp.simplify(sols))]
+            except Exception:
+                pass
+            return []
+
+        if isinstance(expr, sp.And):
+            interval = self._and_to_interval(expr, symbol)
+            if interval is not None:
+                return [("interval", interval)]
+            # Nested Or inside And — uncommon; flatten args
+            slots = []
+            for arg in sp.And.make_args(expr):
+                slots.extend(self._solution_expr_to_slots(arg, symbol))
+            return slots
+
+        if isinstance(expr, Relational):
+            parsed = self._relational_bound_on_symbol(expr, symbol)
+            if parsed is None:
+                return []
+            side, bound, closed = parsed
+            if side == "lo":
+                return [("interval", (bound, closed, sp.oo, False))]
+            return [("interval", (-sp.oo, False, bound, closed))]
+
+        # Bare numeric / symbolic root value (from a solution list item)
+        try:
+            if symbol not in getattr(expr, "free_symbols", set()):
+                return [("point", sp.simplify(expr))]
+        except Exception:
+            pass
+
+        return []
+
+    def _slots_from_evaluated_list_string(self, text, symbol):
+        """
+        Parse display strings like 'x = [-4/3, -1, 0]' or '[-4/3, -1, 0]'
+        into point slots when last_computed was only the target Symbol.
+        """
+        s = self._trim_str(text)
+        if not s:
+            return []
+        sym_name = str(symbol)
+        m = re.match(
+            rf"^{re.escape(sym_name)}\s*=\s*\[(.*)\]\s*$",
+            s,
+            flags=re.DOTALL,
+        )
+        if not m:
+            m = re.match(r"^\[(.*)\]\s*$", s, flags=re.DOTALL)
+        if not m:
+            return []
+        inner = m.group(1).strip()
+        if not inner:
+            return []
+        # Reuse arrayMatching paren-aware split via a lightweight local split
+        parts = []
+        buf = []
+        depth = 0
+        for ch in inner:
+            if ch in "([":
+                depth += 1
+                buf.append(ch)
+            elif ch in ")]":
+                depth = max(0, depth - 1)
+                buf.append(ch)
+            elif ch == "," and depth == 0:
+                piece = "".join(buf).strip()
+                if piece:
+                    parts.append(piece)
+                buf = []
+            else:
+                buf.append(ch)
+        piece = "".join(buf).strip()
+        if piece:
+            parts.append(piece)
+
+        slots = []
+        for part in parts:
+            try:
+                val = sp.sympify(part)
+                slots.append(("point", sp.simplify(val)))
+            except Exception:
+                expr = self._to_sympy(part)
+                if expr is not None:
+                    slots.append(("point", sp.simplify(expr)))
+        return slots
+
+    def _slot_to_virtual_payload(self, slot, parent_token, index):
+        kind, payload = slot
+        seq = f"{parent_token}__slot_{index}"
+        if kind == "point":
+            value = self._format_slot_endpoint(payload)
+            return {
+                "token": "shortAnswer",
+                "sequence_token": seq,
+                "indexed_token": seq,
+                "inputs": {
+                    "value": value,
+                    "accept_rounded_decimals": True,
+                },
+                "_virtual_from_formula": parent_token,
+                "_slot_display": value,
+            }
+        if kind == "interval":
+            lo, lo_closed, hi, hi_closed = payload
+            display = self._format_interval_slot(lo, lo_closed, hi, hi_closed)
+            # Ordered coordinate list; outer brackets stripped by grader
+            results = f"{self._format_slot_endpoint(lo)}, {self._format_slot_endpoint(hi)}"
+            return {
+                "token": "arrayMatchingUnordered",
+                "sequence_token": seq,
+                "indexed_token": seq,
+                "inputs": {
+                    "results": results,
+                    "ordered": True,
+                    "partial_credit": False,
+                },
+                "_virtual_from_formula": parent_token,
+                "_slot_display": display,
+            }
+        return None
+
+    def _virtual_payloads_from_formula(self, formula_payload):
+        """
+        Evaluate a simplify-for-variable formula and expand into virtual keys.
+        Returns (payloads_list, error_message).
+        """
+        try:
+            validator = self._validator_for_payload(formula_payload)
+        except Exception as exc:
+            return [], f"Could not load formula: {exc}"
+
+        inputs = formula_payload.get("inputs") or {}
+        method = str(
+            inputs.get("solve method")
+            or validator.runtime_values.get("solve method")
+            or validator.data.get("solve method")
+            or ""
+        ).strip()
+        target = str(
+            inputs.get("variable to simplify")
+            or inputs.get("variable to solve for")
+            or validator.runtime_values.get("variable to simplify")
+            or validator.runtime_values.get("variable to solve for")
+            or ""
+        ).strip()
+        if target in ("-- N/A --", "-- choose variable --"):
+            target = ""
+
+        if method != "simplify":
+            return [], (
+                "Linked formula must use solve method “simplify” "
+                "with a target variable selected."
+            )
+        if not target:
+            return [], (
+                "Linked formula must have a target variable selected "
+                "under “Target Variable to Simplify”."
+            )
+
+        if not validator.is_valid():
+            err = next(iter(validator.errors.values()), "invalid formula")
+            return [], f"Linked formula is invalid: {err}"
+
+        try:
+            evaluated = validator.evaluate_output()
+        except Exception as exc:
+            return [], f"Linked formula could not be evaluated: {exc}"
+
+        result_obj = getattr(validator, "last_computed_sympy_result", None)
+        solution_list = getattr(validator, "last_solution_list", None)
+        if result_obj is None and not solution_list:
+            return [], "Linked formula produced no simplify result to expand."
+
+        # Tuple (lhs, rhs) from non-targeted simplify — not expandable
+        if isinstance(result_obj, tuple) and not solution_list:
+            return [], (
+                "Linked formula simplify result is not a solved relation for the "
+                "target variable (got a left/right pair). Ensure a target variable is set."
+            )
+
+        symbol = sp.Symbol(target)
+        slots = []
+        if solution_list:
+            slots = self._solution_expr_to_slots(list(solution_list), symbol)
+        if not slots and result_obj is not None and not isinstance(result_obj, tuple):
+            slots = self._solution_expr_to_slots(result_obj, symbol)
+        # Multi-root display form: last_computed is often just the Symbol `x`
+        # while evaluated_output is "x = [-4/3, -1, 0]".
+        if not slots:
+            slots = self._slots_from_evaluated_list_string(evaluated, symbol)
+        if not slots:
+            return [], (
+                "Linked formula simplify result has no extractable solutions "
+                "(equalities, intervals, or a solution list) for the target variable."
+            )
+
+        parent = (
+            formula_payload.get("sequence_token")
+            or formula_payload.get("indexed_token")
+            or "formula"
+        )
+        virtual = []
+        for i, slot in enumerate(slots):
+            vp = self._slot_to_virtual_payload(slot, parent, i)
+            if vp:
+                virtual.append(vp)
+        if not virtual:
+            return [], "Could not build answer slots from the formula simplify result."
+        return virtual, None
+
+    def _entry_matches_key(self, entry, key_payload):
+        if not isinstance(entry, dict) or not key_payload:
+            return False
+        archetype = key_payload.get("token")
+        entry_type = entry.get("type")
+        if entry_type not in self.STUDENT_ENTRY_TYPES:
+            return False
+        if archetype not in ("shortAnswer", "arrayMatchingUnordered", "numAnswer"):
+            return False
+
+        # Same entry type as the linked key — use that key's grader.
+        if entry_type == archetype:
+            try:
+                validator = self._validator_for_payload(key_payload)
+                if not validator.is_valid():
+                    return False
+                result = validator.grade_answer(entry.get("value"), 1.0)
+                earned = float(result.get("earned") or 0)
+                mx = float(result.get("max") or 0)
+                return mx > 0 and abs(earned - mx) < 1e-9
+            except Exception:
+                return False
+
+        # Cross-accept formula/string ↔ number when values are mathematically equal
+        # (e.g. shortAnswer "-1/2" vs numAnswer entry "-0.5", and vice versa).
+        if {entry_type, archetype} == {"shortAnswer", "numAnswer"}:
+            return self._short_num_values_equivalent(entry.get("value"), key_payload)
+
+        return False
+
+    def _resolve_key_compare_string(self, key_payload):
+        """Author-facing correct value as a string suitable for sympy / float parse."""
+        try:
+            validator = self._validator_for_payload(key_payload)
+            if not validator.is_valid():
+                return None
+            archetype = key_payload.get("token")
+            if archetype == "shortAnswer":
+                raw = validator.runtime_values.get("simplified_key")
+                if raw is None:
+                    raw = validator.runtime_values.get(
+                        "resolved_value",
+                        validator.evaluate_output(),
+                    )
+                return self._trim_str(raw)
+            if archetype == "numAnswer":
+                resolved = validator.runtime_values.get("resolved_value")
+                if resolved is None:
+                    resolved = validator.evaluate_output()
+                return self._trim_str(resolved)
+        except Exception:
+            return None
+        return None
+
+    def _value_to_comparable_expr(self, raw):
+        """Parse decimals or fractions (e.g. -0.5, -1/2) into a SymPy expression."""
+        trimmed = self._trim_str(raw)
+        if not trimmed:
+            return None
+        expr = self._to_sympy(trimmed)
+        if expr is not None and not isinstance(expr, sp.Equality):
+            return expr
+        try:
+            direct = float(trimmed)
+            if math.isfinite(direct):
+                return sp.Float(direct)
+        except (TypeError, ValueError):
+            pass
+        return None
+
+    def _short_num_values_equivalent(self, student_raw, key_payload):
+        """
+        True when student text and linked shortAnswer/numAnswer key are the same
+        number (exact sympy equivalence, or round-to-3 fallback).
+        """
+        correct_raw = self._resolve_key_compare_string(key_payload)
+        if correct_raw is None:
+            return False
+        student_expr = self._value_to_comparable_expr(student_raw)
+        correct_expr = self._value_to_comparable_expr(correct_raw)
+        if student_expr is not None and correct_expr is not None:
+            if self._exprs_equivalent(student_expr, correct_expr):
+                return True
+            # Fallback for messy floats: same 3-decimal rounding as shortAnswer option
+            try:
+                s_num = float(sp.N(student_expr))
+                c_num = float(sp.N(correct_expr))
+                if (
+                    math.isfinite(s_num)
+                    and math.isfinite(c_num)
+                    and round(s_num, 3) == round(c_num, 3)
+                ):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _match_counts(self, key_payloads, entries):
+        """
+        Multiset match: each author key consumes at most one student entry.
+
+        So two keys both equal to -0.5 require two submissions (any mix of
+        -0.5 / -1/2). One key of -0.5 with both forms submitted → 1 match + 1 extra wrong.
+        """
+        remaining = list(entries or [])
+        matches = 0
+        for key_payload in key_payloads or []:
+            found_idx = None
+            for i, entry in enumerate(remaining):
+                if self._entry_matches_key(entry, key_payload):
+                    found_idx = i
+                    break
+            if found_idx is not None:
+                matches += 1
+                remaining.pop(found_idx)
+        wrongs = len(remaining)
+        return matches, wrongs
+
+    def is_valid(self):
+        if not super().is_valid():
+            return False
+
+        correct_is_dne = self._coerce_bool(
+            self.data.get(
+                "correct_is_dne",
+                self.runtime_values.get("correct_is_dne", False),
+            )
+        )
+        mode = str(
+            self.data.get(
+                "grading_mode",
+                self.runtime_values.get("grading_mode", "all_or_nothing"),
+            )
+            or "all_or_nothing"
+        ).strip()
+        if mode not in self.GRADING_MODES:
+            mode = "all_or_nothing"
+
+        raw_answers = self.data.get("answers", self.runtime_values.get("answers", []))
+        answers = self._normalize_answers_list(raw_answers)
+
+        if correct_is_dne:
+            answers = []
+            self.runtime_values["key_payloads"] = []
+        else:
+            if not answers:
+                self.errors["answers"] = (
+                    "Link at least one shortAnswer, arrayMatchingUnordered, numAnswer, "
+                    "or simplify-formula key — or check Correct answer is DNE."
+                )
+                return False
+            key_payloads = []
+            for tok in answers:
+                payload = self._find_payload(tok)
+                if not payload:
+                    self.errors["answers"] = f"Linked key {tok} was not found in the workspace."
+                    return False
+                archetype = payload.get("token")
+                if archetype not in self.ALLOWED_KEY_ARCHETYPES:
+                    self.errors["answers"] = (
+                        f"{tok} must be a shortAnswer, arrayMatchingUnordered, numAnswer, "
+                        f"or formula (simplify with target variable) card."
+                    )
+                    return False
+
+                if archetype == "formula":
+                    virtual, err = self._virtual_payloads_from_formula(payload)
+                    if err:
+                        self.errors["answers"] = f"{tok}: {err}"
+                        return False
+                    key_payloads.extend(virtual)
+                    continue
+
+                # Ensure the linked key itself validates
+                try:
+                    v = self._validator_for_payload(payload)
+                    if not v.is_valid():
+                        self.errors["answers"] = (
+                            f"Linked key {tok} has validation errors and cannot be used."
+                        )
+                        return False
+                except Exception as exc:
+                    self.errors["answers"] = f"Linked key {tok} could not be validated: {exc}"
+                    return False
+                key_payloads.append(payload)
+            self.runtime_values["key_payloads"] = key_payloads
+
+        self.runtime_values["correct_is_dne"] = correct_is_dne
+        self.runtime_values["grading_mode"] = mode
+        self.runtime_values["answers"] = answers
+        self.cleaned_data["correct_is_dne"] = correct_is_dne
+        self.cleaned_data["grading_mode"] = mode
+        self.cleaned_data["answers"] = answers
+        return True
+
+    def _expand_answers_to_key_payloads(self, answers):
+        """Resolve linked tokens into grading payloads (formula → virtual slots)."""
+        key_payloads = []
+        for tok in answers or []:
+            payload = self._find_payload(tok)
+            if not payload:
+                continue
+            if payload.get("token") == "formula":
+                virtual, err = self._virtual_payloads_from_formula(payload)
+                if not err and virtual:
+                    key_payloads.extend(virtual)
+                continue
+            key_payloads.append(payload)
+        return key_payloads
+
+    def evaluate_output(self):
+        if self.runtime_values.get("correct_is_dne") is None:
+            if not self.is_valid():
+                raise ValueError("Cannot evaluate answersOrDne: configuration is invalid.")
+        self.output_types = ["content"]
+        if self.runtime_values.get("correct_is_dne"):
+            return "DNE"
+
+        key_payloads = self.runtime_values.get("key_payloads")
+        if key_payloads is None:
+            key_payloads = self._expand_answers_to_key_payloads(
+                self.runtime_values.get("answers") or []
+            )
+
+        lines = []
+        for payload in key_payloads:
+            display = payload.get("_slot_display")
+            if display:
+                lines.append(str(display))
+                continue
+            try:
+                validator = self._validator_for_payload(payload)
+                if not validator.is_valid():
+                    tok = payload.get("sequence_token") or payload.get("indexed_token") or "?"
+                    lines.append(f"<{tok}>")
+                    continue
+                out = validator.evaluate_output()
+                lines.append(str(out) if out is not None else "")
+            except Exception:
+                tok = payload.get("sequence_token") or payload.get("indexed_token") or "?"
+                lines.append(f"<{tok}>")
+        return "\n".join(lines) if lines else ""
+
+    def grade_answer(self, student_input, points_available):
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        if self.runtime_values.get("correct_is_dne") is None and self.runtime_values.get("answers") is None:
+            # Soft hydrate for grading without prior is_valid
+            self.is_valid()
+
+        correct_is_dne = self._coerce_bool(self.runtime_values.get("correct_is_dne", False))
+        mode = self.runtime_values.get("grading_mode") or "all_or_nothing"
+        answers = self.runtime_values.get("answers") or []
+        key_payloads = self.runtime_values.get("key_payloads")
+        if key_payloads is None and not correct_is_dne:
+            key_payloads = self._expand_answers_to_key_payloads(answers)
+
+        dne = False
+        entries = []
+        if isinstance(student_input, dict):
+            dne = self._coerce_bool(student_input.get("dne", False))
+            raw_entries = student_input.get("entries", [])
+            if isinstance(raw_entries, list):
+                for e in raw_entries:
+                    if not isinstance(e, dict):
+                        continue
+                    et = e.get("type")
+                    if et not in self.STUDENT_ENTRY_TYPES:
+                        continue
+                    entries.append({"type": et, "value": e.get("value")})
+        elif isinstance(student_input, str) and student_input.strip().upper() in ("DNE", "NONE", "N/A"):
+            dne = True
+
+        if correct_is_dne:
+            if dne and not entries:
+                return {"earned": pts, "max": pts, "detail": "DNE (correct)"}
+            if entries:
+                return {"earned": 0.0, "max": pts, "detail": "Incorrect (expected DNE)"}
+            if dne:
+                return {"earned": pts, "max": pts, "detail": "DNE (correct)"}
+            return {"earned": 0.0, "max": pts, "detail": "No student input"}
+
+        # Keys exist
+        if dne:
+            return {"earned": 0.0, "max": pts, "detail": "Incorrect (DNE when answers exist)"}
+        if not entries:
+            return {"earned": 0.0, "max": pts, "detail": "No student input"}
+
+        n = len(key_payloads or [])
+        if n == 0:
+            return {"earned": 0.0, "max": pts, "detail": "No answer key"}
+
+        matches, wrongs = self._match_counts(key_payloads, entries)
+
+        if mode == "all_or_nothing":
+            if matches == n and wrongs == 0:
+                return {"earned": pts, "max": pts, "detail": "All correct"}
+            return {"earned": 0.0, "max": pts, "detail": "Incorrect"}
+
+        sub = pts / n
+        earned = matches * sub - 0.5 * sub * wrongs
+        if earned < 0:
+            earned = 0.0
+        return {
+            "earned": earned,
+            "max": pts,
+            "detail": f"{matches}/{n} matched (per answer)",
         }
 
 
@@ -3135,6 +5315,10 @@ class MultipleChoiceAnswerEntity(BaseEntity):
     """
 
     GRADING_METHODS = ("all_or_nothing", "practical", "proportional")
+    # Sequence tokens like <randInt1> / &lt;formula2&gt; embedded in choice text.
+    _EMBEDDED_TOKEN_RE = re.compile(
+        r"(?:&lt;|<)([A-Za-z][A-Za-z0-9_]*\d+)(?:&gt;|>)"
+    )
 
     def _coerce_bool(self, raw, default=False):
         if raw is None:
@@ -3144,16 +5328,25 @@ class MultipleChoiceAnswerEntity(BaseEntity):
         return str(raw).lower() in ("true", "1", "yes", "checked", "on")
 
     def _resolve_content(self, raw):
+        """
+        Resolve choice text for grading/display.
+        Whole-string or mixed prose/LaTeX may include embedded <token> refs.
+        """
         if raw is None:
             return ""
         text = str(raw).strip()
         if not text:
             return ""
-        if re.match(r"^<([^>]+)>$", text):
-            try:
-                return str(self.resolve_token_dependency(text)).strip()
-            except Exception as exc:
-                raise ValidationError(str(getattr(exc, "message", exc)))
+
+        def _replace_token(match):
+            seq = match.group(1).strip()
+            return str(self.resolve_token_dependency(f"<{seq}>")).strip()
+
+        try:
+            if self._EMBEDDED_TOKEN_RE.search(text):
+                return self._EMBEDDED_TOKEN_RE.sub(_replace_token, text)
+        except Exception as exc:
+            raise ValidationError(str(getattr(exc, "message", exc)))
         return text
 
     def _normalize_options(self, raw_options):
@@ -3219,19 +5412,23 @@ class MultipleChoiceAnswerEntity(BaseEntity):
             return False
 
         for opt in options:
-            if not str(opt.get("content_resolved") or "").strip() and not str(opt.get("content") or "").strip():
+            content_raw = str(opt.get("content") or "").strip()
+            content_resolved = str(opt.get("content_resolved") or "").strip()
+            if not content_resolved and not content_raw:
                 self.errors["options"] = "Each choice must have text or a linked Dynamic Variable."
                 return False
-            # Linked but failed resolve already set errors
-            if str(opt.get("content") or "").strip().startswith("<") and not str(opt.get("content_resolved") or "").strip():
+            # Whole-string link that failed to resolve
+            if (
+                re.match(r"^<[^<>]+>$", content_raw)
+                and not content_resolved
+            ):
                 if "options" not in self.errors:
                     self.errors["options"] = f"Could not resolve linked option {opt.get('id')}."
                 return False
 
         num_correct = sum(1 for o in options if o.get("is_correct"))
-        if num_correct < 1:
-            self.errors["options"] = "At least one choice must be marked as correct."
-            return False
+        # Zero correct is allowed: students must leave all choices unchecked for full credit.
+        # Radio mode is only valid with exactly one correct option (cannot uncheck a radio).
 
         method = str(
             self.runtime_values.get(
@@ -3270,16 +5467,15 @@ class MultipleChoiceAnswerEntity(BaseEntity):
                 raise ValueError("Cannot evaluate multipleChoiceAnswer: configuration is invalid.")
             options = self.runtime_values.get("options") or []
 
-        n = len(options)
-        k = sum(1 for o in options if o.get("is_correct"))
-        method = self.runtime_values.get("grading_method", "all_or_nothing")
-        method_label = {
-            "all_or_nothing": "all-or-nothing",
-            "practical": "practical",
-            "proportional": "proportional",
-        }.get(method, method)
         self.output_types = ["content"]
-        return f"{n} options, {k} correct ({method_label})"
+        lines = []
+        for opt in options:
+            if not opt.get("is_correct"):
+                continue
+            text = str(opt.get("content_resolved") or opt.get("content") or "").strip()
+            if text:
+                lines.append(text)
+        return "\n".join(lines) if lines else ""
 
     def grade_answer(self, student_input, points_available):
         try:
@@ -3329,6 +5525,20 @@ class MultipleChoiceAnswerEntity(BaseEntity):
             elif token in content_to_id:
                 selected_set.add(content_to_id[token])
 
+        # Zero keyed-correct options: full credit only when nothing is selected.
+        if not correct_ids:
+            if not selected_set:
+                return {
+                    "earned": pts,
+                    "max": pts,
+                    "detail": "Correct: no options selected",
+                }
+            return {
+                "earned": 0.0,
+                "max": pts,
+                "detail": "Incorrect: at least one option was selected (none are correct)",
+            }
+
         if not selected and not selected_set:
             return {"earned": 0.0, "max": pts, "detail": "No student input"}
         if not selected_set:
@@ -3354,8 +5564,6 @@ class MultipleChoiceAnswerEntity(BaseEntity):
             return {"earned": 0.0, "max": pts, "detail": "All or nothing: incorrect"}
 
         if method == "practical":
-            if num_correct <= 0:
-                return {"earned": 0.0, "max": pts, "detail": "Practical: no correct options"}
             points_per_correct = pts / num_correct
             penalty_per_wrong = points_per_correct / 2.0
             earned = correct_selected * points_per_correct - wrong_selected * penalty_per_wrong
@@ -3368,19 +5576,6 @@ class MultipleChoiceAnswerEntity(BaseEntity):
             }
 
         # proportional
-        if num_correct <= 0:
-            # Defensive: not allowed by validation
-            if num_incorrect <= 0:
-                earned = 0.0
-            else:
-                earned = pts * (wrong_selected / num_incorrect)
-            if earned < 0:
-                earned = 0.0
-            return {
-                "earned": earned,
-                "max": pts,
-                "detail": f"Proportional: {correct_selected} correct selected, {wrong_selected} wrong",
-            }
 
         correct_term = correct_selected / num_correct
         if num_incorrect <= 0:
@@ -3805,7 +6000,372 @@ class SlopeFieldGraphEntity(BaseEntity):
             "max": float(max_total),
             "detail": f"{correct}/{len(selected)} coordinates correct",
         }
-    
+
+
+class GraphBetweenPointsEntity(BaseEntity):
+    """
+    Answer field: piecewise graph from author segments (line / parabola / cubic)
+    with optional vertices and optional student-drawn hidden segments.
+    """
+
+    SEGMENT_TYPES = (
+        "concave_down_parabola",
+        "concave_up_parabola",
+        "line",
+        "cubic_parabola",
+    )
+    START_DIVIDERS = ("<", "<=", "none", "arrow")
+    END_DIVIDERS = (">", ">=", "none", "arrow")
+
+    def _coerce_bool(self, raw, default=False):
+        if raw is None:
+            return default
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).lower() in ("true", "1", "yes", "checked", "on")
+
+    def _parse_axis_range(self, field_name, raw, default):
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw) if raw.strip() else None
+            except Exception:
+                raw = None
+        if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+            # Flat keys fallback
+            prefix = "x_" if field_name.startswith("x") else "y_"
+            try:
+                mn = self.data.get(f"{prefix}min")
+                mx = self.data.get(f"{prefix}max")
+                st = self.data.get(f"{prefix}step")
+                if mn is not None and mx is not None and st is not None:
+                    raw = [mn, mx, st]
+            except Exception:
+                raw = None
+        if not isinstance(raw, (list, tuple)) or len(raw) < 3:
+            raw = default
+        try:
+            mn = float(raw[0])
+            mx = float(raw[1])
+            st = float(raw[2])
+        except (TypeError, ValueError):
+            self.errors[field_name] = "Axis range must be three numbers: min, max, step."
+            return list(default)
+        if not (math.isfinite(mn) and math.isfinite(mx) and math.isfinite(st)):
+            self.errors[field_name] = "Axis range values must be finite."
+            return list(default)
+        if mn >= mx:
+            self.errors[field_name] = "Axis min must be less than max."
+            return list(default)
+        if st <= 0:
+            self.errors[field_name] = "Axis step must be positive."
+            return list(default)
+        return [mn, mx, st]
+
+    def _parse_point(self, raw):
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s.startswith("["):
+                try:
+                    raw = json.loads(s)
+                except Exception:
+                    parts = [p.strip() for p in s.strip("[]()").split(",")]
+                    raw = parts
+            else:
+                parts = [p.strip() for p in s.split(",")]
+                raw = parts
+        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+            return None
+        try:
+            return [float(raw[0]), float(raw[1])]
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_json_list(self, raw, default=None):
+        if default is None:
+            default = []
+        if raw is None:
+            return list(default)
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw) if raw.strip() else default
+            except Exception:
+                return list(default)
+        if not isinstance(raw, list):
+            return list(default)
+        return raw
+
+    def is_valid(self):
+        # Soft base validation — blueprint keys are flexible for nested arrays
+        if not isinstance(self.data, dict):
+            self.errors["inputs"] = "Inputs must be a structured map."
+            return False
+
+        from assessment_tool.graph_between_points_geometry import (
+            build_segment_samples,
+            point_in_bounds,
+            segment_x_covers,
+        )
+
+        show_grid = self._coerce_bool(self.data.get("show_grid", True), True)
+        let_student_draw = self._coerce_bool(self.data.get("let_student_draw", False), False)
+        x_range = self._parse_axis_range("x-axis range", self.data.get("x-axis range"), [-5.0, 5.0, 1.0])
+        y_range = self._parse_axis_range("y-axis range", self.data.get("y-axis range"), [-5.0, 5.0, 1.0])
+        if self.errors:
+            return False
+
+        x_min, x_max = x_range[0], x_range[1]
+        y_min, y_max = y_range[0], y_range[1]
+
+        raw_segments = self._parse_json_list(self.data.get("segments"), [])
+        segments = []
+        for idx, item in enumerate(raw_segments):
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("id") or f"seg_{idx + 1}").strip() or f"seg_{idx + 1}"
+            start = self._parse_point(item.get("start"))
+            end = self._parse_point(item.get("end"))
+            if not start or not end:
+                self.errors["segments"] = f"Segment {sid} needs two valid coordinates."
+                return False
+            if not point_in_bounds(start[0], start[1], x_min, x_max, y_min, y_max):
+                self.errors["segments"] = (
+                    f"Segment {sid} start is outside allowed bounds "
+                    f"(y must be strictly inside axis; x within range)."
+                )
+                return False
+            if not point_in_bounds(end[0], end[1], x_min, x_max, y_min, y_max):
+                self.errors["segments"] = (
+                    f"Segment {sid} end is outside allowed bounds "
+                    f"(y must be strictly inside axis; x within range)."
+                )
+                return False
+            stype = str(item.get("type") or "").strip()
+            if stype not in self.SEGMENT_TYPES:
+                self.errors["segments"] = f"Segment {sid} has an invalid type."
+                return False
+            sd = str(item.get("start_divider") or "none").strip()
+            ed = str(item.get("end_divider") or "none").strip()
+            if sd not in self.START_DIVIDERS:
+                sd = "none"
+            if ed not in self.END_DIVIDERS:
+                ed = "none"
+            student_draw = self._coerce_bool(item.get("student_draw"), False) and let_student_draw
+            segments.append({
+                "id": sid,
+                "start": start,
+                "end": end,
+                "type": stype,
+                "start_divider": sd,
+                "end_divider": ed,
+                "student_draw": student_draw,
+            })
+
+        if len(segments) < 1:
+            self.errors["segments"] = "Add at least one graph segment."
+            return False
+
+        seg_by_id = {s["id"]: s for s in segments}
+        raw_vertices = self._parse_json_list(self.data.get("vertices"), [])
+        vertices = []
+        for idx, item in enumerate(raw_vertices):
+            if not isinstance(item, dict):
+                continue
+            vid = str(item.get("id") or f"vtx_{idx + 1}").strip() or f"vtx_{idx + 1}"
+            preferred = str(item.get("segment_id") or "").strip()
+            if not preferred or preferred not in seg_by_id:
+                continue
+            target = seg_by_id[preferred]
+            if target["type"] == "line":
+                continue
+            # Caps
+            already = [v for v in vertices if v["segment_id"] == preferred]
+            if target["type"] in ("concave_down_parabola", "concave_up_parabola") and len(already) >= 1:
+                continue
+            if target["type"] == "cubic_parabola" and len(already) >= 2:
+                continue
+            # Point is auto-calculated; ignore author-provided coordinates.
+            vertices.append({"id": vid, "point": [], "segment_id": preferred})
+
+        # Segments with vertices cannot be student-drawn
+        verts_by_seg = {}
+        for v in vertices:
+            verts_by_seg.setdefault(v["segment_id"], []).append(v)
+        for s in segments:
+            if verts_by_seg.get(s["id"]):
+                s["student_draw"] = False
+
+        raw_seeds = self.data.get("curve_seeds") or {}
+        if isinstance(raw_seeds, str):
+            try:
+                raw_seeds = json.loads(raw_seeds) if raw_seeds.strip() else {}
+            except Exception:
+                raw_seeds = {}
+        if not isinstance(raw_seeds, dict):
+            raw_seeds = {}
+        curve_seeds = {}
+        for s in segments:
+            sid = s["id"]
+            try:
+                curve_seeds[sid] = int(raw_seeds.get(sid, hash(sid) & 0xFFFFFFFF))
+            except (TypeError, ValueError):
+                curve_seeds[sid] = hash(sid) & 0xFFFFFFFF
+
+        # Build samples (validates geometry / synthesis)
+        built = []
+        for s in segments:
+            try:
+                built.append(
+                    build_segment_samples(
+                        s, vertices, x_range, y_range, curve_seeds[s["id"]]
+                    )
+                )
+            except ValueError as exc:
+                self.errors["segments"] = f"{s['id']}: {exc}"
+                return False
+
+        # Fill auto-calculated vertex coordinates from resolved peaks/extrema
+        pending_by_seg = {}
+        for v in vertices:
+            pending_by_seg.setdefault(v["segment_id"], []).append(v)
+        for seg in built:
+            sid = seg.get("id")
+            resolved = seg.get("resolved_vertices") or []
+            rows = pending_by_seg.get(sid) or []
+            for i, v in enumerate(rows):
+                if i < len(resolved):
+                    v["point"] = [float(resolved[i][0]), float(resolved[i][1])]
+        # Drop any vertex that still has no point (failed resolve)
+        vertices = [v for v in vertices if isinstance(v.get("point"), list) and len(v["point"]) >= 2]
+
+        self.runtime_values["show_grid"] = show_grid
+        self.runtime_values["let_student_draw"] = let_student_draw
+        self.runtime_values["resolved_x-axis range"] = x_range
+        self.runtime_values["resolved_y-axis range"] = y_range
+        self.runtime_values["segments"] = segments
+        self.runtime_values["vertices"] = vertices
+        self.runtime_values["curve_seeds"] = curve_seeds
+        self.runtime_values["built_segments"] = built
+
+        self.cleaned_data["show_grid"] = show_grid
+        self.cleaned_data["let_student_draw"] = let_student_draw
+        self.cleaned_data["x-axis range"] = x_range
+        self.cleaned_data["y-axis range"] = y_range
+        self.cleaned_data["x_min"] = x_range[0]
+        self.cleaned_data["x_max"] = x_range[1]
+        self.cleaned_data["x_step"] = x_range[2]
+        self.cleaned_data["y_min"] = y_range[0]
+        self.cleaned_data["y_max"] = y_range[1]
+        self.cleaned_data["y_step"] = y_range[2]
+        self.cleaned_data["segments"] = segments
+        self.cleaned_data["vertices"] = vertices
+        self.cleaned_data["curve_seeds"] = curve_seeds
+        return True
+
+    def evaluate_output(self):
+        if self.runtime_values.get("built_segments") is None:
+            if not self.is_valid():
+                raise ValueError("Cannot evaluate graphBetweenPoints: configuration is invalid.")
+        x_range = self.runtime_values["resolved_x-axis range"]
+        y_range = self.runtime_values["resolved_y-axis range"]
+        built = self.runtime_values["built_segments"]
+        let_draw = self.runtime_values.get("let_student_draw", False)
+
+        author_visible = []
+        student_targets = []
+        for seg in built:
+            entry = {
+                "id": seg["id"],
+                "type": seg["type"],
+                "start": seg["start"],
+                "end": seg["end"],
+                "start_divider": seg["start_divider"],
+                "end_divider": seg["end_divider"],
+                "student_draw": bool(seg.get("student_draw")),
+                "samples": seg.get("samples") or [],
+                "markers": seg.get("markers") or {},
+                "resolved_vertices": seg.get("resolved_vertices") or [],
+                "equation": seg.get("equation") or "",
+            }
+            if let_draw and seg.get("student_draw"):
+                student_targets.append({
+                    "id": seg["id"],
+                    "type": seg["type"],
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "start_divider": seg["start_divider"],
+                    "end_divider": seg["end_divider"],
+                })
+            else:
+                author_visible.append(entry)
+
+        manifest = {
+            "archetype": "graphBetweenPoints",
+            "bounds": {
+                "x_range": {"min": x_range[0], "max": x_range[1], "step": x_range[2]},
+                "y_range": {"min": y_range[0], "max": y_range[1], "step": y_range[2]},
+            },
+            "visualization": {
+                "show_grid_overlay": bool(self.runtime_values.get("show_grid", True)),
+            },
+            "let_student_draw": let_draw,
+            "segments": built,
+            "author_visible": author_visible,
+            "student_targets": student_targets,
+            "vertices": self.runtime_values.get("vertices") or [],
+            "curve_seeds": self.runtime_values.get("curve_seeds") or {},
+        }
+        self.output_types = ["content"]
+        return json.dumps(manifest)
+
+    def grade_answer(self, student_input, points_available):
+        from assessment_tool.graph_between_points_geometry import segments_match
+
+        try:
+            pts = float(points_available) if points_available is not None else 0.0
+        except (TypeError, ValueError):
+            pts = 0.0
+        if not math.isfinite(pts) or pts < 0:
+            pts = 0.0
+
+        if self.runtime_values.get("segments") is None:
+            self.is_valid()
+
+        targets = [
+            s for s in (self.runtime_values.get("segments") or [])
+            if s.get("student_draw")
+        ]
+        n = len(targets)
+        if n == 0:
+            return {"earned": 0.0, "max": 0.0, "detail": "No student-drawn segments"}
+
+        student_segs = []
+        if isinstance(student_input, dict):
+            raw = student_input.get("segments", [])
+            if isinstance(raw, list):
+                student_segs = [s for s in raw if isinstance(s, dict)]
+        elif isinstance(student_input, list):
+            student_segs = [s for s in student_input if isinstance(s, dict)]
+
+        remaining = list(student_segs)
+        matches = 0
+        for key in targets:
+            found = None
+            for i, cand in enumerate(remaining):
+                if segments_match(key, cand):
+                    found = i
+                    break
+            if found is not None:
+                matches += 1
+                remaining.pop(found)
+
+        sub = pts / n
+        earned = matches * sub
+        return {
+            "earned": float(earned),
+            "max": float(pts),
+            "detail": f"{matches}/{n} segments matched",
+        }
+
 
 def get_entity_validator(token_string, data_payload, pattern_blueprint, all_entities_payload=None):
     """
@@ -3826,9 +6386,11 @@ def get_entity_validator(token_string, data_payload, pattern_blueprint, all_enti
         "longAnswer": LongAnswerEntity,
         "canvas": CanvasEntity,
         "arrayMatchingUnordered": ArrayMatchingUnorderedEntity,
+        "answersOrDne": AnswersOrDneEntity,
         "multipleChoiceAnswer": MultipleChoiceAnswerEntity,
         "matrixAnswer": MatrixAnswerEntity,
         "slopeFieldGraph": SlopeFieldGraphEntity,
+        "graphBetweenPoints": GraphBetweenPointsEntity,
     }
     
     # Fallback to base configuration validator if a custom token model isn't written yet
@@ -3883,6 +6445,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 latex_output = "[Graph Component]"
             elif archetype_name == 'slopeFieldGraph':
                 latex_output = "[Slope Field Graph]"
+            elif archetype_name == 'graphBetweenPoints':
+                latex_output = "[Graph Between Points]"
             elif archetype_name == 'matrix' or archetype_name == 'matrixResultByIndex':
                 # Matrix / cell extract: format SymPy results as LaTeX
                 if hasattr(validator, 'last_computed_sympy_result'):
@@ -3914,12 +6478,40 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
 
             # --- SymPy LaTeX Rendering Factory for Formulas ---
             if archetype_name.lower().startswith('formula'):
+                # Prefer free symbols from the expression being operated on
+                # (e.g. linked formula1 output before simplify-for-target).
+                if hasattr(validator, 'last_extracted_free_symbols') and validator.last_extracted_free_symbols:
+                    sym_set = set(validator.last_extracted_free_symbols)
+
                 if hasattr(validator, 'last_computed_sympy_result'):
                     try:
                         result_obj = validator.last_computed_sympy_result
-                        if isinstance(result_obj, tuple):
-                            latex_output = f"{sp.latex(result_obj[0])} = {sp.latex(result_obj[1])}"
-                            sym_set = result_obj[0].free_symbols.union(result_obj[1].free_symbols)
+                        # sp.latex(None) → \text{None}; keep evaluated string instead
+                        if result_obj is None:
+                            latex_output = evaluated_output
+                        elif isinstance(result_obj, tuple) and len(result_obj) >= 2:
+                            # Preserve <= / >= / < / > from the formula (do not hard-code "=").
+                            display_op = getattr(validator, "last_relation_display_op", None)
+                            if not display_op:
+                                op_match = re.search(
+                                    r"(<=|>=|==|<|>|=)",
+                                    str(evaluated_output or ""),
+                                )
+                                display_op = op_match.group(1) if op_match else "="
+                            if display_op == "==":
+                                display_op = "="
+                            op_tex = {
+                                "<=": r"\leq",
+                                ">=": r"\geq",
+                                "<": "<",
+                                ">": ">",
+                                "=": "=",
+                            }.get(display_op, "=")
+                            latex_output = (
+                                f"{sp.latex(result_obj[0])} {op_tex} {sp.latex(result_obj[1])}"
+                            )
+                            if not sym_set:
+                                sym_set = result_obj[0].free_symbols.union(result_obj[1].free_symbols)
                         else:
                             if isinstance(result_obj, sp.Symbol):
                                 eval_str = str(evaluated_output)
@@ -3946,7 +6538,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                             else:
                                 latex_output = sp.latex(result_obj)
                                 
-                            sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
+                            if not sym_set:
+                                sym_set = result_obj.free_symbols if hasattr(result_obj, 'free_symbols') else set()
 
                     except Exception as e:
                         logger.exception(
@@ -3957,19 +6550,10 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
 
             # --- Unified Variable Extraction Pass (Formulas & Matrices) ---
             if sym_set:
-                # 🎯 Compiled regex pattern matching any lowercase Greek letter
-                greek_pattern = r'^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)'
-                
                 for sym in sym_set:
                     sym_str = str(sym)
-                    
-                    is_standard = bool(re.match(r'^[a-zA-Z]\d*$', sym_str))
-                    is_subscript = bool(re.match(r'^[a-zA-Z]_\d+$', sym_str))
-                    is_greek_base = bool(re.match(greek_pattern + r'$', sym_str, re.IGNORECASE))
-                    is_greek_sub = bool(re.match(greek_pattern + r'_\d+$', sym_str, re.IGNORECASE))
-                    is_greek_num = bool(re.match(greek_pattern + r'\d+$', sym_str, re.IGNORECASE))
-                    
-                    if is_standard or is_subscript or is_greek_base or is_greek_sub or is_greek_num:
+                    ok, _err = _is_valid_algebraic_variable_name(sym_str)
+                    if ok:
                         extracted_vars.append(sym_str)
 
         except Exception as eval_err:
@@ -3992,6 +6576,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "formulas"
             elif archetype_name == "slopeFieldGraph":
                 error_field = "equation"
+            elif archetype_name == "graphBetweenPoints":
+                error_field = "segments"
             elif archetype_name == "numAnswer":
                 error_field = "value"
             elif archetype_name == "shortAnswer":
@@ -4002,6 +6588,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "source"
             elif archetype_name == "arrayMatchingUnordered":
                 error_field = "results"
+            elif archetype_name == "answersOrDne":
+                error_field = "answers"
             elif archetype_name == "multipleChoiceAnswer":
                 error_field = "options"
             elif archetype_name == "matrixAnswer":
@@ -4030,6 +6618,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'arrayMatchingUnordered':
                 evaluated_output = "[Invalid Array Matching]"
                 latex_output = "[Invalid Array Matching]"
+            elif archetype_name == 'answersOrDne':
+                evaluated_output = "[Invalid Answers or DNE]"
+                latex_output = "[Invalid Answers or DNE]"
             elif archetype_name == 'multipleChoiceAnswer':
                 evaluated_output = "[Invalid Multiple Choice]"
                 latex_output = "[Invalid Multiple Choice]"
@@ -4068,6 +6659,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'slopeFieldGraph':
                 evaluated_output = "[Invalid Slope Field Config]"
                 latex_output = "[Invalid Slope Field Config]"
+            elif archetype_name == 'graphBetweenPoints':
+                evaluated_output = "[Invalid Graph Between Points]"
+                latex_output = "[Invalid Graph Between Points]"
             elif archetype_name == 'matrix':
                 evaluated_output = "[Invalid Matrix Config]"
                 latex_output = "[Invalid Matrix Config]"

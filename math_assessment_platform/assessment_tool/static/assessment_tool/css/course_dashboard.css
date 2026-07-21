@@ -126,7 +126,7 @@
    🎯 INTERACTIVE CUSTOM TABLE MANIPULATION CONTEXT MENU
    ========================================================================== */
 .custom-ql-context-menu {
-    position: absolute;
+    position: fixed;
     display: none;
     background: #ffffff !important;
     border: 1px solid #cbd5e1 !important;
@@ -135,6 +135,10 @@
     padding: 6px 0 !important;
     z-index: 999999 !important;
     min-width: 190px;
+    max-width: min(320px, calc(100vw - 16px));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 

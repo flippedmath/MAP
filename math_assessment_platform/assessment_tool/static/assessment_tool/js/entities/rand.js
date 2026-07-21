@@ -1,4 +1,4 @@
-import { safeNumValue } from './helpers.js';
+import { safeNumValue, escapeHtmlText } from './helpers.js';
 
 /**
  * rand entity module — floating-point random value generator.
@@ -11,6 +11,8 @@ export function processEntity(contextData) {
             return getFieldsHtml(contextData.savedValues || {});
         case 'evaluate':
             return evaluate(contextData);
+        case 'renderPreviewToken':
+            return renderPreviewToken(contextData);
         case 'getOutputTypes':
             return ['double'];
         case 'hideRefreshButton':
@@ -86,4 +88,10 @@ function evaluate({ card, tokenIdentifier, visitedTokens = [], getLiveComponentV
         }
     }
     return null;
+}
+
+function renderPreviewToken({ displayVal }) {
+    // Numeric value as inline LaTeX (no green badge). Preview pipeline
+    // KaTeX-renders .simulated-math-formula-render spans after HTML insert.
+    return `<span class="simulated-math-formula-render" style="display: inline-block; padding: 2px 4px;">${escapeHtmlText(displayVal)}</span>`;
 }
