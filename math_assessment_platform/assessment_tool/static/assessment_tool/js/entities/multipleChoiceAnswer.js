@@ -124,6 +124,17 @@ function renderTypedOptionContentHtml(content) {
 
 const EMBEDDED_ENTITY_TOKEN_RE = /(?:&lt;|<)([A-Za-z][A-Za-z0-9_]*\d+)(?:&gt;|>)/g;
 
+function resolveCardScope(ctx = {}) {
+    if (ctx.cardScope && typeof ctx.cardScope.querySelectorAll === 'function') {
+        return ctx.cardScope;
+    }
+    if (ctx.card && typeof ctx.card.closest === 'function') {
+        const host = ctx.card.closest('.practice-stub-host');
+        if (host) return host;
+    }
+    return document;
+}
+
 /**
  * Resolve a sequence token to a plain display string for inlining into choice text.
  * (Numbers / latex strings — not full preview widgets.)
@@ -132,38 +143,38 @@ function resolveTokenPlainDisplay(cleanToken, ctx = {}) {
     const token = String(cleanToken || '').replace(/[<>]/g, '').trim();
     if (!token) return '';
     const baseArchetype = token.replace(/\d+$/, '');
-    const srcCard = findSourceCard(token);
+    const scope = resolveCardScope(ctx);
+    const srcCard = findSourceCard(token, scope);
     const cache = ctx.formulaLiveLatexCache || {};
     let displayVal = cache[token];
     const isServerValueValid = displayVal !== undefined && displayVal !== null && displayVal !== '' && displayVal !== '???';
 
-    if (baseArchetype === 'graph' || baseArchetype === 'slopeFieldGraph') {
-        if (srcCard) {
-            displayVal = srcCard.getAttribute('data-simulated-value')
-                || (typeof ctx.evaluateSingleCardOutput === 'function'
-                    ? ctx.evaluateSingleCardOutput(srcCard, token)
-                    : null);
-        }
-        // Graphs are not meaningful as inline text; keep a short placeholder.
-        if (displayVal && String(displayVal).trim().startsWith('{')) {
-            displayVal = `[${baseArchetype}]`;
+    // Prefer locked server/stub values — never re-roll randoms for MC option text
+    if (srcCard) {
+        const simulated = srcCard.getAttribute('data-simulated-value');
+        const latex = srcCard.getAttribute('data-latex-output');
+        if (baseArchetype === 'graph' || baseArchetype === 'slopeFieldGraph') {
+            displayVal = simulated || displayVal;
+            if (displayVal && String(displayVal).trim().startsWith('{')) {
+                displayVal = `[${baseArchetype}]`;
+            }
+        } else if (baseArchetype === 'formula' || baseArchetype === 'matrix' || baseArchetype === 'matrixResultByIndex') {
+            if (!isServerValueValid) {
+                displayVal = latex || simulated || token;
+            }
+        } else {
+            // randInt / rand / etc.: locked simulated value wins
+            if (simulated !== null && simulated !== undefined && simulated !== '' && simulated !== 'None' && simulated !== 'null') {
+                displayVal = simulated;
+            } else if (latex && latex !== '???' && latex !== '') {
+                displayVal = latex;
+            } else if (!isServerValueValid && typeof ctx.evaluateSingleCardOutput === 'function') {
+                displayVal = ctx.evaluateSingleCardOutput(srcCard, token);
+            }
         }
     } else if (baseArchetype === 'formula' || baseArchetype === 'matrix' || baseArchetype === 'matrixResultByIndex') {
-        if (!isServerValueValid && srcCard) {
-            displayVal = srcCard.getAttribute('data-latex-output')
-                || srcCard.getAttribute('data-simulated-value')
-                || token;
-        } else if (!isServerValueValid) {
+        if (!isServerValueValid) {
             displayVal = token;
-        }
-    } else if (srcCard) {
-        const loadedLatex = srcCard.getAttribute('data-latex-output') || cache[token];
-        if (loadedLatex && loadedLatex !== '???' && loadedLatex !== '') {
-            displayVal = loadedLatex;
-        } else if (typeof ctx.evaluateSingleCardOutput === 'function') {
-            displayVal = ctx.evaluateSingleCardOutput(srcCard, token);
-        } else {
-            displayVal = srcCard.getAttribute('data-simulated-value') || token;
         }
     }
 
@@ -685,13 +696,30 @@ function normalizeBoundToken(raw) {
     return clean;
 }
 
-function findSourceCard(sequenceToken) {
+function findSourceCard(sequenceToken, scopeRoot = null) {
     const clean = String(sequenceToken || '').replace(/[<>]/g, '').trim();
     if (!clean) return null;
-    const deleteBtns = document.querySelectorAll('.btn-delete-workspace-component');
+    const root = scopeRoot && typeof scopeRoot.querySelectorAll === 'function'
+        ? scopeRoot
+        : document;
+    // Prefer non-practice cards when searching the whole document (workspace overlay),
+    // but allow practice stubs when scoped to a stub host.
+    const deleteBtns = root.querySelectorAll('.btn-delete-workspace-component');
     for (const btn of deleteBtns) {
-        if (btn.getAttribute('data-indexed-token') === clean) {
-            return btn.closest('.workspace-block-card, .workspace-component-card');
+        if (btn.getAttribute('data-indexed-token') !== clean) continue;
+        const card = btn.closest('.workspace-block-card, .workspace-component-card');
+        if (!card) continue;
+        if (root === document && card.classList.contains('practice-stub-card')) {
+            continue;
+        }
+        return card;
+    }
+    // Fallback: allow practice stubs when an unscoped search found nothing else
+    if (root === document) {
+        for (const btn of deleteBtns) {
+            if (btn.getAttribute('data-indexed-token') === clean) {
+                return btn.closest('.workspace-block-card, .workspace-component-card');
+            }
         }
     }
     return null;
@@ -710,7 +738,8 @@ function renderLinkedOptionHtml(content, ctx) {
 
     const cleanToken = bound.replace(/[<>]/g, '').trim();
     const baseArchetype = cleanToken.replace(/\d+$/, '');
-    const srcCard = findSourceCard(cleanToken);
+    const scope = resolveCardScope(ctx);
+    const srcCard = findSourceCard(cleanToken, scope);
     const cache = ctx.formulaLiveLatexCache || {};
     let displayVal = cache[cleanToken];
 
@@ -732,13 +761,16 @@ function renderLinkedOptionHtml(content, ctx) {
             displayVal = cleanToken;
         }
     } else if (srcCard) {
-        const loadedLatex = srcCard.getAttribute('data-latex-output') || cache[cleanToken];
-        if (loadedLatex && loadedLatex !== '???' && loadedLatex !== '') {
+        const simulated = srcCard.getAttribute('data-simulated-value');
+        const loadedLatex = srcCard.getAttribute('data-latex-output') || formulaLiveSafe(cache, cleanToken);
+        if (simulated !== null && simulated !== undefined && simulated !== '' && simulated !== 'None' && simulated !== 'null') {
+            displayVal = simulated;
+        } else if (loadedLatex && loadedLatex !== '???' && loadedLatex !== '') {
             displayVal = loadedLatex;
         } else if (typeof ctx.evaluateSingleCardOutput === 'function') {
             displayVal = ctx.evaluateSingleCardOutput(srcCard, cleanToken);
         } else {
-            displayVal = srcCard.getAttribute('data-simulated-value') || cleanToken;
+            displayVal = cleanToken;
         }
     }
 
@@ -768,6 +800,10 @@ function renderLinkedOptionHtml(content, ctx) {
     return `<span class="simulated-math-formula-render" style="display:inline-block; padding:0 2px;">${escapeHtmlAttr(displayVal)}</span>`;
 }
 
+function formulaLiveSafe(cache, token) {
+    return cache && cache[token];
+}
+
 function renderPreviewToken(contextData = {}) {
     const {
         cleanToken,
@@ -778,7 +814,8 @@ function renderPreviewToken(contextData = {}) {
         formulaLiveLatexCache,
         renderGraphComponentCanvas,
         renderSlopeFieldCanvas,
-        registerPreviewGraph
+        registerPreviewGraph,
+        previewNamePrefix
     } = contextData;
 
     const token = cleanToken || '';
@@ -802,7 +839,9 @@ function renderPreviewToken(contextData = {}) {
         formulaLiveLatexCache,
         renderGraphComponentCanvas,
         renderSlopeFieldCanvas,
-        registerPreviewGraph
+        registerPreviewGraph,
+        card,
+        cardScope: contextData.cardScope || (card && card.closest && card.closest('.practice-stub-host')) || null,
     };
 
     let displayOptions = options.map(o => ({
@@ -824,7 +863,8 @@ function renderPreviewToken(contextData = {}) {
         selected = initialValue.map(String);
     }
 
-    const name = `preview-mc-${token}`;
+    const ns = previewNamePrefix ? `${previewNamePrefix}-` : '';
+    const name = `preview-mc-${ns}${token}`;
     // Use <div> (flow content) throughout — never <span>/<label> wrappers — so
     // nested graph/slope <div> widgets cannot break out of phrasing containers
     // and orphan later choices.

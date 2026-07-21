@@ -1361,16 +1361,25 @@ class BaseEntity:
             raise ValidationError(f"Linked reference token <{clean_sequence_token}> could not be found in active workspace components.")
         
         token_archetype = target_payload.get("token")
-        token_inputs = target_payload.get("inputs", {})
+        token_inputs = dict(target_payload.get("inputs", {}) or {})
+        # Keep sequence identity so rand/randInt evaluate_output can hit the cache
+        # instead of rolling a new value on every dependency resolve.
+        token_inputs["sequence_token"] = clean_sequence_token
         token_blueprint = get_blueprint_for_token(token_archetype)
         
         
         # 🎯 SHORT-CIRCUIT FOR RANDOM ARCHETYPES
         # If the target is an upstream random entity, reuse its client-side generated value
         # 🎯 CACHE HIT: Check if we already have a locked-in client string or a freshly computed value
-        cached_val = target_payload.get('simulated_value', '')
-        if token_archetype in ['rand', 'randInt'] and cached_val != "":
-            return cached_val
+        cached_val = target_payload.get('simulated_value', '') or target_payload.get('evaluated_output', '')
+        if cached_val not in ("", None, "???", "None", "null") and not str(cached_val).startswith("[Invalid"):
+            if token_archetype in ['rand', 'randInt']:
+                return str(cached_val)
+            # Locked evaluated values from practice-test / preview payloads (avoid re-roll / token echo)
+            if token_archetype in (
+                "formula", "matrix", "matrixResultByIndex", "primeFactors",
+            ):
+                return str(cached_val)
 
         # 🎯 CACHE MISS: If cached_val is "", evaluate via sub-engine sub-pipeline
         dependency_validator = get_entity_validator(
@@ -1385,9 +1394,9 @@ class BaseEntity:
             
         resolved_value = str(dependency_validator.evaluate_output())
         
-        # 🎯 WRITE-BACK LOCK: Save the freshly rolled number directly back into the payload entry list
-        if token_archetype in ['rand', 'randInt']:
-            target_payload['simulated_value'] = resolved_value  # This updates it in all_entities_payload by reference!
+        # 🎯 WRITE-BACK LOCK: Save the freshly rolled / computed value into the shared payload
+        target_payload['simulated_value'] = resolved_value
+        target_payload['evaluated_output'] = resolved_value
 
         return resolved_value
 
@@ -2170,6 +2179,8 @@ class FormulaEntity(BaseEntity):
                         try:
                             solved_rel = sp.reduce_inequalities(equation, target_symbol)
                             self.last_computed_sympy_result = solved_rel
+                            # Keep solution structure available for answersOrDne expansion.
+                            self.last_solution_list = None
                             return str(solved_rel)
                         except Exception as e:
                             solutions = sp.solve(equation, target_symbol)
@@ -2219,13 +2230,27 @@ class FormulaEntity(BaseEntity):
                         # Never leave last_computed_sympy_result as None — sp.latex(None)
                         # renders as \text{None} in the card preview.
                         try:
-                            self.last_computed_sympy_result = sp.sympify(resolved_right_side)
+                            if self.last_solution_list and len(self.last_solution_list) > 1:
+                                self.last_computed_sympy_result = sp.FiniteSet(
+                                    *self.last_solution_list
+                                )
+                            else:
+                                self.last_computed_sympy_result = sp.sympify(resolved_right_side)
                         except Exception:
                             self.last_computed_sympy_result = sp.Integer(0)
                         return str(resolved_right_side)
 
                     if not isinstance(resolved_right_side, str):
                         self.last_computed_sympy_result = sp.Eq(target_symbol, resolved_right_side)
+                    elif self.last_solution_list and len(self.last_solution_list) > 1:
+                        # Preserve multi-root structure for downstream expanders
+                        # (answersOrDne); display string remains "x = [..]".
+                        try:
+                            self.last_computed_sympy_result = sp.FiniteSet(
+                                *self.last_solution_list
+                            )
+                        except Exception:
+                            self.last_computed_sympy_result = target_symbol
                     else:
                         self.last_computed_sympy_result = target_symbol
 
@@ -3158,6 +3183,20 @@ class GraphEntity(BaseEntity):
         self.runtime_values["normalized_formulas_list"] = normalized_formulas
 
         # Handle Axis Ranges (Uses user inputs if valid, falls back to automatic calculations if blank)
+        # Saved segments often store x_min/x_max/x_step rather than the assembled "x-axis range" list
+        # (the list is normally built client-side during serialize).
+        if not x_axis_input and any(k in self.data for k in ("x_min", "x_max", "x_step")):
+            x_axis_input = [
+                self.data.get("x_min", ""),
+                self.data.get("x_max", ""),
+                self.data.get("x_step", ""),
+            ]
+        if not y_axis_input and any(k in self.data for k in ("y_min", "y_max", "y_step")):
+            y_axis_input = [
+                self.data.get("y_min", ""),
+                self.data.get("y_max", ""),
+                self.data.get("y_step", ""),
+            ]
         self.runtime_values["resolved_x-axis range"] = self._process_axis_bounds("x-axis range", x_axis_input, normalized_formulas)
         self.runtime_values["resolved_y-axis range"] = self._process_axis_bounds("y-axis range", y_axis_input, normalized_formulas)
 
@@ -4642,9 +4681,13 @@ class AnswersOrDneEntity(BaseEntity):
     def _validator_for_payload(self, payload):
         archetype = payload.get("token")
         blueprint = get_blueprint_for_token(archetype)
+        data = dict(payload.get("inputs", {}) or {})
+        seq = payload.get("sequence_token") or payload.get("indexed_token")
+        if seq and not data.get("sequence_token"):
+            data["sequence_token"] = str(seq).strip()
         return get_entity_validator(
             archetype,
-            payload.get("inputs", {}) or {},
+            data,
             blueprint,
             all_entities_payload=self.all_entities_payload,
         )
@@ -4661,11 +4704,19 @@ class AnswersOrDneEntity(BaseEntity):
         if value == -sp.oo or value is -sp.oo:
             return "-oo"
         try:
+            # Prefer exact rationals over float noise (e.g. -1.50000000000000 → -3/2)
+            if isinstance(value, sp.Float):
+                try:
+                    value = sp.nsimplify(value, rational=True)
+                except Exception:
+                    pass
             if isinstance(value, sp.Rational) and value.q != 1:
                 return str(value)
             if isinstance(value, sp.Integer):
                 return str(int(value))
             simplified = sp.simplify(value)
+            if isinstance(simplified, sp.Rational) and simplified.q != 1:
+                return str(simplified)
             return str(simplified)
         except Exception:
             return str(value)
@@ -4701,6 +4752,34 @@ class AnswersOrDneEntity(BaseEntity):
                 return ("hi", bound, isinstance(rel, sp.GreaterThan))
         return None
 
+    def _bound_is_tighter_lo(self, candidate, current):
+        """True when candidate is a strictly greater (tighter) lower bound than current."""
+        if current == -sp.oo:
+            return True
+        if candidate == -sp.oo:
+            return False
+        try:
+            diff = sp.simplify(candidate - current)
+            if diff == 0:
+                return False
+            return bool(sp.N(diff) > 0)
+        except Exception:
+            return True
+
+    def _bound_is_tighter_hi(self, candidate, current):
+        """True when candidate is a strictly smaller (tighter) upper bound than current."""
+        if current == sp.oo:
+            return True
+        if candidate == sp.oo:
+            return False
+        try:
+            diff = sp.simplify(current - candidate)
+            if diff == 0:
+                return False
+            return bool(sp.N(diff) > 0)
+        except Exception:
+            return True
+
     def _and_to_interval(self, expr, symbol):
         """
         Parse And of inequalities on `symbol` into (lo, lo_closed, hi, hi_closed).
@@ -4716,26 +4795,27 @@ class AnswersOrDneEntity(BaseEntity):
             side, bound, closed = parsed
             saw_bound = True
             if side == "lo":
-                # Tightest lower bound
-                try:
-                    if bound == -sp.oo:
-                        lo, lo_closed = -sp.oo, False
-                    elif lo == -sp.oo or sp.simplify(bound - lo) >= 0:
-                        lo, lo_closed = bound, closed
-                    elif sp.simplify(bound - lo) == 0:
-                        lo_closed = lo_closed and closed
-                except Exception:
+                if bound == -sp.oo:
+                    lo, lo_closed = -sp.oo, False
+                elif self._bound_is_tighter_lo(bound, lo):
                     lo, lo_closed = bound, closed
+                else:
+                    try:
+                        if sp.simplify(bound - lo) == 0:
+                            lo_closed = lo_closed and closed
+                    except Exception:
+                        pass
             else:
-                try:
-                    if bound == sp.oo:
-                        hi, hi_closed = sp.oo, False
-                    elif hi == sp.oo or sp.simplify(hi - bound) >= 0:
-                        hi, hi_closed = bound, closed
-                    elif sp.simplify(hi - bound) == 0:
-                        hi_closed = hi_closed and closed
-                except Exception:
+                if bound == sp.oo:
+                    hi, hi_closed = sp.oo, False
+                elif self._bound_is_tighter_hi(bound, hi):
                     hi, hi_closed = bound, closed
+                else:
+                    try:
+                        if sp.simplify(hi - bound) == 0:
+                            hi_closed = hi_closed and closed
+                    except Exception:
+                        pass
         if not saw_bound:
             return None
         return (lo, lo_closed, hi, hi_closed)
@@ -4806,6 +4886,20 @@ class AnswersOrDneEntity(BaseEntity):
                 return [("interval", (bound, closed, sp.oo, False))]
             return [("interval", (-sp.oo, False, bound, closed))]
 
+        # SymPy sets / intervals from reduce_inequalities / solveset
+        if isinstance(expr, sp.Union):
+            slots = []
+            for arg in expr.args:
+                slots.extend(self._solution_expr_to_slots(arg, symbol))
+            return slots
+        if isinstance(expr, sp.Interval):
+            return [(
+                "interval",
+                (expr.start, expr.left_open is False, expr.end, expr.right_open is False),
+            )]
+        if isinstance(expr, sp.FiniteSet):
+            return [("point", sp.simplify(s)) for s in expr.args]
+
         # Bare numeric / symbolic root value (from a solution list item)
         try:
             if symbol not in getattr(expr, "free_symbols", set()):
@@ -4814,6 +4908,29 @@ class AnswersOrDneEntity(BaseEntity):
             pass
 
         return []
+
+    def _split_top_level_commas(self, inner):
+        parts = []
+        buf = []
+        depth = 0
+        for ch in inner:
+            if ch in "([{":
+                depth += 1
+                buf.append(ch)
+            elif ch in ")]}":
+                depth = max(0, depth - 1)
+                buf.append(ch)
+            elif ch == "," and depth == 0:
+                piece = "".join(buf).strip()
+                if piece:
+                    parts.append(piece)
+                buf = []
+            else:
+                buf.append(ch)
+        piece = "".join(buf).strip()
+        if piece:
+            parts.append(piece)
+        return parts
 
     def _slots_from_evaluated_list_string(self, text, symbol):
         """
@@ -4836,27 +4953,7 @@ class AnswersOrDneEntity(BaseEntity):
         inner = m.group(1).strip()
         if not inner:
             return []
-        # Reuse arrayMatching paren-aware split via a lightweight local split
-        parts = []
-        buf = []
-        depth = 0
-        for ch in inner:
-            if ch in "([":
-                depth += 1
-                buf.append(ch)
-            elif ch in ")]":
-                depth = max(0, depth - 1)
-                buf.append(ch)
-            elif ch == "," and depth == 0:
-                piece = "".join(buf).strip()
-                if piece:
-                    parts.append(piece)
-                buf = []
-            else:
-                buf.append(ch)
-        piece = "".join(buf).strip()
-        if piece:
-            parts.append(piece)
+        parts = self._split_top_level_commas(inner)
 
         slots = []
         for part in parts:
@@ -4868,6 +4965,81 @@ class AnswersOrDneEntity(BaseEntity):
                 if expr is not None:
                     slots.append(("point", sp.simplify(expr)))
         return slots
+
+    def _normalize_relation_display_string(self, text):
+        """Normalize unicode / prose relation strings for sympy parsing."""
+        s = self._trim_str(text)
+        if not s:
+            return ""
+        replacements = (
+            ("\u2212", "-"),  # minus sign
+            ("\u221e", "oo"),
+            ("\u221E", "oo"),
+            ("∞", "oo"),
+            ("\u2264", "<="),
+            ("\u2265", ">="),
+            ("\u2227", "&"),
+            ("\u2228", "|"),
+            ("∧", "&"),
+            ("∨", "|"),
+            ("·", "*"),
+        )
+        for old, new in replacements:
+            s = s.replace(old, new)
+        # KaTeX-ish fragments sometimes leak into stored output
+        s = re.sub(r"\\\\(?:infty|infty\b)", "oo", s)
+        s = re.sub(r"\\infty\b", "oo", s)
+        return s
+
+    def _slots_from_formula_display(self, text, symbol):
+        """
+        Build answer slots from a locked formula display string (practice/preview).
+        Handles multi-root lists and sympy Or/And inequality forms.
+        """
+        s = self._normalize_relation_display_string(text)
+        if not s or s.startswith("[Invalid") or s in ("???", "None", "null"):
+            return []
+
+        list_slots = self._slots_from_evaluated_list_string(s, symbol)
+        if list_slots:
+            return list_slots
+
+        # "x = -1" single root
+        sym_name = str(symbol)
+        m = re.match(
+            rf"^{re.escape(sym_name)}\s*=\s*(.+)$",
+            s,
+            flags=re.DOTALL,
+        )
+        if m:
+            rhs = m.group(1).strip()
+            if rhs.startswith("[") and rhs.endswith("]"):
+                return self._slots_from_evaluated_list_string(f"{sym_name} = {rhs}", symbol)
+            try:
+                val = sp.sympify(rhs)
+                return [("point", sp.simplify(val))]
+            except Exception:
+                expr = self._to_sympy(rhs)
+                if expr is not None:
+                    return [("point", sp.simplify(expr))]
+
+        try:
+            local = {str(symbol): symbol, "oo": sp.oo}
+            expr = sp.sympify(s, locals=local)
+            slots = self._solution_expr_to_slots(expr, symbol)
+            if slots:
+                return slots
+        except Exception:
+            pass
+        return []
+
+    def _prefer_richer_slots(self, primary, secondary):
+        """Prefer the slot list that captures more distinct answers."""
+        a = primary or []
+        b = secondary or []
+        if len(b) > len(a):
+            return b
+        return a
 
     def _slot_to_virtual_payload(self, slot, parent_token, index):
         kind, payload = slot
@@ -4908,6 +5080,9 @@ class AnswersOrDneEntity(BaseEntity):
         """
         Evaluate a simplify-for-variable formula and expand into virtual keys.
         Returns (payloads_list, error_message).
+
+        Prefer locked practice/preview simulated_value when it yields a richer
+        slot set than a fresh re-evaluation (avoids dropping roots/intervals).
         """
         try:
             validator = self._validator_for_payload(formula_payload)
@@ -4946,34 +5121,68 @@ class AnswersOrDneEntity(BaseEntity):
             err = next(iter(validator.errors.values()), "invalid formula")
             return [], f"Linked formula is invalid: {err}"
 
+        symbol = sp.Symbol(target)
+
+        # Locked instance output from practice assembly / workspace preview.
+        locked_raw = (
+            formula_payload.get("simulated_value")
+            or formula_payload.get("evaluated_output")
+            or ""
+        )
+        locked_slots = self._slots_from_formula_display(locked_raw, symbol)
+
+        evaluated = None
+        eval_slots = []
+        eval_error = None
         try:
             evaluated = validator.evaluate_output()
+            result_obj = getattr(validator, "last_computed_sympy_result", None)
+            solution_list = getattr(validator, "last_solution_list", None)
+
+            if solution_list:
+                eval_slots = self._solution_expr_to_slots(list(solution_list), symbol)
+            if result_obj is not None and not isinstance(result_obj, tuple):
+                rel_slots = self._solution_expr_to_slots(result_obj, symbol)
+                # Prefer relational/interval structure over bare equality roots when
+                # reduce_inequalities succeeded (or when it yields more slots).
+                if rel_slots and (
+                    len(rel_slots) > len(eval_slots or [])
+                    or (
+                        any(kind == "interval" for kind, _ in rel_slots)
+                        and not any(kind == "interval" for kind, _ in (eval_slots or []))
+                    )
+                ):
+                    eval_slots = rel_slots
+                elif not eval_slots:
+                    eval_slots = rel_slots
+            # Multi-root display form: last_computed is often just the Symbol `x`
+            # while evaluated_output is "x = [-4/3, -1, 0]".
+            string_slots = self._slots_from_formula_display(evaluated, symbol)
+            eval_slots = self._prefer_richer_slots(eval_slots, string_slots)
         except Exception as exc:
-            return [], f"Linked formula could not be evaluated: {exc}"
+            eval_error = exc
 
-        result_obj = getattr(validator, "last_computed_sympy_result", None)
-        solution_list = getattr(validator, "last_solution_list", None)
-        if result_obj is None and not solution_list:
-            return [], "Linked formula produced no simplify result to expand."
+        slots = locked_slots if locked_slots else eval_slots
+        # If locked parsed but eval found strictly more slots, keep the richer set
+        # (e.g. locked was a partial display string).
+        if locked_slots and eval_slots and len(eval_slots) > len(locked_slots):
+            slots = eval_slots
 
-        # Tuple (lhs, rhs) from non-targeted simplify — not expandable
-        if isinstance(result_obj, tuple) and not solution_list:
-            return [], (
-                "Linked formula simplify result is not a solved relation for the "
-                "target variable (got a left/right pair). Ensure a target variable is set."
-            )
-
-        symbol = sp.Symbol(target)
-        slots = []
-        if solution_list:
-            slots = self._solution_expr_to_slots(list(solution_list), symbol)
-        if not slots and result_obj is not None and not isinstance(result_obj, tuple):
-            slots = self._solution_expr_to_slots(result_obj, symbol)
-        # Multi-root display form: last_computed is often just the Symbol `x`
-        # while evaluated_output is "x = [-4/3, -1, 0]".
+        # If re-eval failed but locked parse worked, still succeed.
+        if not slots and locked_slots:
+            slots = locked_slots
         if not slots:
-            slots = self._slots_from_evaluated_list_string(evaluated, symbol)
-        if not slots:
+            if eval_error:
+                return [], f"Linked formula could not be evaluated: {eval_error}"
+            result_obj = getattr(validator, "last_computed_sympy_result", None)
+            solution_list = getattr(validator, "last_solution_list", None)
+            if result_obj is None and not solution_list and not evaluated:
+                return [], "Linked formula produced no simplify result to expand."
+            if isinstance(result_obj, tuple) and not solution_list:
+                return [], (
+                    "Linked formula simplify result is not a solved relation for the "
+                    "target variable (got a left/right pair). Ensure a target variable is set."
+                )
             return [], (
                 "Linked formula simplify result has no extractable solutions "
                 "(equalities, intervals, or a solution list) for the target variable."
@@ -5183,9 +5392,28 @@ class AnswersOrDneEntity(BaseEntity):
         self.runtime_values["correct_is_dne"] = correct_is_dne
         self.runtime_values["grading_mode"] = mode
         self.runtime_values["answers"] = answers
+
+        show_information = self._coerce_bool(
+            self.data.get(
+                "show_information",
+                self.runtime_values.get("show_information", False),
+            )
+        )
+        information_text = str(
+            self.data.get(
+                "information_text",
+                self.runtime_values.get("information_text", ""),
+            )
+            or ""
+        )
+        self.runtime_values["show_information"] = show_information
+        self.runtime_values["information_text"] = information_text
+
         self.cleaned_data["correct_is_dne"] = correct_is_dne
         self.cleaned_data["grading_mode"] = mode
         self.cleaned_data["answers"] = answers
+        self.cleaned_data["show_information"] = show_information
+        self.cleaned_data["information_text"] = information_text
         return True
 
     def _expand_answers_to_key_payloads(self, answers):
@@ -5636,8 +5864,14 @@ class SlopeFieldGraphEntity(BaseEntity):
             self.errors["equation"] = f"Could not parse slope equation: {exc}"
             return False
 
-        x_range = self._parse_axis_range("x-axis range", self.data.get("x-axis range"), [-5.0, 5.0, 1.0])
-        y_range = self._parse_axis_range("y-axis range", self.data.get("y-axis range"), [-5.0, 5.0, 1.0])
+        x_axis_raw = self.data.get("x-axis range")
+        y_axis_raw = self.data.get("y-axis range")
+        if not x_axis_raw and any(k in self.data for k in ("x_min", "x_max", "x_step")):
+            x_axis_raw = [self.data.get("x_min", ""), self.data.get("x_max", ""), self.data.get("x_step", "")]
+        if not y_axis_raw and any(k in self.data for k in ("y_min", "y_max", "y_step")):
+            y_axis_raw = [self.data.get("y_min", ""), self.data.get("y_max", ""), self.data.get("y_step", "")]
+        x_range = self._parse_axis_range("x-axis range", x_axis_raw, [-5.0, 5.0, 1.0])
+        y_range = self._parse_axis_range("y-axis range", y_axis_raw, [-5.0, 5.0, 1.0])
         if self.errors:
             return False
 
@@ -6108,8 +6342,14 @@ class GraphBetweenPointsEntity(BaseEntity):
 
         show_grid = self._coerce_bool(self.data.get("show_grid", True), True)
         let_student_draw = self._coerce_bool(self.data.get("let_student_draw", False), False)
-        x_range = self._parse_axis_range("x-axis range", self.data.get("x-axis range"), [-5.0, 5.0, 1.0])
-        y_range = self._parse_axis_range("y-axis range", self.data.get("y-axis range"), [-5.0, 5.0, 1.0])
+        x_axis_raw = self.data.get("x-axis range")
+        y_axis_raw = self.data.get("y-axis range")
+        if not x_axis_raw and any(k in self.data for k in ("x_min", "x_max", "x_step")):
+            x_axis_raw = [self.data.get("x_min", ""), self.data.get("x_max", ""), self.data.get("x_step", "")]
+        if not y_axis_raw and any(k in self.data for k in ("y_min", "y_max", "y_step")):
+            y_axis_raw = [self.data.get("y_min", ""), self.data.get("y_max", ""), self.data.get("y_step", "")]
+        x_range = self._parse_axis_range("x-axis range", x_axis_raw, [-5.0, 5.0, 1.0])
+        y_range = self._parse_axis_range("y-axis range", y_axis_raw, [-5.0, 5.0, 1.0])
         if self.errors:
             return False
 
@@ -6418,9 +6658,15 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
     Unified evaluation runner that runs an entity validator, tracks simulated results,
     and returns a standardized dictionary matching the frontend cache schema.
     """
+    # sequence_token must be present on the payload so random entities can find their
+    # locked simulated_value (and so dependency resolution does not re-roll).
+    data_payload = dict(clean_inputs or {})
+    if sequence_token:
+        data_payload["sequence_token"] = str(sequence_token).strip()
+
     validator = get_entity_validator(
         token_string=archetype_name,
-        data_payload=clean_inputs,
+        data_payload=data_payload,
         pattern_blueprint=pattern_blueprint,
         all_entities_payload=all_entities_payload
     )
@@ -6703,4 +6949,719 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
         'latex_output': latex_output,
         'extracted_variables': ", ".join(extracted_vars),
         'output_types': output_types,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Practice-test assembly & ephemeral batch grading
+# ---------------------------------------------------------------------------
+
+def _tokens_referenced_in_html(body_html):
+    """
+    Sequence tokens appearing as <tokenN> / &lt;tokenN&gt; in question HTML.
+    Mirrors workspace preview grading: only placed answer fields are graded.
+    """
+    if not body_html:
+        return set()
+    haystack = (
+        str(body_html)
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&LT;", "<")
+        .replace("&GT;", ">")
+    )
+    return set(re.findall(r"<([A-Za-z][A-Za-z0-9_]*)>", haystack))
+
+
+def _answers_or_dne_linked_tokens(answer_field_payloads, referenced_tokens):
+    """
+    Tokens bound as keys inside a rendered answersOrDne field.
+    Those are graded only via the parent answersOrDne entity.
+    """
+    linked = set()
+    for field in answer_field_payloads or []:
+        if not isinstance(field, dict):
+            continue
+        archetype = str(field.get("archetype") or field.get("token") or "").strip()
+        seq = str(field.get("sequence_token") or "").strip()
+        if archetype != "answersOrDne" or not seq or seq not in referenced_tokens:
+            continue
+        inputs = field.get("inputs") or {}
+        # DNE mode has no linked key grading
+        dne_raw = inputs.get("dne") or inputs.get("correct_is_dne")
+        if str(dne_raw).lower() in ("true", "1", "yes", "checked", "on"):
+            continue
+        for key, val in inputs.items():
+            if not isinstance(val, str):
+                continue
+            # Bound keys look like "<shortAnswer1>" or plain sequence tokens
+            m = re.fullmatch(r"(?:&lt;|<)?([A-Za-z][A-Za-z0-9_]*)(?:>|&gt;)?", val.strip())
+            if m:
+                linked.add(m.group(1))
+            else:
+                for tok in re.findall(r"(?:&lt;|<)([A-Za-z][A-Za-z0-9_]*)(?:>|&gt;)", val):
+                    linked.add(tok)
+        # Structured answers / key rows
+        for list_key in ("answers", "keys", "key_rows"):
+            rows = inputs.get(list_key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict):
+                    for rk in ("token", "bound_token", "value", "key"):
+                        raw = row.get(rk)
+                        if isinstance(raw, str):
+                            m = re.fullmatch(
+                                r"(?:&lt;|<)?([A-Za-z][A-Za-z0-9_]*)(?:>|&gt;)?",
+                                raw.strip(),
+                            )
+                            if m:
+                                linked.add(m.group(1))
+                elif isinstance(row, str):
+                    m = re.fullmatch(
+                        r"(?:&lt;|<)?([A-Za-z][A-Za-z0-9_]*)(?:>|&gt;)?",
+                        row.strip(),
+                    )
+                    if m:
+                        linked.add(m.group(1))
+    return linked
+
+
+def _parse_segment_content(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _blueprint_is_answer_field(pattern_blueprint):
+    if not isinstance(pattern_blueprint, dict):
+        return False
+    name_list = pattern_blueprint.get("entity_name_list")
+    if isinstance(name_list, str):
+        try:
+            parsed_list = json.loads(name_list)
+            name_list = parsed_list if isinstance(parsed_list, list) else [name_list]
+        except Exception:
+            name_list = [name_list]
+    return (
+        pattern_blueprint.get("answer_field") is True
+        or (isinstance(name_list, list) and "Answer Input Fields" in name_list)
+        or name_list == "Answer Input Fields"
+    )
+
+
+def _format_student_answer_lines(student_input, validator=None, archetype=None):
+    """
+    Human-readable student answer lines for practice-test grade UI
+    (mirrors latex-render-box style content when possible).
+    """
+    if student_input is None:
+        return []
+
+    archetype = str(archetype or "").strip()
+    rv = getattr(validator, "runtime_values", None) or {} if validator else {}
+
+    if archetype == "multipleChoiceAnswer":
+        options = rv.get("options") or []
+        by_id = {}
+        for opt in options:
+            if isinstance(opt, dict) and opt.get("id") is not None:
+                by_id[str(opt["id"]).strip()] = opt
+
+        selected = []
+        if isinstance(student_input, dict):
+            raw = student_input.get("selected", student_input.get("value", []))
+            if isinstance(raw, list):
+                selected = [str(x).strip() for x in raw if x is not None and str(x).strip()]
+            elif raw not in (None, ""):
+                selected = [str(raw).strip()]
+        elif isinstance(student_input, (list, tuple)):
+            selected = [str(x).strip() for x in student_input if x is not None and str(x).strip()]
+        elif str(student_input).strip():
+            selected = [str(student_input).strip()]
+
+        lines = []
+        for sid in selected:
+            opt = by_id.get(sid)
+            if opt:
+                text = str(opt.get("content_resolved") or opt.get("content") or "").strip()
+                lines.append(text or sid)
+            else:
+                lines.append(sid)
+        return lines
+
+    if archetype == "answersOrDne":
+        if isinstance(student_input, dict):
+            if student_input.get("dne"):
+                return ["DNE"]
+            entries = student_input.get("entries") or []
+            lines = []
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        val = entry.get("value")
+                        if val not in (None, ""):
+                            lines.append(str(val))
+                    elif entry not in (None, ""):
+                        lines.append(str(entry))
+            return lines
+        if isinstance(student_input, str) and student_input.strip().upper() in ("DNE", "NONE", "N/A"):
+            return ["DNE"]
+
+    if isinstance(student_input, dict):
+        if "value" in student_input and student_input.get("value") not in (None, ""):
+            return [str(student_input.get("value"))]
+        if "selected" in student_input:
+            selected = student_input.get("selected")
+            if isinstance(selected, list):
+                return [str(x) for x in selected if x not in (None, "")]
+            if selected not in (None, ""):
+                return [str(selected)]
+            return []
+        if student_input.get("dne"):
+            return ["DNE"]
+        if isinstance(student_input.get("entries"), list):
+            lines = []
+            for entry in student_input["entries"]:
+                if isinstance(entry, dict):
+                    val = entry.get("value")
+                    if val not in (None, ""):
+                        lines.append(str(val))
+                elif entry not in (None, ""):
+                    lines.append(str(entry))
+            return lines
+        if isinstance(student_input.get("cells"), dict):
+            cells = student_input.get("cells") or {}
+            return [f"{k}: {v}" for k, v in sorted(cells.items()) if v not in (None, "")]
+        if isinstance(student_input.get("marks"), list):
+            return [f"Marks: {len(student_input.get('marks') or [])}"]
+        if isinstance(student_input.get("segments"), list):
+            return [f"Segments: {len(student_input.get('segments') or [])}"]
+        try:
+            return [json.dumps(student_input, ensure_ascii=False)]
+        except Exception:
+            return [str(student_input)]
+    if isinstance(student_input, (list, tuple)):
+        return [str(x) for x in student_input if x not in (None, "")]
+    text = str(student_input).strip()
+    return [text] if text else []
+
+
+def _format_student_answer_display(student_input, validator=None, archetype=None):
+    lines = _format_student_answer_lines(student_input, validator=validator, archetype=archetype)
+    return "\n".join(lines)
+
+
+def _resolve_expected_token_refs(validator, text):
+    """Replace embedded <tokenN> refs with resolved simulated values when possible."""
+    if text is None:
+        return ""
+    raw = str(text)
+    if not raw:
+        return ""
+    pattern = re.compile(r"(?:&lt;|<)([A-Za-z][A-Za-z0-9_]*)(?:&gt;|>)")
+
+    def _replace(match):
+        seq = match.group(1).strip()
+        try:
+            return str(validator.resolve_token_dependency(f"<{seq}>")).strip()
+        except Exception:
+            return match.group(0)
+
+    try:
+        if pattern.search(raw):
+            return pattern.sub(_replace, raw)
+    except Exception:
+        return raw
+    return raw
+
+
+def _extract_expected_answers(validator, archetype):
+    """
+    Expected-answer display lines for practice-test grade UI.
+    Prefer evaluate_output() / latex-render-box equivalents (resolved content).
+    """
+    rv = getattr(validator, "runtime_values", None) or {}
+    expected = []
+    archetype = str(archetype or "").strip()
+
+    # Prefer evaluate_output() — same source as many latex-render-box summaries
+    try:
+        evaluated = validator.evaluate_output()
+        if evaluated not in (None, ""):
+            ev = str(evaluated).strip()
+            if ev and not ev.startswith("[Invalid") and ev != "???":
+                if archetype in ("graph", "slopeFieldGraph", "graphBetweenPoints", "matrix", "canvas"):
+                    pass
+                elif ev.startswith("{") and '"archetype"' in ev:
+                    pass
+                else:
+                    for line in ev.split("\n"):
+                        line = line.strip()
+                        if line:
+                            expected.append(line)
+    except Exception:
+        pass
+
+    if archetype == "numAnswer" and not expected:
+        val = rv.get("resolved_value")
+        if val is None:
+            val = rv.get("value")
+        if val is not None and val != "":
+            expected.append(str(val))
+    elif archetype == "shortAnswer" and not expected:
+        val = rv.get("simplified_key")
+        if val is None:
+            val = rv.get("value") or rv.get("resolved_value")
+        if val is not None and val != "":
+            expected.append(str(val))
+    elif archetype == "multipleChoiceAnswer" and not expected:
+        options = rv.get("options") or []
+        for opt in options:
+            if not isinstance(opt, dict) or not opt.get("is_correct"):
+                continue
+            text = str(opt.get("content_resolved") or opt.get("content") or "").strip()
+            if text:
+                expected.append(text)
+    elif archetype == "matrixAnswer" and not expected:
+        by_key = rv.get("correct_by_key")
+        if isinstance(by_key, dict) and by_key:
+            for key in sorted(by_key.keys()):
+                expected.append(f"{key}: {by_key[key]}")
+        summary = rv.get("summary")
+        if summary and not expected:
+            expected.append(str(summary))
+    elif archetype == "arrayMatchingUnordered" and not expected:
+        val = rv.get("key_display") or rv.get("resolved_value") or rv.get("value") or rv.get("simplified_key")
+        if val is not None and val != "":
+            expected.append(str(val))
+    elif archetype == "answersOrDne" and not expected:
+        if rv.get("correct_is_dne") or rv.get("dne"):
+            expected.append("DNE")
+        else:
+            payloads = rv.get("key_payloads") or []
+            for payload in payloads:
+                if not isinstance(payload, dict):
+                    continue
+                disp = payload.get("_slot_display")
+                if disp not in (None, ""):
+                    expected.append(str(disp))
+                    continue
+                try:
+                    linked = validator._validator_for_payload(payload)
+                    if linked.is_valid():
+                        out = linked.evaluate_output()
+                        if out not in (None, ""):
+                            expected.append(str(out))
+                            continue
+                except Exception:
+                    pass
+                tok = payload.get("sequence_token") or ""
+                sim = payload.get("simulated_value") or payload.get("evaluated_output") or ""
+                if sim not in (None, "", "???"):
+                    expected.append(str(sim))
+                elif tok:
+                    try:
+                        expected.append(str(validator.resolve_token_dependency(f"<{tok}>")))
+                    except Exception:
+                        pass
+    elif not expected:
+        for key in ("simplified_key", "resolved_value", "value", "correct", "expected", "key_display"):
+            val = rv.get(key)
+            if val not in (None, ""):
+                expected.append(str(val))
+                break
+
+    # Resolve leftover token refs and de-dupe (preserve separate lines)
+    seen = set()
+    unique = []
+    for item in expected:
+        resolved = _resolve_expected_token_refs(validator, item).strip()
+        if not resolved or resolved in seen:
+            continue
+        if re.fullmatch(r"(?:&lt;|<)[A-Za-z][A-Za-z0-9_]*(?:&gt;|>)", resolved):
+            continue
+        if re.fullmatch(r"opt_\d+", resolved, flags=re.IGNORECASE):
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return unique
+
+
+def grade_entities_payload(entities, context_entities, student_answers):
+    """
+    Ephemeral grading shared by workspace preview and practice-test batch grade.
+    Returns dict with items, earned_total, max_total.
+    """
+    all_entities_payload = []
+    for item in context_entities or []:
+        if not isinstance(item, dict):
+            continue
+        token_raw = str(item.get("token") or item.get("sequence_token") or "").strip()
+        sequence_token = str(item.get("sequence_token") or token_raw).strip()
+        explicit_archetype = str(item.get("archetype") or "").strip()
+        token_field = str(item.get("token") or "").strip()
+        if explicit_archetype:
+            archetype = explicit_archetype
+        elif token_field and sequence_token and token_field != sequence_token:
+            archetype = token_field
+        else:
+            archetype = re.sub(r"\d+$", "", token_raw).strip()
+        if not sequence_token or not archetype:
+            continue
+        inputs = dict(item.get("inputs") or {})
+        if "sequence_token" not in inputs:
+            inputs["sequence_token"] = sequence_token
+        all_entities_payload.append({
+            "token": archetype,
+            "sequence_token": sequence_token,
+            "inputs": inputs,
+            "simulated_value": item.get("simulated_value") or item.get("evaluated_output") or "",
+            "evaluated_output": item.get("evaluated_output") or item.get("simulated_value") or "",
+        })
+
+    items = []
+    earned_total = 0.0
+    max_total = 0.0
+
+    for item in entities or []:
+        if not isinstance(item, dict):
+            continue
+        token_raw = str(item.get("token") or item.get("sequence_token") or "").strip()
+        sequence_token = str(item.get("sequence_token") or token_raw).strip()
+        archetype = str(item.get("archetype") or re.sub(r"\d+$", "", token_raw)).strip()
+        if not sequence_token or not archetype:
+            continue
+
+        label = item.get("label") or sequence_token
+        points_raw = item.get("points")
+        try:
+            points_available = float(points_raw) if points_raw is not None else 0.0
+        except (TypeError, ValueError):
+            points_available = 0.0
+
+        student_input = (student_answers or {}).get(sequence_token)
+        if student_input is None and token_raw in (student_answers or {}):
+            student_input = student_answers.get(token_raw)
+
+        pattern_blueprint = get_blueprint_for_token(archetype) or {}
+        if not _blueprint_is_answer_field(pattern_blueprint):
+            continue
+
+        entity_inputs = dict(item.get("inputs") or {})
+        if "sequence_token" not in entity_inputs:
+            entity_inputs["sequence_token"] = sequence_token
+
+        validator = get_entity_validator(
+            archetype,
+            entity_inputs,
+            pattern_blueprint,
+            all_entities_payload=all_entities_payload,
+        )
+        if not validator.is_valid():
+            result = validator.grade_answer(student_input, points_available)
+            earned = 0.0
+            max_pts = float(result.get("max", points_available) or 0.0)
+            detail = "Entity configuration invalid"
+            if validator.errors:
+                detail = f"Invalid: {next(iter(validator.errors.values()))}"
+            expected_answers = []
+            student_lines = _format_student_answer_lines(student_input, validator, archetype)
+        else:
+            try:
+                validator.evaluate_output()
+            except Exception:
+                pass
+            result = validator.grade_answer(student_input, points_available)
+            earned = float(result.get("earned", 0.0) or 0.0)
+            max_pts = float(result.get("max", points_available) or 0.0)
+            detail = result.get("detail") or ""
+            expected_answers = _extract_expected_answers(validator, archetype)
+            student_lines = _format_student_answer_lines(student_input, validator, archetype)
+
+        fully_correct = max_pts > 0 and earned >= max_pts - 1e-9
+        earned_total += earned
+        max_total += max_pts
+        items.append({
+            "token": sequence_token,
+            "sequence_token": sequence_token,
+            "archetype": archetype,
+            "label": label,
+            "earned": earned,
+            "max": max_pts,
+            "detail": detail,
+            "fully_correct": fully_correct,
+            "student_answer": "\n".join(student_lines),
+            "student_answer_lines": student_lines,
+            "expected_answers": expected_answers if not fully_correct else [],
+        })
+
+    return {
+        "items": items,
+        "earned_total": earned_total,
+        "max_total": max_total,
+    }
+
+
+def build_practice_problem_instance(problem):
+    """
+    Fully evaluate one problem for an ephemeral practice-test slot (Option A).
+    """
+    QuestionBlock = apps.get_model('assessment_tool', 'QuestionBlock')
+    EntitySegment = apps.get_model('assessment_tool', 'EntitySegment')
+
+    saved_segments_records = list(
+        EntitySegment.objects.filter(problem=problem)
+        .select_related('problem_type_id_originator')
+        .order_by('id')
+    )
+
+    all_entities_payload = []
+    prepped_segments = []
+    for segment in saved_segments_records:
+        content_data = _parse_segment_content(segment.content)
+        token_name = segment.problem_type_id_originator.name
+        sequence_token = content_data.get("sequence_token") or token_name
+        archetype_name = re.sub(r'\d+$', '', token_name)
+        clean_inputs = dict(content_data)
+        shuffle_seed = clean_inputs.pop("shuffle_seed", None)
+        clean_inputs.pop("answer_field", None)
+        clean_inputs.pop("sequence_token", None)
+
+        all_entities_payload.append({
+            'token': archetype_name,
+            'sequence_token': str(sequence_token).strip(),
+            'inputs': clean_inputs,
+            'simulated_value': "",
+        })
+        prepped_segments.append((segment, content_data, clean_inputs, sequence_token, archetype_name, shuffle_seed))
+
+    loaded_segments = []
+    answer_fields = []
+    for segment, content_data, clean_inputs, sequence_token, archetype_name, shuffle_seed in prepped_segments:
+        blueprint_pattern = segment.problem_type_id_originator.format_pattern
+        if isinstance(blueprint_pattern, str):
+            try:
+                blueprint_pattern = json.loads(blueprint_pattern)
+            except json.JSONDecodeError:
+                blueprint_pattern = {}
+
+        render_results = evaluate_and_format_entity(
+            archetype_name=archetype_name,
+            sequence_token=sequence_token,
+            clean_inputs=clean_inputs,
+            pattern_blueprint=blueprint_pattern,
+            all_entities_payload=all_entities_payload,
+        )
+
+        seg_payload = {
+            "id": segment.id,
+            "token": archetype_name,
+            "archetype": archetype_name,
+            "sequence_token": sequence_token,
+            "points": segment.points,
+            "label": (blueprint_pattern or {}).get("name") or sequence_token,
+            "inputs": clean_inputs,
+            "simulated_value": render_results['evaluated_output'],
+            "evaluated_output": render_results['evaluated_output'],
+            "latex_output": render_results['latex_output'],
+            "output_types": render_results.get('output_types', []),
+            "is_answer_field": _blueprint_is_answer_field(blueprint_pattern or {}),
+            "shuffle_seed": shuffle_seed,
+        }
+        loaded_segments.append(seg_payload)
+        if seg_payload["is_answer_field"]:
+            answer_fields.append({
+                "token": archetype_name,
+                "archetype": archetype_name,
+                "sequence_token": sequence_token,
+                "points": segment.points,
+                "label": seg_payload["label"],
+                "inputs": clean_inputs,
+                "simulated_value": seg_payload["simulated_value"],
+                "evaluated_output": seg_payload["evaluated_output"],
+            })
+
+    q_block = QuestionBlock.objects.filter(problem=problem).first()
+    body_html = "<p><br></p>"
+    if q_block and q_block.content:
+        if isinstance(q_block.content, dict):
+            content_data = q_block.content
+        elif isinstance(q_block.content, str) and q_block.content.strip():
+            try:
+                content_data = json.loads(q_block.content)
+            except json.JSONDecodeError:
+                content_data = {}
+        else:
+            content_data = {}
+        if isinstance(content_data, dict):
+            body_html = content_data.get("html_content", "<p><br></p>")
+        else:
+            body_html = q_block.content
+
+    # Only grade answer fields that appear in the rendered question body
+    referenced = _tokens_referenced_in_html(body_html)
+    linked_via_aod = _answers_or_dne_linked_tokens(answer_fields, referenced)
+    answer_fields = [
+        field for field in answer_fields
+        if str(field.get("sequence_token") or "").strip() in referenced
+        and str(field.get("sequence_token") or "").strip() not in linked_via_aod
+    ]
+
+    return {
+        "problem_id": problem.id,
+        "title": problem.title,
+        "problem_status": problem.problem_status,
+        "body_html": body_html,
+        "loaded_segments": loaded_segments,
+        "answer_fields": answer_fields,
+        "all_entities": [
+            {
+                "token": s["token"],
+                "archetype": s["archetype"],
+                "sequence_token": s["sequence_token"],
+                "inputs": s["inputs"],
+                "simulated_value": s["simulated_value"],
+                "evaluated_output": s["evaluated_output"],
+                "points": s["points"],
+                "label": s["label"],
+            }
+            for s in loaded_segments
+        ],
+    }
+
+
+def assemble_practice_test(assessment):
+    """
+    Walk assessment question groups in order and build ephemeral practice slots.
+    Returns dict with problems, warnings (drafts / zero-count sets), skipped_drafts.
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    Problem = apps.get_model('assessment_tool', 'Problem')
+    AssessmentQuestionGroup = apps.get_model('assessment_tool', 'AssessmentQuestionGroup')
+    CustomQuestionDistribution = apps.get_model('assessment_tool', 'CustomQuestionDistribution')
+
+    aqgs = list(
+        AssessmentQuestionGroup.objects.filter(assessment=assessment)
+        .select_related('branch_location')
+        .order_by('order', 'id')
+    )
+
+    skipped_drafts = []
+    zero_count_sets = []
+    problems = []
+    slot_index = 0
+
+    for aqg in aqgs:
+        if not aqg.branch_location_id:
+            continue
+        children = list(
+            BranchGroup.objects.filter(parent_id=aqg.branch_location_id)
+            .order_by('order', 'id')
+        )
+        for child in children:
+            if child.folder_type == 'cqd':
+                cqd = CustomQuestionDistribution.objects.filter(
+                    assigned_folder_id=child.id
+                ).select_related('assigned_folder').first()
+                if not cqd:
+                    continue
+
+                pool_branches = list(
+                    BranchGroup.objects.filter(parent_id=child.id, folder_type='problem')
+                    .order_by('order', 'id')
+                )
+                pool_problems = list(
+                    Problem.objects.filter(branch_location_id__in=[b.id for b in pool_branches])
+                    .select_related('branch_location')
+                )
+                by_branch = {p.branch_location_id: p for p in pool_problems}
+                ordered_pool = []
+                for b in pool_branches:
+                    p = by_branch.get(b.id)
+                    if not p:
+                        continue
+                    status = (p.problem_status or '').lower()
+                    if status != 'complete':
+                        skipped_drafts.append({
+                            "problem_id": p.id,
+                            "title": p.title,
+                            "status": p.problem_status,
+                            "section": aqg.name,
+                            "problem_set": cqd.get_display_name(),
+                        })
+                        continue
+                    ordered_pool.append(p)
+
+                try:
+                    suggested = int(cqd.suggested_count)
+                except (TypeError, ValueError):
+                    suggested = 0
+                if suggested < 0:
+                    suggested = 0
+
+                set_label = cqd.get_display_name()
+                if suggested == 0:
+                    zero_count_sets.append({
+                        "cqd_id": cqd.id,
+                        "name": set_label,
+                        "section": aqg.name,
+                    })
+                    continue
+
+                n = min(suggested, len(ordered_pool))
+                if n <= 0:
+                    zero_count_sets.append({
+                        "cqd_id": cqd.id,
+                        "name": set_label,
+                        "section": aqg.name,
+                        "note": "No complete problems available in this set.",
+                    })
+                    continue
+
+                chosen = random.sample(ordered_pool, n) if n < len(ordered_pool) else list(ordered_pool)
+                # Preserve pool order among the chosen sample for stable reading
+                chosen_ids = {p.id for p in chosen}
+                chosen_ordered = [p for p in ordered_pool if p.id in chosen_ids]
+
+                for p in chosen_ordered:
+                    slot_index += 1
+                    instance = build_practice_problem_instance(p)
+                    instance["slot_index"] = slot_index
+                    instance["section_name"] = aqg.name
+                    instance["from_problem_set"] = set_label
+                    problems.append(instance)
+                continue
+
+            # Direct problem under the section
+            problem = Problem.objects.filter(branch_location_id=child.id).select_related('branch_location').first()
+            if not problem:
+                continue
+            status = (problem.problem_status or '').lower()
+            if status != 'complete':
+                skipped_drafts.append({
+                    "problem_id": problem.id,
+                    "title": problem.title,
+                    "status": problem.problem_status,
+                    "section": aqg.name,
+                })
+                continue
+            slot_index += 1
+            instance = build_practice_problem_instance(problem)
+            instance["slot_index"] = slot_index
+            instance["section_name"] = aqg.name
+            instance["from_problem_set"] = None
+            problems.append(instance)
+
+    return {
+        "problems": problems,
+        "skipped_drafts": skipped_drafts,
+        "zero_count_sets": zero_count_sets,
+        "problem_count": len(problems),
     }

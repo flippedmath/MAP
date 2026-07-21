@@ -165,6 +165,35 @@
     opacity: 1;
 }
 
+/* answersOrDne preview info: fixed + JS-clamped so overflow parents cannot clip it */
+.aod-preview-info .aod-preview-info-overlay {
+    position: fixed !important;
+    z-index: 10050 !important;
+    bottom: auto !important;
+    right: auto !important;
+    left: 0;
+    top: 0;
+    transform: none !important;
+    width: min(340px, calc(100vw - 16px));
+    max-height: min(320px, calc(100vh - 16px));
+    white-space: normal;
+}
+
+/* Suppress default absolute-hover show until JS clamps into the viewport */
+.aod-preview-info:hover .aod-preview-info-overlay {
+    visibility: hidden;
+    opacity: 0;
+}
+
+.aod-preview-info .aod-preview-info-overlay::before {
+    display: none;
+}
+
+.aod-preview-info.is-open .aod-preview-info-overlay {
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
 /* ==========================================================================
    Workspace Quill tables (editor + simulation preview)
    ========================================================================== */

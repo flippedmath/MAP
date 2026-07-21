@@ -1,4 +1,4 @@
-import { ensureLatexRenderBox } from './helpers.js';
+import { ensureLatexRenderBox, fetchFormulaStyleLatex } from './helpers.js';
 
 /**
  * answersOrDne — one-or-more linked answer keys OR author DNE.
@@ -13,6 +13,83 @@ const TYPE_LABELS = {
     arrayMatchingUnordered: 'coordinates',
     numAnswer: 'number',
 };
+
+/** Default hover-help copy when “Show information icon” is first enabled. */
+const DEFAULT_INFORMATION_TEXT = [
+    'When the solution for \\(x\\) has several parts joined by “or”, enter one answer per part.',
+    'Example: if the solution is \\((x \\le -1 \\land -\\infty < x) \\lor x = -\\frac{1}{2} \\lor x = 0\\)',
+    'then submit three answers:',
+    '',
+    '1) Interval \\(\\rightarrow\\) use coordinates',
+    '[-oo,-1]',
+    '(oo means infinity, not zeros)',
+    '',
+    '2) Exact value \\(\\rightarrow\\) use formula/string or number',
+    '-1/2 or -0.5 (both accepted)',
+    '',
+    '3) Exact value \\(\\rightarrow\\) use formula/string or number',
+    '0',
+    '',
+    'Order does not matter. Do not combine parts into one line.',
+].join('\n');
+
+function escapeHtmlText(val) {
+    return String(val ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/** Turn author info text (with \\(...\\) math) into HTML for the hover tooltip. */
+function informationTextToHtml(raw) {
+    const lines = String(raw ?? '').split('\n');
+    return lines.map((line) => {
+        let html = '';
+        let i = 0;
+        while (i < line.length) {
+            const start = line.indexOf('\\(', i);
+            if (start === -1) {
+                html += escapeHtmlText(line.slice(i));
+                break;
+            }
+            html += escapeHtmlText(line.slice(i, start));
+            const end = line.indexOf('\\)', start + 2);
+            if (end === -1) {
+                html += escapeHtmlText(line.slice(start));
+                break;
+            }
+            const tex = line.slice(start + 2, end);
+            html += `<span class="preview-static-latex aod-info-latex" style="display:inline-block; padding:0 1px;">${escapeHtmlText(tex)}</span>`;
+            i = end + 2;
+        }
+        return `<div style="margin:2px 0; line-height:1.4;">${html || '&nbsp;'}</div>`;
+    }).join('');
+}
+
+function readInformationSettings(card, savedValues) {
+    if (card) {
+        const show = !!card.querySelector('.val-aod-show-info')?.checked;
+        const text = card.querySelector('.val-aod-info-text')?.value ?? '';
+        return { show, text: String(text) };
+    }
+    const show = coerceBool(savedValues?.show_information, false);
+    let text = savedValues?.information_text != null ? String(savedValues.information_text) : '';
+    if (show && !text.trim()) text = DEFAULT_INFORMATION_TEXT;
+    return { show, text };
+}
+
+function syncInformationUi(card) {
+    const cb = card.querySelector('.val-aod-show-info');
+    const section = card.querySelector('.aod-info-text-section');
+    const ta = card.querySelector('.val-aod-info-text');
+    if (!cb || !section) return;
+    const on = !!cb.checked;
+    section.style.display = on ? 'flex' : 'none';
+    if (on && ta && !String(ta.value || '').trim()) {
+        ta.value = DEFAULT_INFORMATION_TEXT;
+    }
+}
 
 function findWorkspaceCardByToken(sequenceToken) {
     const clean = String(sequenceToken || '').replace(/[<>]/g, '').trim();
@@ -136,6 +213,9 @@ function getFieldsHtml(savedValues) {
     if (dne) answers = [];
     if (answers.length > 0) dne = false;
     const mode = savedValues.grading_mode === 'per_answer' ? 'per_answer' : 'all_or_nothing';
+    const showInfo = coerceBool(savedValues.show_information, false);
+    let infoText = savedValues.information_text != null ? String(savedValues.information_text) : '';
+    if (showInfo && !infoText.trim()) infoText = DEFAULT_INFORMATION_TEXT;
 
     return `
         <div class="answers-or-dne-fields" style="display:flex; flex-direction:column; gap:10px; width:100%; box-sizing:border-box;">
@@ -152,6 +232,19 @@ function getFieldsHtml(savedValues) {
                         <option value="all_or_nothing" ${mode === 'all_or_nothing' ? 'selected' : ''}>All or nothing</option>
                         <option value="per_answer" ${mode === 'per_answer' ? 'selected' : ''}>Split points per correct answer</option>
                     </select>
+                </label>
+            </div>
+
+            <div class="linked-input-wrapper" data-input-key="show_information" data-input-type="checkbox" style="display:flex; align-items:center; gap:8px;">
+                <label style="font-size:0.75rem; color:#475569; font-weight:500; display:inline-flex; align-items:center; gap:6px; cursor:pointer; margin:0;">
+                    <input type="checkbox" class="val-aod-show-info" ${showInfo ? 'checked' : ''} style="cursor:pointer;">
+                    Show information icon in preview
+                </label>
+            </div>
+
+            <div class="aod-info-text-section linked-input-wrapper" data-input-key="information_text" data-input-type="paragraph" style="display:${showInfo ? 'flex' : 'none'}; flex-direction:column; gap:4px; width:100%;">
+                <label style="font-size:0.75rem; color:#475569; font-weight:500;">Information (shown on hover; use \\(...\\) for math):
+                    <textarea class="val-aod-info-text" rows="10" style="width:100%; box-sizing:border-box; font-size:0.78rem; padding:6px 8px; border:1px solid #cbd5e1; border-radius:4px; font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; line-height:1.35; resize:vertical; min-height:120px;">${escapeHtmlText(infoText)}</textarea>
                 </label>
             </div>
 
@@ -199,6 +292,13 @@ function serialize({ card, inputsCollected }) {
     const modeSel = card.querySelector('.val-aod-grading-mode');
     inputsCollected.grading_mode = modeSel?.value === 'per_answer' ? 'per_answer' : 'all_or_nothing';
 
+    const showInfo = !!card.querySelector('.val-aod-show-info')?.checked;
+    inputsCollected.show_information = showInfo;
+    const infoTa = card.querySelector('.val-aod-info-text');
+    inputsCollected.information_text = showInfo
+        ? String(infoTa?.value ?? '')
+        : String(infoTa?.value ?? '');
+
     const answers = [];
     if (!inputsCollected.correct_is_dne) {
         card.querySelectorAll('.answers-or-dne-key-row').forEach((row) => {
@@ -245,6 +345,16 @@ function bindEvents({ card, updateWorkspaceSimulationPreview, dispatchWorkspaceB
         if (e.target.classList.contains('val-aod-grading-mode')) {
             bump();
         }
+        if (e.target.classList.contains('val-aod-show-info')) {
+            syncInformationUi(card);
+            bump();
+        }
+    });
+
+    card.addEventListener('input', (e) => {
+        if (e.target.classList.contains('val-aod-info-text')) {
+            bump();
+        }
     });
 
     card.addEventListener('click', (e) => {
@@ -289,6 +399,7 @@ function bindEvents({ card, updateWorkspaceSimulationPreview, dispatchWorkspaceB
     });
 
     syncDneUi(card);
+    syncInformationUi(card);
     return true;
 }
 
@@ -340,7 +451,7 @@ function applyBatchSync({ card, result }) {
     return true;
 }
 
-function renderPreviewToken({ cleanToken, initialValue }) {
+function renderPreviewToken({ cleanToken, initialValue, card }) {
     const token = cleanToken || '';
     let dne = false;
     let entries = [];
@@ -348,6 +459,23 @@ function renderPreviewToken({ cleanToken, initialValue }) {
         dne = !!initialValue.dne;
         if (Array.isArray(initialValue.entries)) entries = initialValue.entries;
     }
+
+    const { show: showInfo, text: infoRaw } = readInformationSettings(card, null);
+    let infoText = infoRaw;
+    if (showInfo && !String(infoText || '').trim()) {
+        infoText = DEFAULT_INFORMATION_TEXT;
+    }
+    const infoTrimmed = String(infoText || '').trim();
+    const infoIconHtml = (showInfo && infoTrimmed)
+        ? `
+            <div class="workspace-info-tooltip-container aod-preview-info" style="position:relative; display:inline-flex; align-items:center; margin-left:4px;" title="">
+                <i class="fas fa-info-circle" style="color:#0284c7; cursor:help; font-size:0.95rem;" aria-label="Answer instructions"></i>
+                <div class="workspace-info-tooltip-overlay aod-preview-info-overlay">
+                    ${informationTextToHtml(infoText)}
+                </div>
+            </div>
+        `
+        : '';
 
     return `
         <div class="simulated-answers-or-dne-wrapper" data-token="${escapeHtmlAttr(token)}" style="display:block; width:100%; max-width:420px; margin:8px 0; box-sizing:border-box; border:1px solid #e2e8f0; border-radius:6px; background:#f8fafc; padding:10px;">
@@ -359,6 +487,7 @@ function renderPreviewToken({ cleanToken, initialValue }) {
                     <input type="checkbox" class="preview-aod-dne" ${dne ? 'checked' : ''} style="cursor:pointer;">
                     DNE
                 </label>
+                ${infoIconHtml}
             </div>
         </div>
     `;
@@ -374,19 +503,182 @@ function entryRowHtml(type, value, token) {
     } else {
         field = `<input type="text" class="preview-aod-entry-input" data-entry-type="shortAnswer" data-token="${escapeHtmlAttr(token)}" value="${escapeHtmlAttr(value ?? '')}" placeholder="formula or string" style="flex:1; min-width:0; box-sizing:border-box; font-size:0.85rem; padding:4px 8px; border:1px solid #cbd5e1; border-radius:4px;">`;
     }
+    const formulaPreview = type === 'shortAnswer'
+        ? `<span class="preview-aod-formula-render" aria-hidden="true" style="display:none; flex-shrink:0; max-width:280px; overflow:auto; font-size:0.95rem; color:#0f172a; line-height:1.25;"></span>`
+        : '';
     return `
         <div class="aod-preview-entry-row" data-entry-type="${escapeHtmlAttr(type)}" style="display:flex; align-items:center; gap:6px; width:100%;">
             <span style="font-size:0.68rem; color:#64748b; min-width:72px; flex-shrink:0;">${escapeHtmlAttr(label)}</span>
             ${field}
             <button type="button" class="btn-aod-remove-entry" title="Remove" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:0.85rem; padding:4px; flex-shrink:0;"><i class="fas fa-trash"></i></button>
+            ${formulaPreview}
         </div>
     `;
+}
+
+/** True when the typed value looks like math (not plain prose). */
+function looksLikeFormulaExpression(raw) {
+    const s = String(raw ?? '').trim();
+    if (!s) return false;
+    if (/^[A-Za-z][A-Za-z\s.',:;!?"-]*$/.test(s)
+        && !/\b(sin|cos|tan|cot|sec|csc|log|ln|exp|sqrt|pi|oo)\b/i.test(s)) {
+        return false;
+    }
+    return /[\d^_=+\-*/()[\]{}\\.]|\b(sin|cos|tan|cot|sec|csc|log|ln|exp|sqrt|pi|oo|leq|geq)\b/i.test(s);
+}
+
+async function updateAodFormulaPreview(input) {
+    if (!input || input.getAttribute('data-entry-type') !== 'shortAnswer') return;
+    const row = input.closest('.aod-preview-entry-row');
+    const slot = row?.querySelector('.preview-aod-formula-render');
+    if (!slot) return;
+
+    const raw = String(input.value ?? '').trim();
+    slot.innerHTML = '';
+    slot.style.display = 'none';
+    if (!raw || typeof katex === 'undefined' || !looksLikeFormulaExpression(raw)) return;
+
+    const reqId = String((Number(input.dataset.aodLatexReq || 0) || 0) + 1);
+    input.dataset.aodLatexReq = reqId;
+
+    const latex = await fetchFormulaStyleLatex(raw);
+    if (input.dataset.aodLatexReq !== reqId) return; // stale response
+    if (!latex) return;
+
+    try {
+        katex.render(latex, slot, {
+            throwOnError: false,
+            displayMode: false,
+        });
+        if (slot.querySelector('.katex') || slot.textContent.trim()) {
+            slot.style.display = 'inline-block';
+        }
+    } catch (_) {
+        slot.innerHTML = '';
+        slot.style.display = 'none';
+    }
+}
+
+function refreshAllAodFormulaPreviews(wrap) {
+    wrap?.querySelectorAll('.preview-aod-entry-input[data-entry-type="shortAnswer"]').forEach((input) => {
+        updateAodFormulaPreview(input);
+    });
+}
+
+/**
+ * Place the AOD info overlay with position:fixed and clamp it into the viewport
+ * (avoids clipping by overflow:hidden/auto ancestors in the preview column).
+ */
+function positionAodPreviewInfoTooltip(container) {
+    const overlay = container?.querySelector('.aod-preview-info-overlay');
+    if (!overlay) return;
+    const anchor = container.querySelector('.fa-info-circle') || container;
+    const pad = 8;
+    const gap = 6;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const iconRect = anchor.getBoundingClientRect();
+    const width = Math.min(340, Math.max(180, vw - pad * 2));
+
+    overlay.style.position = 'fixed';
+    overlay.style.zIndex = '10050';
+    overlay.style.width = `${width}px`;
+    overlay.style.maxWidth = `${vw - pad * 2}px`;
+    overlay.style.right = 'auto';
+    overlay.style.bottom = 'auto';
+    overlay.style.transform = 'none';
+    overlay.style.left = `${pad}px`;
+    overlay.style.top = `${pad}px`;
+    overlay.style.maxHeight = `${Math.min(320, vh - pad * 2)}px`;
+    // Force layout for measurement while about to show
+    overlay.style.visibility = 'hidden';
+    overlay.style.opacity = '0';
+
+    const spaceAbove = Math.max(0, iconRect.top - pad);
+    const spaceBelow = Math.max(0, vh - iconRect.bottom - pad);
+    const desiredH = Math.min(overlay.scrollHeight, 320);
+    const placeAbove = (spaceAbove >= desiredH + gap) || (spaceAbove >= spaceBelow && spaceAbove > 60);
+
+    if (placeAbove) {
+        const maxH = Math.max(80, Math.min(320, spaceAbove - gap));
+        overlay.style.maxHeight = `${maxH}px`;
+        let top = iconRect.top - gap - overlay.offsetHeight;
+        if (top < pad) top = pad;
+        overlay.style.top = `${top}px`;
+        container.dataset.aodInfoPlacement = 'above';
+    } else {
+        const maxH = Math.max(80, Math.min(320, spaceBelow - gap));
+        overlay.style.maxHeight = `${maxH}px`;
+        let top = iconRect.bottom + gap;
+        if (top + overlay.offsetHeight > vh - pad) {
+            top = Math.max(pad, vh - pad - overlay.offsetHeight);
+        }
+        overlay.style.top = `${top}px`;
+        container.dataset.aodInfoPlacement = 'below';
+    }
+
+    let left = iconRect.right - width;
+    if (left < pad) left = pad;
+    if (left + width > vw - pad) left = Math.max(pad, vw - pad - width);
+    overlay.style.left = `${left}px`;
+
+    overlay.style.visibility = 'visible';
+    overlay.style.opacity = '1';
+    container.classList.add('is-open');
+}
+
+function closeAodPreviewInfoTooltip(container) {
+    if (!container) return;
+    container.classList.remove('is-open');
+    const overlay = container.querySelector('.aod-preview-info-overlay');
+    if (!overlay) return;
+    // Leave fixed coords; hover CSS / is-open controls visibility
+    overlay.style.visibility = '';
+    overlay.style.opacity = '';
+}
+
+let _aodInfoOpenContainer = null;
+let _aodInfoWindowBound = false;
+
+function ensureAodInfoWindowListeners() {
+    if (_aodInfoWindowBound) return;
+    _aodInfoWindowBound = true;
+    const repositionOpen = () => {
+        if (_aodInfoOpenContainer && _aodInfoOpenContainer.isConnected) {
+            positionAodPreviewInfoTooltip(_aodInfoOpenContainer);
+        }
+    };
+    window.addEventListener('scroll', repositionOpen, true);
+    window.addEventListener('resize', repositionOpen);
+}
+
+function bindAodPreviewInfoTooltip(wrap) {
+    if (!wrap || wrap.dataset.aodInfoBound === '1') return;
+    wrap.dataset.aodInfoBound = '1';
+    ensureAodInfoWindowListeners();
+
+    wrap.addEventListener('mouseenter', (e) => {
+        const container = e.target.closest?.('.aod-preview-info');
+        if (!container || !wrap.contains(container)) return;
+        _aodInfoOpenContainer = container;
+        requestAnimationFrame(() => positionAodPreviewInfoTooltip(container));
+    }, true);
+
+    wrap.addEventListener('mouseleave', (e) => {
+        const container = e.target.closest?.('.aod-preview-info');
+        if (!container || !wrap.contains(container)) return;
+        if (container.contains(e.relatedTarget)) return;
+        closeAodPreviewInfoTooltip(container);
+        if (_aodInfoOpenContainer === container) _aodInfoOpenContainer = null;
+    }, true);
 }
 
 function mountPreviewAnswersOrDne({ wrapper, onChange, scheduleGradeRefresh, initialValue }) {
     const wrap = wrapper;
     if (!wrap || wrap.dataset.aodMounted === '1') return true;
     wrap.dataset.aodMounted = '1';
+
+    bindAodPreviewInfoTooltip(wrap);
 
     const token = wrap.getAttribute('data-token') || '';
     const entriesEl = wrap.querySelector('.aod-preview-entries');
@@ -433,6 +725,7 @@ function mountPreviewAnswersOrDne({ wrapper, onChange, scheduleGradeRefresh, ini
         if (!entriesEl) return;
         entriesEl.innerHTML = entries.map((e) => entryRowHtml(e.type, e.value, token)).join('');
         syncDneVisibility();
+        refreshAllAodFormulaPreviews(wrap);
     }
 
     function showChooser() {
@@ -484,6 +777,13 @@ function mountPreviewAnswersOrDne({ wrapper, onChange, scheduleGradeRefresh, ini
     });
     wrap.addEventListener('change', (e) => {
         if (e.target.classList.contains('preview-aod-dne')) publish();
+    });
+    // After finishing a formula/string edit, show KaTeX to the right of delete (when it looks like math).
+    wrap.addEventListener('focusout', (e) => {
+        if (e.target.classList.contains('preview-aod-entry-input')
+            && e.target.getAttribute('data-entry-type') === 'shortAnswer') {
+            updateAodFormulaPreview(e.target);
+        }
     });
 
     // Restore initial rows into DOM

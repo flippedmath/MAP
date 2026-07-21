@@ -300,9 +300,22 @@ document.addEventListener('DOMContentLoaded', function() {
      */
     function createNewBlockInstanceUI(token, containerElement, savedValues = {}, points = undefined, overrideSequenceToken = undefined) {
 
+        const isPracticeStub = !!(
+            containerElement
+            && (
+                containerElement.classList?.contains('practice-stub-host')
+                || containerElement.closest?.('.practice-stub-host')
+            )
+        );
+
         const card = document.createElement('div');
-        card.className = 'workspace-component-card workspace-block-card';
+        card.className = isPracticeStub
+            ? 'workspace-component-card workspace-block-card practice-stub-card'
+            : 'workspace-component-card workspace-block-card';
         card.setAttribute('data-token', token);
+        if (isPracticeStub) {
+            card.setAttribute('data-practice-stub', '1');
+        }
         card.style.cssText = 'background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; position: relative;';
 
         const isVariable = dynamicVarsTokens.some(item => item.token === token);
@@ -487,6 +500,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         card.addEventListener('input', function(e) {
+            if (isPracticeStub) return;
             if (e.target.matches('input, select, textarea')) {
                 if (e.target.classList.contains('val-answer-field-points')) {
                     const parsed = parseFloat(e.target.value);
@@ -502,7 +516,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        updateWorkspaceSimulationPreview();
+        if (!isPracticeStub) {
+            updateWorkspaceSimulationPreview();
+        }
 
         return card;
     }
@@ -549,7 +565,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             
-            const upstreamCard = Array.from(document.querySelectorAll('.workspace-component-card')).find(c => {
+            const upstreamCard = Array.from(document.querySelectorAll('.workspace-component-card:not(.practice-stub-card)')).find(c => {
                 const delBtn = c.querySelector('.btn-delete-workspace-component');
                 return delBtn && delBtn.getAttribute('data-indexed-token') === linkedTokenName;
             });
@@ -754,6 +770,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const tokenKey = wrap.getAttribute('data-token') || '';
             if (!tokenKey || Object.prototype.hasOwnProperty.call(matrixByToken, tokenKey)) return;
             previewStudentAnswers[tokenKey] = { cells: {} };
+        });
+        // Interactive graph answer fields (marks / segments) persist on the canvas node
+        root.querySelectorAll('[data-practice-answer]').forEach((el) => {
+            const tokenKey = el.getAttribute('data-token') || '';
+            if (!tokenKey) return;
+            try {
+                const parsed = JSON.parse(el.getAttribute('data-practice-answer') || '');
+                if (parsed && typeof parsed === 'object') {
+                    previewStudentAnswers[tokenKey] = parsed;
+                }
+            } catch (_) { /* ignore */ }
         });
     }
 
@@ -1012,9 +1039,13 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // 🎯 HELPER SUB-ROUTINE: HANDLES REGEX STRING REPLACEMENT & KATEX PARSING
-    function renderPreviewCanvasMarkup(canvasContent, renderTarget) {
+    // options: { cardScope?: Element|Document, segmentMap?: Map, previewNamePrefix?: string }
+    function renderPreviewCanvasMarkup(canvasContent, renderTarget, options = {}) {
         const pendingGraphRenders = [];
         let previewGraphSeq = 0;
+        const cardScope = options.cardScope || document;
+        const segmentMap = options.segmentMap instanceof Map ? options.segmentMap : null;
+        const previewNamePrefix = options.previewNamePrefix || '';
         
         const tempContainer = document.createElement('div');
         tempContainer.innerHTML = canvasContent;
@@ -1105,34 +1136,44 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 // 🔍 DIAGNOSTIC LOG 1: Track what the layout parser is trying to match
 
-                // 🔍 Print out all component cards currently residing in the DOM to inspect their names
-                const availableCards = Array.from(document.querySelectorAll('.workspace-component-card')).map(c => {
-                    return {
-                        archetype: c.getAttribute('data-token'),
-                        indexedTokenAttr: c.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token')
-                    };
-                });
-
-                // Locate the active interactive workspace card row using case-insensitive matching logic
-                const card = Array.from(document.querySelectorAll('.workspace-component-card')).find(c => {
+                // Locate the active interactive workspace card (scoped for practice-test stubs)
+                const cardQueryRoot = cardScope === document
+                    ? document
+                    : cardScope;
+                const cardSelector = cardScope === document
+                    ? '.workspace-component-card:not(.practice-stub-card)'
+                    : '.workspace-component-card';
+                const card = Array.from(cardQueryRoot.querySelectorAll(cardSelector)).find(c => {
                     const delBtn = c.querySelector('.btn-delete-workspace-component');
                     return delBtn && delBtn.getAttribute('data-indexed-token') === cleanToken;
                 });
 
-
+                const mappedSegment = segmentMap ? segmentMap.get(cleanToken) : null;
                 if (card && card.getAttribute('data-token')) {
                     baseArchetypeToken = card.getAttribute('data-token');
+                } else if (mappedSegment && (mappedSegment.token || mappedSegment.archetype)) {
+                    baseArchetypeToken = mappedSegment.token || mappedSegment.archetype;
                 }
 
                 // Check variable validation token lists or structural layout conditions
                 const inDynamicVarsList = dynamicVarsTokens.some(v => v.token === baseArchetypeToken);
                 const isFormulaCondition = baseArchetypeToken === 'formula';
+                const segmentSaysAnswer = mappedSegment && mappedSegment.is_answer_field === true;
+                const segmentSaysVar = mappedSegment && mappedSegment.is_answer_field === false;
                 
                 // If it looks like a known archetype, treat it as a variable processing path
-                const isVar = inDynamicVarsList || isFormulaCondition || ['randInt', 'rand', 'primeFactors', 'graph', 'matrix', 'matrixResultByIndex'].includes(baseArchetypeToken);
+                const isVar = !segmentSaysAnswer && (
+                    segmentSaysVar
+                    || inDynamicVarsList
+                    || isFormulaCondition
+                    || ['randInt', 'rand', 'primeFactors', 'graph', 'matrix', 'matrixResultByIndex'].includes(baseArchetypeToken)
+                );
 
                 if (isVar) {
                     let displayVal = formulaLiveLatexCache[cleanToken];
+                    if ((displayVal === undefined || displayVal === null || displayVal === '') && mappedSegment) {
+                        displayVal = mappedSegment.latex_output || mappedSegment.evaluated_output || mappedSegment.simulated_value || '';
+                    }
 
                     // Prefer server/cached LaTeX; never treat valid latex "0" as missing
                     const isServerValueValid = displayVal !== undefined && displayVal !== null && displayVal !== '' && displayVal !== '???';
@@ -1141,13 +1182,30 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Graph preview needs the JSON manifest (evaluated_output), not latex_output
                         // which is only a placeholder like "[Graph Component]".
                         if (card) {
-                            displayVal = card.getAttribute('data-simulated-value')
-                                || evaluateSingleCardOutput(card, cleanToken);
+                            const fromCard = card.getAttribute('data-simulated-value') || '';
+                            if (typeof fromCard === 'string' && fromCard.trim().startsWith('{')) {
+                                displayVal = fromCard;
+                            } else {
+                                displayVal = fromCard || evaluateSingleCardOutput(card, cleanToken);
+                            }
+                        } else if (mappedSegment) {
+                            displayVal = mappedSegment.evaluated_output || mappedSegment.simulated_value || displayVal;
+                        }
+                        // Never keep the latex placeholder as the graph config
+                        if (typeof displayVal === 'string' && !displayVal.trim().startsWith('{')) {
+                            if (mappedSegment && (mappedSegment.evaluated_output || mappedSegment.simulated_value)) {
+                                displayVal = mappedSegment.evaluated_output || mappedSegment.simulated_value;
+                            }
                         }
                     } else if (baseArchetypeToken === 'formula' || baseArchetypeToken === 'matrix' || baseArchetypeToken === 'matrixResultByIndex') {
                         if (!isServerValueValid && card) {
                             displayVal = card.getAttribute('data-latex-output')
                                 || card.getAttribute('data-simulated-value')
+                                || cleanToken;
+                        } else if (!isServerValueValid && mappedSegment) {
+                            displayVal = mappedSegment.latex_output
+                                || mappedSegment.evaluated_output
+                                || mappedSegment.simulated_value
                                 || cleanToken;
                         }
                     } else {
@@ -1161,6 +1219,11 @@ document.addEventListener('DOMContentLoaded', function() {
                             } else {
                                 displayVal = evaluateSingleCardOutput(card, cleanToken);
                             }
+                        } else if (mappedSegment) {
+                            displayVal = mappedSegment.latex_output
+                                || mappedSegment.evaluated_output
+                                || mappedSegment.simulated_value
+                                || displayVal;
                         }
                         // Missing card is expected during early Quill paste before segments land —
                         // fall through to token/cache fallbacks without console noise.
@@ -1191,11 +1254,24 @@ document.addEventListener('DOMContentLoaded', function() {
                     // 🎯 STEP 3: Fallback for all other standard variable badges (rand, randInt, etc)
                     return `<span class="simulated-math-variable-badge" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.9rem; display: inline-block; margin: 0 2px;">${displayVal}</span>`;
                 
-                } else if (answerFieldsTokens.some(i => i.token === baseArchetypeToken)) {
+                } else if (
+                    segmentSaysAnswer
+                    || answerFieldsTokens.some(i => i.token === baseArchetypeToken)
+                    || [
+                        'numAnswer', 'shortAnswer', 'longAnswer', 'multipleChoiceAnswer',
+                        'matrixAnswer', 'canvas', 'arrayMatchingUnordered', 'answersOrDne',
+                        'slopeFieldGraph', 'graphBetweenPoints'
+                    ].includes(baseArchetypeToken)
+                ) {
                     // Prefer entity-specific preview (e.g. slopeFieldGraph) over generic stub
                     let answerDisplayVal = null;
                     if (card) {
                         answerDisplayVal = card.getAttribute('data-simulated-value')
+                            || formulaLiveLatexCache[cleanToken]
+                            || null;
+                    } else if (mappedSegment) {
+                        answerDisplayVal = mappedSegment.evaluated_output
+                            || mappedSegment.simulated_value
                             || formulaLiveLatexCache[cleanToken]
                             || null;
                     }
@@ -1204,9 +1280,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         displayVal: answerDisplayVal,
                         cleanToken,
                         card,
+                        cardScope: cardScope === document ? null : cardScope,
                         renderGraphComponentCanvas,
                         renderSlopeFieldCanvas,
                         previewInstanceId: `live-preview-canvas-${cleanToken}-${++previewGraphSeq}`,
+                        previewNamePrefix,
                         registerPreviewGraph: (job) => {
                             if (job) pendingGraphRenders.push(job);
                         },
@@ -1600,6 +1678,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     canvasEl.style.overflow = 'visible';
                     canvasEl.innerHTML = '';
                     const tokenKey = job.cleanToken || '';
+                    if (tokenKey) canvasEl.setAttribute('data-token', tokenKey);
                     const stored = tokenKey ? previewStudentAnswers[tokenKey] : null;
                     const initialMarks = (stored && Array.isArray(stored.marks)) ? stored.marks : [];
                     renderSlopeFieldCanvas(canvasEl, job.graphConfig, {
@@ -1609,7 +1688,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         initialMarks,
                         onStudentAnswerChange: (marks) => {
                             if (!tokenKey) return;
-                            previewStudentAnswers[tokenKey] = { marks: Array.isArray(marks) ? marks : [] };
+                            const payload = { marks: Array.isArray(marks) ? marks : [] };
+                            previewStudentAnswers[tokenKey] = payload;
+                            try {
+                                canvasEl.dataset.practiceAnswer = JSON.stringify(payload);
+                            } catch (_) { /* ignore */ }
                             scheduleWorkspacePreviewGradeRefresh(180);
                         }
                     });
@@ -1618,6 +1701,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     canvasEl.style.minHeight = '';
                     canvasEl.innerHTML = '';
                     const tokenKey = job.cleanToken || '';
+                    if (tokenKey) canvasEl.setAttribute('data-token', tokenKey);
                     const stored = tokenKey ? previewStudentAnswers[tokenKey] : null;
                     const initialValue = (stored && typeof stored === 'object') ? stored : (job.initialValue || null);
                     renderGraphBetweenPointsCanvas(canvasEl, job.graphConfig, {
@@ -1628,9 +1712,13 @@ document.addEventListener('DOMContentLoaded', function() {
                         studentSegments: Array.isArray(initialValue?.segments) ? initialValue.segments : [],
                         onStudentAnswerChange: (payload) => {
                             if (!tokenKey) return;
-                            previewStudentAnswers[tokenKey] = payload && typeof payload === 'object'
+                            const next = payload && typeof payload === 'object'
                                 ? payload
                                 : { segments: [] };
+                            previewStudentAnswers[tokenKey] = next;
+                            try {
+                                canvasEl.dataset.practiceAnswer = JSON.stringify(next);
+                            } catch (_) { /* ignore */ }
                             scheduleWorkspacePreviewGradeRefresh(180);
                         }
                     });
@@ -7460,6 +7548,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const card = target.closest('.workspace-component-card') || target.closest('.workspace-block-card');
             if (!card) return;
+            if (card.classList.contains('practice-stub-card') || card.getAttribute('data-practice-stub') === '1') {
+                return;
+            }
 
             const cardId = card.querySelector('.btn-delete-workspace-component')?.getAttribute('data-indexed-token');
             if (!cardId) return;
@@ -7574,4 +7665,92 @@ document.addEventListener('DOMContentLoaded', function() {
 
         return chartInstance;
     }
+
+    // -------------------------------------------------------------------------
+    // Practice-test preview API (separate page; reuses simulation render/capture)
+    // -------------------------------------------------------------------------
+    window.PracticeTestPreviewAPI = {
+        ready: true,
+        _clearAnswerStore() {
+            Object.keys(previewStudentAnswers).forEach((key) => {
+                delete previewStudentAnswers[key];
+            });
+        },
+        buildStubCards(container, segments) {
+            if (!container) return;
+            const prevQuiet = window.__workspacePreviewQuiet;
+            window.__workspacePreviewQuiet = true;
+            try {
+                container.innerHTML = '';
+                (segments || []).forEach((segment) => {
+                    const token = segment.token || segment.archetype;
+                    if (!token) return;
+                    const seq = segment.sequence_token || token;
+                    const card = createNewBlockInstanceUI(
+                        token,
+                        container,
+                        segment.inputs || {},
+                        segment.points,
+                        seq
+                    );
+                    if (!card) return;
+                    if (segment.simulated_value !== undefined && segment.simulated_value !== null) {
+                        card.setAttribute('data-simulated-value', segment.simulated_value);
+                    }
+                    if (segment.evaluated_output !== undefined && segment.evaluated_output !== null) {
+                        card.setAttribute('data-simulated-value', segment.evaluated_output);
+                    }
+                    if (segment.latex_output !== undefined && segment.latex_output !== null && segment.latex_output !== '') {
+                        card.setAttribute('data-latex-output', segment.latex_output);
+                        formulaLiveLatexCache[seq] = segment.latex_output;
+                    } else if (segment.evaluated_output !== undefined && segment.evaluated_output !== null && segment.evaluated_output !== '') {
+                        // randInt/rand often have identical latex/evaluated; keep cache warm either way
+                        formulaLiveLatexCache[seq] = String(segment.evaluated_output);
+                    }
+                    if (segment.simulated_value !== undefined && segment.simulated_value !== null && segment.simulated_value !== '') {
+                        if (formulaLiveLatexCache[seq] === undefined) {
+                            formulaLiveLatexCache[seq] = String(segment.simulated_value);
+                        }
+                    }
+                    if (segment.shuffle_seed !== undefined && segment.shuffle_seed !== null && segment.shuffle_seed !== '') {
+                        card.setAttribute('data-shuffle-seed', String(segment.shuffle_seed));
+                    } else if (!card.getAttribute('data-shuffle-seed')) {
+                        card.setAttribute('data-shuffle-seed', `${seq}-practice`);
+                    }
+                });
+            } finally {
+                window.__workspacePreviewQuiet = prevQuiet;
+            }
+        },
+        renderPreview(renderTarget, bodyHtml, options = {}) {
+            if (!renderTarget) return;
+            this._clearAnswerStore();
+            const answers = options.studentAnswers || {};
+            Object.keys(answers).forEach((key) => {
+                previewStudentAnswers[key] = answers[key];
+            });
+            if (options.latexByToken && typeof options.latexByToken === 'object') {
+                Object.keys(options.latexByToken).forEach((key) => {
+                    formulaLiveLatexCache[key] = options.latexByToken[key];
+                });
+            }
+            renderPreviewCanvasMarkup(bodyHtml || '<p><br></p>', renderTarget, {
+                cardScope: options.cardScope || document,
+                segmentMap: options.segmentMap || null,
+                previewNamePrefix: options.previewNamePrefix || '',
+            });
+        },
+        captureAnswers(root) {
+            this._clearAnswerStore();
+            capturePreviewAnswersFromDom(root);
+            const out = {};
+            Object.keys(previewStudentAnswers).forEach((key) => {
+                out[key] = previewStudentAnswers[key];
+            });
+            return out;
+        },
+        clearAnswers() {
+            this._clearAnswerStore();
+        },
+    };
 });

@@ -718,15 +718,15 @@ document.addEventListener("DOMContentLoaded", function() {
             const currentCount = displaySpan.innerText.trim();
 
             // 1. Prompt the user for input
-            let userInput = prompt("Enter the number of problems to randomly choose from this group:", currentCount);
+            let userInput = prompt("Enter how many problems to randomly choose from this set (0 or more):", currentCount);
             
             // If the user hits cancel, exit early
             if (userInput === null) return;
 
-            // 2. Enforce rules: Parse and validate positive integers
+            // 2. Enforce rules: non-negative integers (0 allowed = sample none from set)
             let parsedCount = parseInt(userInput, 10);
-            if (isNaN(parsedCount) || parsedCount <= 0 || String(parsedCount) !== userInput.trim()) {
-                parsedCount = 1; // Default fallback for invalid entries
+            if (isNaN(parsedCount) || parsedCount < 0 || String(parsedCount) !== userInput.trim()) {
+                parsedCount = 0;
             }
 
             try {

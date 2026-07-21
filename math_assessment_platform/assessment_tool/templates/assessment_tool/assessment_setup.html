@@ -10,7 +10,7 @@
 
 {% block course_sub_content %}
 <div class="setup-container">
-    <div class="assessments-pane-header">
+        <div class="assessments-pane-header">
         <div class="header-title-block">
             <h2 style="display: inline-flex; align-items: center; gap: 10px;">
                 <a href="{% url 'assessment_view' course.id %}" style="text-decoration: none; color: #64748b; font-size: 1.5rem;"><i class="fas fa-arrow-left"></i></a>
@@ -18,7 +18,12 @@
             </h2>
             <p class="subtitle">Organize question groupings and build structural assessment sections.</p>
         </div>
-        <button id="trigger-create-aqg-modal" class="btn-create-assessment">+ Add Question Group Section</button>
+        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+            <a href="{% url 'assessment_practice_test' course.id assessment.id %}" class="btn-create-assessment" style="background: #0f766e; text-decoration: none;">
+                <i class="fas fa-play"></i> Practice Test
+            </a>
+            <button id="trigger-create-aqg-modal" class="btn-create-assessment">+ Add Question Group Section</button>
+        </div>
     </div>
 
     <div id="aqg-canvas-list" class="aqg-list-wrapper">

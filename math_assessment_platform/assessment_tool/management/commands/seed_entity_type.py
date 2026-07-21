@@ -333,6 +333,8 @@ class Command(BaseCommand):
                     "value": ["string_match(['all_or_nothing', 'per_answer'])"],
                     "default": "all_or_nothing"
                 },
+                "show_information": {"field": "checkbox", "value": ["boolean"], "default": False},
+                "information_text": {"field": "paragraph", "value": ["string"], "default": ""},
                 "answers": {
                     "field": "array",
                     "value": ["array(['entity'])"],
@@ -358,6 +360,9 @@ class Command(BaseCommand):
                 "<br>"
                 "In the preview, students use <strong>Add answer</strong> (formula/string, coordinates, or number) "
                 "or select <strong>DNE</strong>. DNE hides once any answer row exists; it returns if all rows are deleted. "
+                "Optionally check <strong>Show information icon in preview</strong> to place a hover "
+                "<code>ℹ</code> next to those controls with editable instructions "
+                "(math via <code>\\(...\\)</code>); when unchecked the icon is omitted entirely. "
                 "Formula/string and number entries cross-match when they are the same value "
                 "(e.g. <code>-1/2</code> and <code>-0.5</code>). "
                 "Each linked key is a separate slot (multiset): if two keys are both "

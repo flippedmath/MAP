@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+    <link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
+    <link href="{% static 'assessment_tool/css/assessment_practice_test.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="practice-test-page">
+    <div class="practice-test-container">
+        <div class="practice-test-header">
+            <div class="header-title-block">
+                <h2 style="display: inline-flex; align-items: center; gap: 10px;">
+                    <a href="{% url 'assessment_setup' course.id assessment.id %}" class="practice-back-link" title="Back to assessment setup">
+                        <i class="fas fa-arrow-left"></i>
+                    </a>
+                    Practice Test: {{ assessment.name }}
+                </h2>
+                <p class="subtitle">Ephemeral preview — answers are graded once and not saved.</p>
+            </div>
+            <div class="practice-test-header-actions">
+                <button type="button" id="practice-reload-btn" class="btn-practice-secondary" title="Generate a new random instance">
+                    <i class="fas fa-redo-alt"></i> New instance
+                </button>
+                <button type="button" id="practice-grade-btn" class="btn-practice-primary" disabled>
+                    <i class="fas fa-check-double"></i> Grade
+                </button>
+            </div>
+        </div>
+
+        <div id="practice-status" class="practice-status" aria-live="polite">
+            Loading practice test…
+        </div>
+
+        <div id="practice-warnings" class="practice-warnings" style="display: none;"></div>
+
+        <div id="practice-problems" class="practice-problems-list"></div>
+
+        <section id="practice-grading-section" class="practice-grading-section" hidden>
+            <div class="practice-grading-header">
+                <h3>Grading</h3>
+                <label class="practice-expected-toggle">
+                    <input type="checkbox" id="practice-show-expected" />
+                    Show answers for incomplete fields
+                </label>
+            </div>
+            <div id="practice-grading-results" class="practice-grading-results"></div>
+            <div id="practice-grading-total" class="practice-grading-total"></div>
+        </section>
+    </div>
+</div>
+
+<div id="practice-confirm-overlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="practice-confirm-title" aria-hidden="true">
+    <div class="modal-card practice-confirm-card">
+        <h3 id="practice-confirm-title">Continue?</h3>
+        <p id="practice-confirm-message"></p>
+        <ul id="practice-confirm-list" class="practice-confirm-list"></ul>
+        <div class="modal-actions-tray">
+            <button type="button" class="btn-modal btn-modal-cancel" id="practice-confirm-cancel">Cancel</button>
+            <button type="button" class="btn-modal btn-modal-submit" id="practice-confirm-continue">Continue</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+<script>
+    window.PRACTICE_TEST_CONFIG = {
+        startUrl: "{% url 'assessment_practice_test_start' course.id assessment.id %}",
+        gradeUrl: "{% url 'assessment_practice_test_grade' course.id assessment.id %}",
+        setupUrl: "{% url 'assessment_setup' course.id assessment.id %}",
+        assessmentName: "{{ assessment.name|escapejs }}"
+    };
+</script>
+<script type="module" src="{% static 'assessment_tool/js/practice_test.js' %}"></script>
+{% endblock %}

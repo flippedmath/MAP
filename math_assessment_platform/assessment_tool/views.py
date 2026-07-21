@@ -9,7 +9,7 @@ from .models import (
     QuestionBlock, EntitySegment,
     EntityType, EntityUserInput
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
 import json
 from django.http import JsonResponse
@@ -1901,10 +1901,10 @@ def update_cqd_count_ajax(request):
         # Clean validation conversion safeguard
         try:
             new_count = int(suggested_count)
-            if new_count <= 0:
-                new_count = 1
+            if new_count < 0:
+                new_count = 0
         except (TypeError, ValueError):
-            new_count = 1
+            new_count = 0
 
         # Locate the record and confirm ownership against the virtual folder owner field
         if request.user.user_type == 'IT_Support':
@@ -2300,7 +2300,6 @@ def grade_problem_workspace_preview(request, problem_id):
         return JsonResponse({"success": False, "error": "Malformed JSON payload."}, status=400)
 
     entities = payload.get("entities") or []
-    # Full workspace graph (dynamic variables + answer fields) for linked-token resolution
     context_entities = payload.get("all_entities") or entities
     student_answers = payload.get("student_answers") or {}
     if not isinstance(entities, list):
@@ -2310,108 +2309,147 @@ def grade_problem_workspace_preview(request, problem_id):
     if not isinstance(student_answers, dict):
         return JsonResponse({"success": False, "error": "student_answers must be an object."}, status=400)
 
-    # Sibling context for cross-token resolution during validation / grading
-    all_entities_payload = []
-    for item in context_entities:
-        if not isinstance(item, dict):
-            continue
-        token_raw = str(item.get("token") or item.get("sequence_token") or "").strip()
-        sequence_token = str(item.get("sequence_token") or token_raw).strip()
-        explicit_archetype = str(item.get("archetype") or "").strip()
-        token_field = str(item.get("token") or "").strip()
-        # serializeAllWorkspaceEntities: token=archetype, sequence_token=indexed
-        # answer-field grade payload: token=indexed, archetype=base
-        if explicit_archetype:
-            archetype = explicit_archetype
-        elif token_field and sequence_token and token_field != sequence_token:
-            archetype = token_field
-        else:
-            archetype = re.sub(r"\d+$", "", token_raw).strip()
-        if not sequence_token or not archetype:
-            continue
-        all_entities_payload.append({
-            "token": archetype,
-            "sequence_token": sequence_token,
-            "inputs": item.get("inputs") or {},
-            "simulated_value": item.get("simulated_value") or "",
-        })
+    graded = grade_entities_payload(entities, context_entities, student_answers)
+    return JsonResponse({
+        "success": True,
+        "items": graded["items"],
+        "earned_total": graded["earned_total"],
+        "max_total": graded["max_total"],
+    })
 
-    items = []
+
+def _user_can_manage_assessment(request, course_id):
+    is_teacher = UsersInCourse.objects.filter(
+        course_id=course_id,
+        user=request.user,
+        user__user_type='Teacher'
+    ).exists()
+    user_type = getattr(request.user, 'user_type', 'Student')
+    return bool(is_teacher or user_type == 'IT_Support' or request.user.is_staff)
+
+
+@login_required
+def assessment_practice_test_view(request, course_id, assessment_id):
+    """Teacher practice-test page for an assessment (ephemeral, not saved)."""
+    if not _user_can_manage_assessment(request, course_id):
+        messages.error(request, "You do not have access to preview this assessment.")
+        return redirect('course_dashboard', course_id=course_id)
+
+    course = get_object_or_404(Course, id=course_id)
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location'),
+        id=assessment_id,
+        course=course,
+    )
+    user_type = getattr(request.user, 'user_type', 'Student')
+    return render(request, 'assessment_tool/assessment_practice_test.html', {
+        'course': course,
+        'assessment': assessment,
+        'user_type': user_type if user_type == 'IT_Support' else 'Teacher',
+        'load_problem_workspace': True,
+        'active_tab': 'assessments',
+    })
+
+
+@login_required
+@require_POST
+def assessment_practice_test_start_ajax(request, course_id, assessment_id):
+    """Assemble fully rendered practice-test instances for this assessment."""
+    if not _user_can_manage_assessment(request, course_id):
+        return JsonResponse({'success': False, 'error': 'Unauthorized.'}, status=403)
+
+    assessment = get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
+    try:
+        data = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        data = {}
+
+    confirm_drafts = bool(data.get('confirm_drafts'))
+    confirm_zero_sets = bool(data.get('confirm_zero_sets'))
+
+    assembled = assemble_practice_test(assessment)
+    skipped_drafts = assembled.get('skipped_drafts') or []
+    zero_count_sets = assembled.get('zero_count_sets') or []
+
+    needs = []
+    if skipped_drafts and not confirm_drafts:
+        needs.append('drafts')
+    if zero_count_sets and not confirm_zero_sets:
+        needs.append('zero_sets')
+
+    if needs:
+        return JsonResponse({
+            'success': False,
+            'needs_confirmation': True,
+            'needs': needs,
+            'skipped_drafts': skipped_drafts,
+            'zero_count_sets': zero_count_sets,
+            'message': 'Confirmation required before starting the practice test.',
+        }, status=200)
+
+    return JsonResponse({
+        'success': True,
+        'assessment_id': assessment.id,
+        'assessment_name': assessment.name,
+        'problems': assembled.get('problems') or [],
+        'skipped_drafts': skipped_drafts,
+        'zero_count_sets': zero_count_sets,
+        'problem_count': assembled.get('problem_count', 0),
+    }, status=200)
+
+
+@login_required
+@require_POST
+def assessment_practice_test_grade_ajax(request, course_id, assessment_id):
+    """Batch-grade an ephemeral practice test in one request."""
+    if not _user_can_manage_assessment(request, course_id):
+        return JsonResponse({'success': False, 'error': 'Unauthorized.'}, status=403)
+
+    get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
+
+    try:
+        payload = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Malformed JSON payload.'}, status=400)
+
+    problems_payload = payload.get('problems') or []
+    if not isinstance(problems_payload, list):
+        return JsonResponse({'success': False, 'error': 'problems must be an array.'}, status=400)
+
+    results = []
     earned_total = 0.0
     max_total = 0.0
 
-    for item in entities:
-        if not isinstance(item, dict):
+    for slot in problems_payload:
+        if not isinstance(slot, dict):
             continue
-        token_raw = str(item.get("token") or item.get("sequence_token") or "").strip()
-        sequence_token = str(item.get("sequence_token") or token_raw).strip()
-        archetype = str(item.get("archetype") or re.sub(r"\d+$", "", token_raw)).strip()
-        if not sequence_token or not archetype:
-            continue
-
-        label = item.get("label") or sequence_token
-        points_raw = item.get("points")
-        try:
-            points_available = float(points_raw) if points_raw is not None else 0.0
-        except (TypeError, ValueError):
-            points_available = 0.0
-
-        student_input = student_answers.get(sequence_token)
-        if student_input is None and token_raw in student_answers:
-            student_input = student_answers.get(token_raw)
-
-        pattern_blueprint = get_blueprint_for_token(archetype) or {}
-        name_list = pattern_blueprint.get("entity_name_list")
-        if isinstance(name_list, str):
-            try:
-                parsed_list = json.loads(name_list)
-                name_list = parsed_list if isinstance(parsed_list, list) else [name_list]
-            except Exception:
-                name_list = [name_list]
-        is_answer_field = (
-            pattern_blueprint.get("answer_field") is True
-            or (isinstance(name_list, list) and "Answer Input Fields" in name_list)
-            or name_list == "Answer Input Fields"
-        )
-        if not is_answer_field:
+        problem_id = slot.get('problem_id')
+        title = slot.get('title') or f'Problem {problem_id}'
+        slot_index = slot.get('slot_index')
+        entities = slot.get('entities') or slot.get('answer_fields') or []
+        all_entities = slot.get('all_entities') or entities
+        student_answers = slot.get('student_answers') or {}
+        if not isinstance(entities, list) or not isinstance(all_entities, list) or not isinstance(student_answers, dict):
             continue
 
-        validator = get_entity_validator(
-            archetype,
-            item.get("inputs") or {},
-            pattern_blueprint,
-            all_entities_payload=all_entities_payload,
-        )
-        if not validator.is_valid():
-            result = validator.grade_answer(student_input, points_available)
-            earned = 0.0
-            max_pts = float(result.get("max", points_available) or 0.0)
-            detail = "Entity configuration invalid"
-            if validator.errors:
-                detail = f"Invalid: {next(iter(validator.errors.values()))}"
-        else:
-            result = validator.grade_answer(student_input, points_available)
-            earned = float(result.get("earned", 0.0) or 0.0)
-            max_pts = float(result.get("max", points_available) or 0.0)
-            detail = result.get("detail") or ""
-
-        earned_total += earned
-        max_total += max_pts
-        items.append({
-            "token": sequence_token,
-            "archetype": archetype,
-            "label": label,
-            "earned": earned,
-            "max": max_pts,
-            "detail": detail,
+        graded = grade_entities_payload(entities, all_entities, student_answers)
+        earned_total += graded['earned_total']
+        max_total += graded['max_total']
+        results.append({
+            'problem_id': problem_id,
+            'slot_index': slot_index,
+            'title': title,
+            'earned': graded['earned_total'],
+            'max': graded['max_total'],
+            'fields': graded['items'],
         })
 
     return JsonResponse({
-        "success": True,
-        "items": items,
-        "earned_total": earned_total,
-        "max_total": max_total,
-    })
+        'success': True,
+        'problems': results,
+        'earned_total': earned_total,
+        'max_total': max_total,
+    }, status=200)
 
 
 @require_POST

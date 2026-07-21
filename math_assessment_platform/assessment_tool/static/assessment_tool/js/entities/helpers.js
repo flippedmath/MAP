@@ -75,6 +75,70 @@ export function ensureLatexRenderBox(card) {
     return targetDisplay;
 }
 
+/**
+ * CSRF token for workspace preview API posts.
+ * @returns {string}
+ */
+export function getCsrfToken() {
+    const csrfInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+    if (csrfInput?.value) return csrfInput.value;
+    const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+}
+
+/**
+ * Convert an expression string to LaTeX the same way a formula card does
+ * (leave as formula → SymPy → sp.latex via validate-component-preview).
+ * @param {string} expression
+ * @returns {Promise<string|null>} latex string, or null if not formula-renderable
+ */
+export async function fetchFormulaStyleLatex(expression) {
+    const expr = String(expression ?? '').trim();
+    if (!expr) return null;
+
+    const seq = `_aod_formula_preview_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    let data;
+    try {
+        const res = await fetch('/assessment/api/validate-component-preview/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            },
+            body: JSON.stringify({
+                trigger_token: seq,
+                mutation_targets: [seq],
+                entities: [{
+                    token: 'formula',
+                    sequence_token: seq,
+                    inputs: {
+                        formula: expr,
+                        'solve method': 'leave as formula',
+                        variables: '',
+                    },
+                    simulated_value: '',
+                }],
+            }),
+        });
+        data = await res.json();
+    } catch (_) {
+        return null;
+    }
+
+    const entry = data?.updated_cache?.[seq];
+    const latex = entry?.latex_output;
+    if (latex == null || latex === '') return null;
+    const text = String(latex).trim();
+    if (!text || text === '???' || text.startsWith('⚠️') || text.startsWith('[Invalid') || text.startsWith('[Evaluation')) {
+        return null;
+    }
+    // Single bare identifier (e.g. "hello") is not a useful formula preview.
+    if (/^[A-Za-z][A-Za-z0-9_]*$/.test(text) && !/[\d^\\{}_]/.test(expr)) {
+        return null;
+    }
+    return text;
+}
+
 const GREEK_VAR_REGEX_STR = '^(?:alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lamda|mu|nu|xi|omicron|rho|sigma|tau|upsilon|phi|chi|psi|omega)';
 
 /** Bare names reserved as SymPy special functions — not allowed as plain variables. */
