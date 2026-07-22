@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+
+{% block content %}
+<p class="notification-back">
+    <a href="{% url 'notifications' %}">&larr; All notifications</a>
+</p>
+
+<div class="card">
+    <div class="notification-item-header">
+        <h1 class="notification-detail-title">{{ notification.title }}</h1>
+        <div class="notification-item-meta">
+            {% if notification.creation_date_utc %}
+                <time class="local-datetime" datetime="{{ notification.creation_date_utc }}">{{ notification.creation_date_utc }}</time>
+            {% else %}
+                Unknown date
+            {% endif %}
+        </div>
+    </div>
+    {% if notification.reason_label %}
+        <span class="notification-item-reason">{{ notification.reason_label }}</span>
+    {% endif %}
+    <div class="notification-detail-actions">
+        <form
+            method="post"
+            action="{% url 'notification_delete' notification.id %}"
+            class="notification-delete-form"
+            onsubmit="return confirm('Delete this notification?');"
+        >
+            {% csrf_token %}
+            <button type="submit" class="notification-delete-btn">Delete</button>
+        </form>
+    </div>
+</div>
+
+{% if notification.detail_kind == "complete_problem_render_failure" %}
+
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Summary</h2>
+    {% if notification.note_text %}
+        <p class="notification-summary">{{ notification.note_text }}</p>
+    {% endif %}
+    {% if notification.outcome_text %}
+        <p class="notification-summary">{{ notification.outcome_text }}</p>
+    {% endif %}
+    {% if notification.location_path %}
+        <p class="notification-location-path"><strong>Location:</strong> {{ notification.location_path }}</p>
+    {% endif %}
+
+    <dl class="notification-meta-grid">
+        {% if notification.error_time_utc %}
+            <div>
+                <dt>When</dt>
+                <dd>
+                    <time class="local-datetime" datetime="{{ notification.error_time_utc }}">{{ notification.error_time_utc }}</time>
+                </dd>
+            </div>
+        {% endif %}
+        {% if notification.actor_username %}
+            <div>
+                <dt>Triggered by</dt>
+                <dd>{{ notification.actor_username }}</dd>
+            </div>
+        {% endif %}
+        <div>
+            <dt>Render attempts</dt>
+            <dd>{{ notification.total_attempts|default:"—" }}</dd>
+        </div>
+        <div>
+            <dt>Recovered after retries</dt>
+            <dd>
+                {% if notification.provided_successfully_after_retries %}
+                    Yes (attempt {{ notification.succeeded_on_attempt }})
+                {% else %}
+                    No
+                {% endif %}
+            </dd>
+        </div>
+    </dl>
+</div>
+
+{% if notification.hierarchy %}
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Problem location</h2>
+    <dl class="notification-meta-grid">
+        {% if notification.hierarchy.assessment_name or notification.hierarchy.assessment_id %}
+            <div>
+                <dt>Assessment</dt>
+                <dd>{{ notification.hierarchy.assessment_name|default:"—" }}{% if notification.hierarchy.assessment_id %} <span class="notification-id-hint">#{{ notification.hierarchy.assessment_id }}</span>{% endif %}</dd>
+            </div>
+        {% endif %}
+        {% if notification.hierarchy.section_name or notification.hierarchy.section_id %}
+            <div>
+                <dt>Section</dt>
+                <dd>{{ notification.hierarchy.section_name|default:"—" }}{% if notification.hierarchy.section_id %} <span class="notification-id-hint">#{{ notification.hierarchy.section_id }}</span>{% endif %}</dd>
+            </div>
+        {% endif %}
+        {% if notification.hierarchy.problem_set_name or notification.hierarchy.problem_set_id %}
+            <div>
+                <dt>Problem set</dt>
+                <dd>{{ notification.hierarchy.problem_set_name|default:"—" }}{% if notification.hierarchy.problem_set_id %} <span class="notification-id-hint">#{{ notification.hierarchy.problem_set_id }}</span>{% endif %}</dd>
+            </div>
+        {% endif %}
+        <div>
+            <dt>Problem</dt>
+            <dd>{{ notification.hierarchy.problem_name|default:"—" }}{% if notification.hierarchy.problem_id %} <span class="notification-id-hint">#{{ notification.hierarchy.problem_id }}</span>{% endif %}</dd>
+        </div>
+    </dl>
+</div>
+{% endif %}
+
+{% if notification.unique_errors %}
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Errors to fix</h2>
+    <div class="notification-error-cards">
+        {% for item in notification.unique_errors %}
+        <article class="notification-error-card">
+            <header class="notification-error-card-header">
+                {% if item.token %}
+                    <code>{{ item.token }}</code>
+                {% else %}
+                    <span>Entity error</span>
+                {% endif %}
+                {% if item.archetype %}
+                    <span class="notification-error-archetype">{{ item.archetype }}</span>
+                {% endif %}
+            </header>
+            {% if item.issue %}
+                <div class="notification-error-issue">{{ item.issue }}</div>
+            {% endif %}
+            <p class="notification-error-message">{{ item.error }}</p>
+        </article>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if notification.card_input_rows or notification.failing_random_rows %}
+<div class="card">
+    {% if notification.card_input_rows %}
+    <h2 class="notification-section-heading" style="margin-top: 0;">Card inputs at failure</h2>
+    <ul class="notification-kv-list">
+        {% for row in notification.card_input_rows %}
+            <li><span class="notification-kv-key">{{ row.key }}</span> <span class="notification-kv-value">{{ row.value }}</span></li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if notification.failing_random_rows %}
+    <h2 class="notification-section-heading"{% if not notification.card_input_rows %} style="margin-top: 0;"{% endif %}>Random values at failure</h2>
+    <ul class="notification-kv-list">
+        {% for row in notification.failing_random_rows %}
+            <li><span class="notification-kv-key">{{ row.key }}</span> <span class="notification-kv-value">{{ row.value }}</span></li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if notification.attempt_rows %}
+<div class="card">
+    <details class="notification-nested-details notification-attempts-details">
+        <summary>Attempt-by-attempt details ({{ notification.attempt_rows|length }})</summary>
+        <div class="notification-attempts">
+            {% for attempt in notification.attempt_rows %}
+            <section class="notification-attempt {% if attempt.ok %}is-ok{% else %}is-fail{% endif %}">
+                <header class="notification-attempt-header">
+                    <strong>Attempt {{ attempt.attempt|default:"?" }}</strong>
+                    <span class="notification-attempt-status">
+                        {% if attempt.ok %}Succeeded{% else %}Failed{% endif %}
+                    </span>
+                </header>
+                {% if attempt.failed_items %}
+                <ul class="notification-error-list">
+                    {% for item in attempt.failed_items %}
+                        <li>
+                            {% if item.token %}<code>{{ item.token }}</code>{% if item.issue %} ({{ item.issue }}){% endif %} — {% endif %}{{ item.error }}
+                        </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+                {% if attempt.random_value_rows %}
+                <details class="notification-nested-details">
+                    <summary>Random values</summary>
+                    <ul class="notification-kv-list">
+                        {% for row in attempt.random_value_rows %}
+                            <li><span class="notification-kv-key">{{ row.key }}</span> <span class="notification-kv-value">{{ row.value }}</span></li>
+                        {% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+            </section>
+            {% endfor %}
+        </div>
+    </details>
+</div>
+{% endif %}
+
+{% elif notification.detail_kind == "structured" %}
+
+{% for section in notification.generic_sections %}
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">{{ section.label }}</h2>
+    {% if section.kind == "kv" %}
+        {% if section.rows %}
+        <ul class="notification-kv-list">
+            {% for row in section.rows %}
+                <li><span class="notification-kv-key">{{ row.key }}</span> <span class="notification-kv-value">{{ row.value }}</span></li>
+            {% endfor %}
+        </ul>
+        {% else %}
+            <p class="notifications-empty">No values.</p>
+        {% endif %}
+    {% elif section.kind == "list" %}
+        {% if section.rows %}
+        <ul class="notification-plain-list">
+            {% for row in section.rows %}
+                <li>{{ row.value }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+            <p class="notifications-empty">No values.</p>
+        {% endif %}
+    {% else %}
+        <p class="notification-summary">{{ section.text }}</p>
+    {% endif %}
+</div>
+{% endfor %}
+
+{% else %}
+
+<div class="card">
+    {% if notification.content_display %}
+        <h2 class="notification-section-heading" style="margin-top: 0;">Message</h2>
+        <pre class="notification-item-content">{{ notification.content_display }}</pre>
+    {% else %}
+        <p class="notifications-empty">No additional content.</p>
+    {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}

@@ -37,6 +37,7 @@ function getFieldsHtml(savedValues) {
         ? savedValues.formulas
         : (savedValues.formulas ? [savedValues.formulas] : ['']);
     const showGridChecked = savedValues.show_grid !== false;
+    const labelCriticalChecked = savedValues.label_critical_points === true;
 
     const legacyX = savedValues['x-axis range'] || [];
     const xMinVal = savedValues['x_min'] !== undefined ? savedValues['x_min'] : (legacyX[0] !== undefined ? legacyX[0] : '');
@@ -65,12 +66,17 @@ function getFieldsHtml(savedValues) {
             </div>
             <button type="button" class="btn-add-graph-formula" style="align-self: flex-start; background: #f1f5f9; border: 1px dashed #cbd5e1; border-radius: 4px; color: #475569; font-size: 0.72rem; padding: 3px 8px; cursor: pointer;"><i class="fas fa-plus"></i> Add Plot Line Formula</button>
 
-            <div style="display: flex; align-items: center; justify-content: flex-start; margin-top: 4px; margin-bottom: 4px;">
+            <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 12px 18px; margin-top: 4px; margin-bottom: 4px;">
                 <input type="hidden" class="val-graph-variables" value="${savedValues.variables || 'x,y'}">
                 
                 <div style="display: flex; align-items: center; padding: 6px 0;">
                     <label style="font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px; cursor: pointer;">
                         <input type="checkbox" class="val-graph-show-grid" ${showGridChecked ? 'checked' : ''} style="cursor: pointer;"> Visualize Grid Layout
+                    </label>
+                </div>
+                <div style="display: flex; align-items: center; padding: 6px 0;">
+                    <label style="font-size: 0.75rem; color: #475569; display: flex; align-items: center; gap: 6px; cursor: pointer;" title="Label extrema, inflection points, and axis intercepts with letters a, b, c…">
+                        <input type="checkbox" class="val-graph-label-critical-points" ${labelCriticalChecked ? 'checked' : ''} style="cursor: pointer;"> Label critical points
                     </label>
                 </div>
             </div>
@@ -166,6 +172,16 @@ function bindEvents({ card, updateWorkspaceSimulationPreview }) {
         }
     });
 
+    // Checkboxes may only fire `change` (not `input`) in some browsers
+    card.querySelectorAll('.val-graph-show-grid, .val-graph-label-critical-points').forEach((cb) => {
+        cb.addEventListener('change', () => {
+            cb.dispatchEvent(new Event('input', { bubbles: true }));
+            if (typeof updateWorkspaceSimulationPreview === 'function') {
+                updateWorkspaceSimulationPreview();
+            }
+        });
+    });
+
     return true;
 }
 
@@ -196,11 +212,13 @@ function serialize({ card, inputsCollected }) {
     const yStepVal = parseFloat(card.querySelector('.val-graph-y-step')?.value) || 0.5;
 
     const isGridChecked = card.querySelector('.val-graph-show-grid')?.checked ?? true;
+    const labelCriticalChecked = !!card.querySelector('.val-graph-label-critical-points')?.checked;
 
     inputsCollected["x-axis range"] = [xMinVal, xMaxVal, xStepVal];
     inputsCollected["y-axis range"] = [yMinVal, yMaxVal, yStepVal];
     inputsCollected["show_grid"] = isGridChecked;
     inputsCollected["show_grid_overlay"] = isGridChecked;
+    inputsCollected["label_critical_points"] = labelCriticalChecked;
 
     let purgeIdx = 0;
     while (inputsCollected[`formula_${purgeIdx}`] !== undefined) {
@@ -247,6 +265,70 @@ function sanitizeFormulas(graphConfig) {
     return graphConfig;
 }
 
+function formatAnnotationCoord(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '?';
+    if (Math.abs(v) < 1e-10) return '0';
+    const rounded = Math.round(v * 1e4) / 1e4;
+    return String(rounded);
+}
+
+function kindLabel(kind) {
+    switch (kind) {
+        case 'extremum': return 'max/min';
+        case 'inflection': return 'inflection';
+        case 'x_intercept': return 'x-intercept';
+        case 'y_intercept': return 'y-intercept';
+        default: return kind || 'point';
+    }
+}
+
+function renderCriticalPointsLegend(hostEl, graphConfig) {
+    if (!hostEl) return;
+    let legend = hostEl.querySelector('.graph-critical-legend');
+    const anns = Array.isArray(graphConfig?.annotations) ? graphConfig.annotations : [];
+    const enabled = !!graphConfig?.visualization?.label_critical_points;
+
+    if (!enabled || anns.length === 0) {
+        if (legend) legend.remove();
+        return;
+    }
+
+    if (!legend) {
+        legend = document.createElement('div');
+        legend.className = 'graph-critical-legend';
+        legend.style.cssText = [
+            'margin: 6px 0 2px',
+            'padding: 6px 8px',
+            'background: #f8fafc',
+            'border: 1px solid #e2e8f0',
+            'border-radius: 4px',
+            'font-size: 0.72rem',
+            'color: #334155',
+            'line-height: 1.45',
+            'text-align: left',
+        ].join(';');
+        hostEl.appendChild(legend);
+    }
+
+    const rows = anns.map((a) => {
+        const letter = String(a.label || '?');
+        const x = formatAnnotationCoord(a.x);
+        const y = formatAnnotationCoord(a.y);
+        const kind = kindLabel(a.kind);
+        return `<div style="display:flex; gap:6px; align-items:baseline;">`
+            + `<span style="font-style:italic; font-weight:700; min-width:1.1rem; color:#0f172a;">${letter}</span>`
+            + `<span>= (${x}, ${y})</span>`
+            + `<span style="color:#64748b;">— ${kind}</span>`
+            + `</div>`;
+    }).join('');
+
+    legend.innerHTML = `
+        <div style="font-weight:600; color:#475569; margin-bottom:4px;">Labeled points</div>
+        ${rows}
+    `;
+}
+
 function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
     if (!card || !result) return null;
 
@@ -280,6 +362,8 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
             canvasContainer.id = canvasId;
             canvasContainer.style.cssText = 'margin: 10px auto; width: 100%; max-width: 340px; height: 240px;';
             targetDisplay.appendChild(canvasContainer);
+        } else if (!targetDisplay.contains(canvasContainer)) {
+            targetDisplay.appendChild(canvasContainer);
         }
         canvasContainer.innerHTML = '';
 
@@ -299,6 +383,8 @@ function applyBatchSync({ card, result, renderGraphComponentCanvas, token }) {
         } else {
             throw new Error("The global abstraction engine 'renderGraphComponentCanvas' is missing.");
         }
+
+        renderCriticalPointsLegend(targetDisplay, graphConfig);
     } catch (err) {
         console.error("Graph canvas render failed:", err);
         targetDisplay.style.textAlign = 'center';

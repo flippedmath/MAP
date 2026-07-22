@@ -1412,7 +1412,11 @@ class BaseEntity:
         # If the target is an upstream random entity, reuse its client-side generated value
         # 🎯 CACHE HIT: Check if we already have a locked-in client string or a freshly computed value
         cached_val = target_payload.get('simulated_value', '') or target_payload.get('evaluated_output', '')
-        if cached_val not in ("", None, "???", "None", "null") and not str(cached_val).startswith("[Invalid"):
+        if (
+            cached_val not in ("", None, "???", "None", "null")
+            and not str(cached_val).startswith("[Invalid")
+            and not str(cached_val).startswith("⚠️")
+        ):
             if token_archetype in ['rand', 'randInt']:
                 return str(cached_val)
             # Locked evaluated values from practice-test / preview payloads (avoid re-roll / token echo)
@@ -1542,6 +1546,18 @@ class BaseEntity:
             return e
 
         try:
+            # Inequalities cannot be subtracted; use relational equals / canonical form.
+            # (SymPy flips e.g. x < c → c > x on simplify — those must still match.)
+            if isinstance(student_expr, Relational) or isinstance(correct_expr, Relational):
+                try:
+                    if student_expr.equals(correct_expr):
+                        return True
+                except Exception:
+                    pass
+                try:
+                    return bool(sp.simplify(student_expr) == sp.simplify(correct_expr))
+                except Exception:
+                    return False
             return sp.simplify(as_diff(student_expr) - as_diff(correct_expr)) == 0
         except Exception:
             return False
@@ -1557,6 +1573,15 @@ class BaseEntity:
         if not student_trimmed:
             return False
         if student_trimmed.lower() == correct_trimmed.lower():
+            return True
+        # Also accept exact match to the simplified display form (e.g. x < c ↔ c > x
+        # as strings when one side was already simplified for the card preview).
+        correct_simplified = self._simplify_key(correct_trimmed)
+        if (
+            correct_simplified
+            and correct_simplified.lower() != correct_trimmed.lower()
+            and student_trimmed.lower() == correct_simplified.lower()
+        ):
             return True
         student_expr = self._to_sympy(student_trimmed)
         correct_expr = self._to_sympy(correct_trimmed)
@@ -1576,6 +1601,208 @@ class RandomIntegerEntity(BaseEntity):
     """
     Validation engine for the 'randInt' token pattern.
     """
+
+    _EVAL_ERROR_PREFIX = "⚠️ Error"
+
+    def _coerce_bool(self, raw, default=False):
+        if raw is None or raw == "":
+            return default
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).strip().lower() in ("true", "1", "yes", "checked", "on")
+
+    @staticmethod
+    def _effective_lattice(min_val, max_val, step_val, exclusive):
+        """
+        Return (start, max_k) for candidates start + k*step, k=0..max_k.
+        Inclusive: [min, max]; exclusive: (min, max) on the step lattice.
+        """
+        try:
+            min_val = int(min_val)
+            max_val = int(max_val)
+            step_val = int(step_val)
+        except (TypeError, ValueError):
+            return None
+        if step_val <= 0:
+            return None
+        start = min_val + step_val if exclusive else min_val
+        if exclusive:
+            if start >= max_val:
+                return None
+            max_k = (max_val - start - 1) // step_val
+        else:
+            if start > max_val:
+                return None
+            max_k = (max_val - start) // step_val
+        if max_k < 0:
+            return None
+        return start, max_k
+
+    def _payload_by_token(self, clean_token):
+        clean = str(clean_token or "").replace("<", "").replace(">", "").strip()
+        if not clean:
+            return None
+        return next(
+            (
+                item
+                for item in (self.all_entities_payload or [])
+                if (item.get("sequence_token") or item.get("indexed_token") or "") == clean
+            ),
+            None,
+        )
+
+    def _normalize_exclude_elements(self, exclude_raw):
+        if exclude_raw in (None, ""):
+            return []
+        if isinstance(exclude_raw, (list, tuple)):
+            elements = [str(item).strip() for item in exclude_raw if str(item).strip() != ""]
+        else:
+            elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
+        out = []
+        for item in elements:
+            item = (
+                str(item)
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .strip()
+            )
+            if item:
+                out.append(item)
+        return out
+
+    def _literal_int(self, raw, default=None):
+        if raw is None or raw == "":
+            return default
+        if isinstance(raw, bool):
+            return default
+        if isinstance(raw, (int, float)) and math.isfinite(raw):
+            return int(raw)
+        s = str(raw).replace("&lt;", "<").replace("&gt;", ">").strip()
+        if re.match(r"^<[^<>]+>$", s):
+            return None  # linked — not a literal
+        if re.match(r"^-?\d+$", s):
+            return int(s)
+        try:
+            num = float(s)
+            if math.isfinite(num) and float(num).is_integer():
+                return int(num)
+        except (TypeError, ValueError):
+            pass
+        return default
+
+    # Proven-empty upstream interval (distinct from None = unknown / skip).
+    _EMPTY_ENDPOINT_INTERVAL = object()
+
+    def _endpoint_interval(self, raw, visiting=None):
+        """
+        O(1) inclusive [lo, hi] hull of values an endpoint may take.
+
+        Returns:
+          (lo, hi) — known inclusive hull
+          _EMPTY_ENDPOINT_INTERVAL — linked upstream randInt has an empty lattice
+          None — unknown (literal unresolved, link to formula/non-randInt, cycle);
+                 caller must not treat this as a structural failure
+        """
+        visiting = set(visiting or set())
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)) and math.isfinite(raw):
+            v = int(raw)
+            return (v, v)
+
+        s = str(raw).replace("&lt;", "<").replace("&gt;", ">").strip()
+        if not s:
+            return None
+        token_match = re.match(r"^<([^<>]+)>$", s)
+        if not token_match:
+            lit = self._literal_int(s)
+            return (lit, lit) if lit is not None else None
+
+        tok = token_match.group(1).strip()
+        if not tok or tok in visiting:
+            return None
+        payload = self._payload_by_token(tok)
+        # Links to formula / other non-randInt entities are not O(1)-boundable;
+        # skip structural emptiness (runtime resolve still validates).
+        if not payload or payload.get("token") != "randInt":
+            return None
+
+        inputs = payload.get("inputs", {}) or {}
+        child_visit = visiting | {tok}
+        lo_iv = self._endpoint_interval(inputs.get("min", 1), child_visit)
+        hi_iv = self._endpoint_interval(inputs.get("max", 9), child_visit)
+        if lo_iv is self._EMPTY_ENDPOINT_INTERVAL or hi_iv is self._EMPTY_ENDPOINT_INTERVAL:
+            return self._EMPTY_ENDPOINT_INTERVAL
+        if lo_iv is None or hi_iv is None:
+            return None
+        lo, _ = lo_iv
+        _, hi = hi_iv
+        if lo > hi:
+            lo, hi = hi, lo
+
+        step = self._literal_int(inputs.get("step", 1), 1)
+        if step is None or step <= 0:
+            step = 1
+        exclusive = self._coerce_bool(inputs.get("exclusive_bounds", False), False)
+        if exclusive:
+            lo = lo + step
+            hi = hi - step
+        if lo > hi:
+            return self._EMPTY_ENDPOINT_INTERVAL
+        return (lo, hi)
+
+    def _structural_empty_range_error(self, inputs=None, visiting=None):
+        """
+        O(1) check: using only endpoint intervals (not every seed combination),
+        detect whether linked min/max can make the lattice empty.
+        Does not enumerate exclude combinations.
+        Skips when an endpoint links to a non-randInt (e.g. formula) whose
+        value range cannot be proven empty without evaluation.
+        """
+        visiting = set(visiting or set())
+        inputs = inputs if inputs is not None else (self.data or {})
+        exclusive = self._coerce_bool(inputs.get("exclusive_bounds", False), False)
+
+        step = self._literal_int(inputs.get("step", 1), 1)
+        if step is None or step <= 0:
+            return None
+
+        min_iv = self._endpoint_interval(inputs.get("min", 1), visiting)
+        max_iv = self._endpoint_interval(inputs.get("max", 9), visiting)
+        if min_iv is self._EMPTY_ENDPOINT_INTERVAL or max_iv is self._EMPTY_ENDPOINT_INTERVAL:
+            return (
+                "Structural Error: A linked min/max bound has no possible integer "
+                "values (empty upstream range)."
+            )
+        # None = unknown (e.g. min linked to <formula4>) — do not fail structurally.
+        if min_iv is None or max_iv is None:
+            return None
+
+        min_lo, min_hi = min_iv
+        max_lo, max_hi = max_iv
+        mode = "exclusive" if exclusive else "inclusive"
+
+        # Worst case for emptiness: largest possible min vs smallest possible max.
+        if exclusive:
+            # Empty iff min_c + step >= max_c for some reachable pair.
+            if min_hi + step >= max_lo:
+                return (
+                    f"Structural Error: {mode} range can be empty for some linked "
+                    f"values (when min is as high as {min_hi} and max is as low as "
+                    f"{max_lo}, step {step})."
+                )
+        else:
+            # Inclusive lattice empty iff min_c > max_c.
+            if min_hi > max_lo:
+                return (
+                    f"Structural Error: {mode} range can be empty for some linked "
+                    f"values (when min is as high as {min_hi} and max is as low as "
+                    f"{max_lo})."
+                )
+        return None
+
     def is_valid(self):
         if not super().is_valid():
             return False
@@ -1589,9 +1816,25 @@ class RandomIntegerEntity(BaseEntity):
         min_val = self.resolve_numeric_value("min", default_fallback=1)
         max_val = self.resolve_numeric_value("max", default_fallback=9)
         step_val = self.resolve_numeric_value("step", default_fallback=1)
-        exclude_raw = self.runtime_values.get("exclude", "")
-        if exclude_raw in (None,):
-            exclude_raw = self.data.get("exclude", "")
+        exclusive_bounds = self._coerce_bool(
+            self.data.get(
+                "exclusive_bounds",
+                self.runtime_values.get("exclusive_bounds", False),
+            ),
+            False,
+        )
+        # Prefer raw teacher inputs so linked tokens like <randInt1> survive save.
+        # BaseEntity may have already resolved a sole "<token>" into runtime_values.
+        exclude_raw = self.data.get("exclude", "")
+        if exclude_raw in (None, ""):
+            exclude_raw = self.runtime_values.get("exclude", "")
+
+        my_seq = str(
+            self.data.get("sequence_token")
+            or self.runtime_values.get("sequence_token")
+            or ""
+        ).replace("<", "").replace(">", "").strip()
+        structural_visiting = {my_seq} if my_seq else set()
 
         # ---------------------------------------------------------------------
         # 🛡️ STATIC STRUCTURAL BLUEPRINT GUARDS (Before Evaluation)
@@ -1653,25 +1896,51 @@ class RandomIntegerEntity(BaseEntity):
         if step_val <= 0:
             self.errors["step"] = "Step value interval must be a positive integer greater than 0."
 
+        lattice = self._effective_lattice(min_val, max_val, step_val, exclusive_bounds)
+        if (
+            "min" not in self.errors
+            and "max" not in self.errors
+            and "step" not in self.errors
+            and lattice is None
+        ):
+            mode = "exclusive" if exclusive_bounds else "inclusive"
+            self.errors["exclusive_bounds" if exclusive_bounds else "min"] = (
+                f"No integers remain in the {mode} range from {min_val} to {max_val} "
+                f"with step {step_val}."
+            )
+
+        self.cleaned_data["exclusive_bounds"] = exclusive_bounds
+        self.runtime_values["exclusive_bounds"] = exclusive_bounds
+
         # ---------------------------------------------------------------------
         # EXCLUSION LEDGER PARSING LOGIC
+        # Literal integers and/or linked integer tokens (e.g. <randInt2>).
+        # cleaned_data keeps the structural form so links persist on save;
+        # exclude_array holds resolved ints for sampling.
         # ---------------------------------------------------------------------
-        if exclude_raw not in (None, ""):
-            if isinstance(exclude_raw, (list, tuple)):
-                elements = [str(item).strip() for item in exclude_raw if str(item).strip() != ""]
-            else:
-                elements = [item.strip() for item in str(exclude_raw).split(",") if item.strip()]
-
+        elements = self._normalize_exclude_elements(exclude_raw)
+        if elements:
             parsed_integers = []
+            structural_parts = []
             for item in elements:
-                if re.match(r"^<([^>]+)>$", item):
+                if re.match(r"^<([^<>]+)>$", item):
+                    tok = item.replace("<", "").replace(">", "").strip()
+                    if not tok:
+                        self.errors["exclude"] = (
+                            f"Linked exclude token '{item}' is empty or invalid."
+                        )
+                        break
+                    structural_parts.append(f"<{tok}>")
                     try:
-                        resolved_item = self.resolve_token_dependency(item)
+                        resolved_item = self.resolve_token_dependency(f"<{tok}>")
+                        if str(resolved_item).startswith(self._EVAL_ERROR_PREFIX):
+                            raise ValueError(resolved_item)
                         parsed_integers.append(int(float(resolved_item)))
                         continue
                     except Exception:
                         self.errors["exclude"] = (
-                            f"Linked exclude token '{item}' could not be resolved to an integer."
+                            f"Linked exclude token '<{tok}>' could not be resolved "
+                            f"to an integer."
                         )
                         break
 
@@ -1682,22 +1951,56 @@ class RandomIntegerEntity(BaseEntity):
                     )
                     break
                 parsed_integers.append(int(item))
+                structural_parts.append(str(int(item)))
 
             if "exclude" not in self.errors:
                 self.runtime_values["exclude_array"] = parsed_integers
-                # Persist a normalized comma-separated form for EntitySegment content
-                self.cleaned_data["exclude"] = ", ".join(str(n) for n in parsed_integers)
+                self.cleaned_data["exclude"] = ", ".join(structural_parts)
                 self.runtime_values["exclude"] = self.cleaned_data["exclude"]
         else:
             self.runtime_values["exclude_array"] = []
             self.cleaned_data["exclude"] = ""
             self.runtime_values["exclude"] = ""
 
+        # O(1) structural check: linked min/max extremes can empty the lattice
+        # (does not scan exclude combinations).
+        if not self.errors:
+            structural_err = self._structural_empty_range_error(
+                inputs=self.data,
+                visiting=structural_visiting,
+            )
+            if structural_err:
+                if exclusive_bounds:
+                    self.errors["exclusive_bounds"] = structural_err
+                else:
+                    self.errors["min"] = structural_err
+
         return len(self.errors) == 0
+
+    def _resolve_bound_int_strict(self, key, default_fallback):
+        """Resolve min/max/step without silently substituting 0 on link failure."""
+        val = self.runtime_values.get(key)
+        if val is None and isinstance(self.data, dict):
+            val = self.data.get(key)
+        if val is None or val == "":
+            return int(default_fallback)
+        if isinstance(val, str) and re.match(r"^<([^>]+)>$", val.strip()):
+            resolved = self.resolve_token_dependency(val.strip())
+            if str(resolved).startswith(self._EVAL_ERROR_PREFIX):
+                raise ValueError(str(resolved))
+            val = resolved
+        try:
+            return int(float(str(val).strip()))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"randInt '{key}' could not be resolved to an integer."
+            ) from exc
 
     def evaluate_output(self):
         """
-        🎯 MEMORY SAFE O(1) CALCULATION: Computes random integers mathematically
+        🎯 MEMORY SAFE O(1) CALCULATION: Computes random integers mathematically.
+        Raises ValueError when the candidate pool is empty — never returns a
+        fabricated in-bounds fallback like 0.
         """
         # 🎯 Look into the global ledger context to see if this card already has a locked-in value
         if hasattr(self, 'all_entities_payload') and self.all_entities_payload:
@@ -1710,48 +2013,57 @@ class RandomIntegerEntity(BaseEntity):
             
             if target_payload:
                 cached_val = target_payload.get('simulated_value', '')
-                if cached_val not in ["", "None", "null"]:
+                if (
+                    cached_val not in ["", "None", "null", None]
+                    and not str(cached_val).startswith(self._EVAL_ERROR_PREFIX)
+                ):
                     return cached_val
                 
-        min_val = int(self.resolve_numeric_value("min", default_fallback=1))
-        max_val = int(self.resolve_numeric_value("max", default_fallback=9))
-        step_val = int(self.resolve_numeric_value("step", default_fallback=1))
+        min_val = self._resolve_bound_int_strict("min", 1)
+        max_val = self._resolve_bound_int_strict("max", 9)
+        step_val = self._resolve_bound_int_strict("step", 1)
+        exclusive_bounds = self._coerce_bool(
+            self.runtime_values.get(
+                "exclusive_bounds",
+                self.data.get("exclusive_bounds", False),
+            ),
+            False,
+        )
         exclude_set = set(self.runtime_values.get("exclude_array", []))
 
-        if min_val > max_val:
-            return str(min_val)
+        lattice = self._effective_lattice(min_val, max_val, step_val, exclusive_bounds)
+        if lattice is None:
+            mode = "exclusive" if exclusive_bounds else "inclusive"
+            raise ValueError(
+                f"{self._EVAL_ERROR_PREFIX}: no integers in {mode} range "
+                f"from {min_val} to {max_val} (step {step_val})."
+            )
 
-        # Calculate the absolute max step indices possible within this integer span
-        total_range = max_val - min_val
-        max_steps = total_range // step_val
-
-        # If range or steps result in no legal spaces, fallback cleanly
-        if max_steps < 0:
-            return str(min_val)
+        start, max_k = lattice
 
         # 🎯 EXCLUSION LOOP GUARD: Direct sampling to guarantee O(1) space integrity
         attempts = 0
         max_attempts = 200 # Prevent infinite locks if a user accidentally excludes every number in range
         
         while attempts < max_attempts:
-            random_step_multiplier = random.randint(0, max_steps)
-            candidate_value = min_val + (random_step_multiplier * step_val)
+            random_step_multiplier = random.randint(0, max_k)
+            candidate_value = start + (random_step_multiplier * step_val)
             
             if candidate_value not in exclude_set:
-                selected_choice = str(candidate_value)
-                return selected_choice
+                return str(candidate_value)
             
             attempts += 1
 
         # Fallback Strategy: If random sampling kept hitting exclusions, loop once to find the absolute first unexcluded slot
-        current = min_val
-        while current <= max_val:
+        for k in range(max_k + 1):
+            current = start + k * step_val
             if current not in exclude_set:
                 return str(current)
-            current += step_val
 
-        return str(min_val)
-
+        raise ValueError(
+            f"{self._EVAL_ERROR_PREFIX}: all candidates in [{start}…{start + max_k * step_val}] "
+            f"were removed by the exclude list."
+        )
 
 class RandomDoubleEntity(BaseEntity):
     """
@@ -2441,6 +2753,22 @@ class FormulaEntity(BaseEntity):
             return None
         if lo > hi:
             lo, hi = hi, lo
+        # Exclusive randInt: shrink the continuous hull to the open-interval lattice ends.
+        if arch == "randInt":
+            exclusive = str(inputs.get("exclusive_bounds", False)).strip().lower() in (
+                "true", "1", "yes", "checked", "on",
+            )
+            if exclusive:
+                try:
+                    step = float(inputs.get("step", 1) or 1)
+                except (TypeError, ValueError):
+                    step = 1.0
+                if step <= 0:
+                    step = 1.0
+                lo = lo + step
+                hi = hi - step
+                if lo > hi:
+                    return None
         return (lo, hi)
 
     def _normalize_formula_sub_value(self, raw):
@@ -3162,6 +3490,11 @@ class GraphEntity(BaseEntity):
         show_grid_raw = self.data.get("show_grid", True)
         self.runtime_values["show_grid"] = str(show_grid_raw).lower() in ["true", "1", "yes", "checked"]
 
+        label_crit_raw = self.data.get("label_critical_points", False)
+        self.runtime_values["label_critical_points"] = str(label_crit_raw).lower() in [
+            "true", "1", "yes", "checked", "on"
+        ]
+
         # Parse declared axis/variable tokens
         parsed_axis_vars = []
         if variables_str:
@@ -3246,6 +3579,7 @@ class GraphEntity(BaseEntity):
                 "formulas": formulas,
                 "variables": variables_str,
                 "show_grid": self.runtime_values["show_grid"],
+                "label_critical_points": self.runtime_values["label_critical_points"],
                 "resolved_x_range": self.runtime_values["resolved_x-axis range"],
                 "resolved_y_range": self.runtime_values["resolved_y-axis range"],
                 "parsed_variables": parsed_axis_vars
@@ -3326,6 +3660,7 @@ class GraphEntity(BaseEntity):
         resolved_x = self.runtime_values.get("resolved_x-axis range", [-10.0, 10.0, 1.0])
         resolved_y = self.runtime_values.get("resolved_y-axis range", [-10.0, 10.0, 1.0])
         show_grid = self.runtime_values.get("show_grid", True)
+        label_critical = self.runtime_values.get("label_critical_points", False)
 
         processed_formulas = []
         
@@ -3342,17 +3677,27 @@ class GraphEntity(BaseEntity):
             clean_expr = re.sub(r'&lt;([^&>]+)&gt;|<([^>]+)>', bracket_replacer, str(formula_expr).strip())
             processed_formulas.append(clean_expr)
 
+        annotations = []
+        if label_critical:
+            try:
+                from assessment_tool.graph_critical_points import build_critical_annotations
+                annotations = build_critical_annotations(processed_formulas, resolved_x, resolved_y)
+            except Exception:
+                annotations = []
+
         graph_manifest = {
             "archetype": "graph",
             "formulas": processed_formulas,
             "axis_names": var_list,
             "visualization": {
                 "show_grid_overlay": show_grid,
+                "label_critical_points": bool(label_critical),
             },
             "bounds": {
                 "x_range": {"min": resolved_x[0], "max": resolved_x[1], "step": resolved_x[2]},
                 "y_range": {"min": resolved_y[0], "max": resolved_y[1], "step": resolved_y[2]}
-            }
+            },
+            "annotations": annotations if label_critical else [],
         }
 
         return json.dumps(graph_manifest)
@@ -4016,13 +4361,16 @@ class ShortAnswerEntity(BaseEntity):
         if not math.isfinite(pts) or pts < 0:
             pts = 0.0
 
-        correct_key = self.runtime_values.get("simplified_key")
-        if correct_key is None:
-            raw_correct = self.runtime_values.get(
+        author_key = self._trim_str(
+            self.runtime_values.get(
                 "resolved_value",
                 self.runtime_values.get("value", self.data.get("value")),
             )
-            correct_key = self._simplify_key(raw_correct)
+        )
+        correct_key = self.runtime_values.get("simplified_key")
+        if correct_key is None:
+            correct_key = self._simplify_key(author_key) if author_key else ""
+        correct_key = self._trim_str(correct_key)
 
         student_raw = student_input
         if isinstance(student_input, dict):
@@ -4032,9 +4380,19 @@ class ShortAnswerEntity(BaseEntity):
         if not student_trimmed:
             return {"earned": 0.0, "max": pts, "detail": "No student input"}
 
-        if self._grade_short_answer_text(student_trimmed, correct_key):
-            # Distinguish exact vs sympy for detail (same outcome)
-            if student_trimmed.lower() == self._trim_str(correct_key).lower():
+        # Prefer the author-entered string for matching so inequalities like
+        # "x < c" still exact-match even though the preview simplifies to "c > x".
+        compare_key = author_key or correct_key
+        if self._grade_short_answer_text(student_trimmed, compare_key):
+            if student_trimmed.lower() == compare_key.lower():
+                return {"earned": pts, "max": pts, "detail": "Exact match"}
+            return {"earned": pts, "max": pts, "detail": "Equivalent (simplified form)"}
+        if (
+            correct_key
+            and correct_key.lower() != compare_key.lower()
+            and self._grade_short_answer_text(student_trimmed, correct_key)
+        ):
+            if student_trimmed.lower() == correct_key.lower():
                 return {"earned": pts, "max": pts, "detail": "Exact match"}
             return {"earned": pts, "max": pts, "detail": "Equivalent (simplified form)"}
 
@@ -6717,6 +7075,8 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
     evaluated_output = "???"
     latex_output = "???"
     extracted_vars = []
+    evaluation_ok = True
+    failure_reason = None
 
     # Shared variable tracking storage
     sym_set = set()
@@ -6756,6 +7116,11 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                     latex_output = evaluated_output
             else:
                 latex_output = evaluated_output
+
+            if str(evaluated_output).startswith("⚠️"):
+                evaluation_ok = False
+                failure_reason = str(evaluated_output)
+                is_valid = False
             
             # Dynamically update the shared context ledger for downstream dependency cascading
             target_entry = next((x for x in all_entities_payload if x.get('sequence_token') == sequence_token), None)
@@ -6849,9 +7214,16 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 archetype_name,
                 eval_err,
             )
-            evaluated_output = "⚠️ Error"
-            latex_output = "⚠️ Error"
+            err_msg = str(getattr(eval_err, "message", eval_err) or eval_err)
+            if err_msg.startswith("⚠️"):
+                evaluated_output = err_msg
+                latex_output = err_msg
+            else:
+                evaluated_output = f"⚠️ Error: {err_msg}"
+                latex_output = evaluated_output
             is_valid = False
+            evaluation_ok = False
+            failure_reason = evaluated_output
             # Field-scoped so the workspace banner and save draft path can surface it
             error_field = "formula"
             if archetype_name == "matrix":
@@ -6880,16 +7252,30 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
                 error_field = "options"
             elif archetype_name == "matrixAnswer":
                 error_field = "matrix"
+            elif archetype_name == "randInt":
+                error_field = "exclusive_bounds"
+            elif archetype_name == "rand":
+                error_field = "min"
             errors = {
                 error_field: (
                     f"Expression could not be evaluated after resolving linked "
                     f"entities: {eval_err}"
                 )
             }
+            target_entry = next((x for x in all_entities_payload if x.get('sequence_token') == sequence_token), None)
+            if target_entry:
+                target_entry['simulated_value'] = evaluated_output
     else:
         # Fallback parsing for invalid states
         try:
-            if archetype_name == 'numAnswer':
+            if archetype_name in ('randInt', 'rand'):
+                # Do not pretend a valid draw of "0" — mark as evaluation failure.
+                detail = "; ".join(f"{k}: {v}" for k, v in (errors or {}).items()) or "invalid configuration"
+                evaluated_output = f"⚠️ Error: {archetype_name} {detail}"
+                latex_output = evaluated_output
+                evaluation_ok = False
+                failure_reason = evaluated_output
+            elif archetype_name == 'numAnswer':
                 evaluated_output = "[Invalid Numeric Answer]"
                 latex_output = "[Invalid Numeric Answer]"
             elif archetype_name == 'shortAnswer':
@@ -6960,6 +7346,14 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
         except Exception:
             evaluated_output = clean_inputs.get('formula', clean_inputs.get('nodes', '0'))
             latex_output = str(evaluated_output)
+            if archetype_name in ('randInt', 'rand'):
+                evaluation_ok = False
+                failure_reason = str(evaluated_output)
+
+        if archetype_name in ('randInt', 'rand'):
+            target_entry = next((x for x in all_entities_payload if x.get('sequence_token') == sequence_token), None)
+            if target_entry:
+                target_entry['simulated_value'] = evaluated_output
 
     # Post-processing string cleanup for evaluate=False *1 artifacts (formula + matrix)
     if archetype_name.lower().startswith('formula') or archetype_name in ('matrix', 'matrixResultByIndex'):
@@ -6982,8 +7376,14 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
     if is_valid and hasattr(validator, 'output_types'):
         output_types = list(getattr(validator, 'output_types') or [])
 
+    if evaluation_ok and str(evaluated_output).startswith("⚠️"):
+        evaluation_ok = False
+        failure_reason = failure_reason or str(evaluated_output)
+
     return {
         'is_valid': is_valid,
+        'evaluation_ok': evaluation_ok,
+        'failure_reason': failure_reason,
         'errors': errors,
         'evaluated_output': evaluated_output,
         'latex_output': latex_output,
@@ -7530,6 +7930,10 @@ def grade_entities_payload(entities, context_entities, student_answers):
 def build_practice_problem_instance(problem):
     """
     Fully evaluate one problem for an ephemeral practice-test slot (Option A).
+
+    Returns a dict with ``ok`` True/False. On failure (invalid rand/randInt or a
+    ``⚠️`` simulated value), includes diagnostics instead of a showable problem:
+    ``failed_tokens``, ``card_inputs``, ``random_values``.
     """
     QuestionBlock = apps.get_model('assessment_tool', 'QuestionBlock')
     EntitySegment = apps.get_model('assessment_tool', 'EntitySegment')
@@ -7542,19 +7946,22 @@ def build_practice_problem_instance(problem):
 
     all_entities_payload = []
     prepped_segments = []
+    card_inputs = {}
     for segment in saved_segments_records:
         content_data = _parse_segment_content(segment.content)
         token_name = segment.problem_type_id_originator.name
         sequence_token = content_data.get("sequence_token") or token_name
+        sequence_token = str(sequence_token).strip()
         archetype_name = re.sub(r'\d+$', '', token_name)
         clean_inputs = dict(content_data)
         shuffle_seed = clean_inputs.pop("shuffle_seed", None)
         clean_inputs.pop("answer_field", None)
         clean_inputs.pop("sequence_token", None)
 
+        card_inputs[sequence_token] = dict(clean_inputs)
         all_entities_payload.append({
             'token': archetype_name,
-            'sequence_token': str(sequence_token).strip(),
+            'sequence_token': sequence_token,
             'inputs': clean_inputs,
             'simulated_value': "",
         })
@@ -7562,6 +7969,8 @@ def build_practice_problem_instance(problem):
 
     loaded_segments = []
     answer_fields = []
+    failed_tokens = []
+    random_values = {}
     for segment, content_data, clean_inputs, sequence_token, archetype_name, shuffle_seed in prepped_segments:
         blueprint_pattern = segment.problem_type_id_originator.format_pattern
         if isinstance(blueprint_pattern, str):
@@ -7578,6 +7987,21 @@ def build_practice_problem_instance(problem):
             all_entities_payload=all_entities_payload,
         )
 
+        evaluated_output = render_results['evaluated_output']
+        evaluation_ok = bool(render_results.get('evaluation_ok', True))
+        failure_reason = render_results.get('failure_reason')
+
+        if archetype_name in ('rand', 'randInt'):
+            random_values[sequence_token] = evaluated_output
+
+        is_warning_value = isinstance(evaluated_output, str) and evaluated_output.startswith("⚠️")
+        if (archetype_name in ('rand', 'randInt') and not evaluation_ok) or is_warning_value:
+            failed_tokens.append({
+                "sequence_token": sequence_token,
+                "archetype": archetype_name,
+                "reason": failure_reason or evaluated_output,
+            })
+
         seg_payload = {
             "id": segment.id,
             "token": archetype_name,
@@ -7586,12 +8010,14 @@ def build_practice_problem_instance(problem):
             "points": segment.points,
             "label": (blueprint_pattern or {}).get("name") or sequence_token,
             "inputs": clean_inputs,
-            "simulated_value": render_results['evaluated_output'],
-            "evaluated_output": render_results['evaluated_output'],
+            "simulated_value": evaluated_output,
+            "evaluated_output": evaluated_output,
             "latex_output": render_results['latex_output'],
             "output_types": render_results.get('output_types', []),
             "is_answer_field": _blueprint_is_answer_field(blueprint_pattern or {}),
             "shuffle_seed": shuffle_seed,
+            "evaluation_ok": evaluation_ok,
+            "failure_reason": failure_reason,
         }
         loaded_segments.append(seg_payload)
         if seg_payload["is_answer_field"]:
@@ -7605,6 +8031,17 @@ def build_practice_problem_instance(problem):
                 "simulated_value": seg_payload["simulated_value"],
                 "evaluated_output": seg_payload["evaluated_output"],
             })
+
+    if failed_tokens:
+        return {
+            "ok": False,
+            "problem_id": problem.id,
+            "title": problem.title,
+            "problem_status": problem.problem_status,
+            "failed_tokens": failed_tokens,
+            "card_inputs": card_inputs,
+            "random_values": random_values,
+        }
 
     q_block = QuestionBlock.objects.filter(problem=problem).first()
     body_html = "<p><br></p>"
@@ -7633,12 +8070,16 @@ def build_practice_problem_instance(problem):
     ]
 
     return {
+        "ok": True,
         "problem_id": problem.id,
         "title": problem.title,
         "problem_status": problem.problem_status,
         "body_html": body_html,
         "loaded_segments": loaded_segments,
         "answer_fields": answer_fields,
+        "card_inputs": card_inputs,
+        "random_values": random_values,
+        "failed_tokens": [],
         "all_entities": [
             {
                 "token": s["token"],
@@ -7655,10 +8096,108 @@ def build_practice_problem_instance(problem):
     }
 
 
-def assemble_practice_test(assessment):
+def build_practice_problem_instance_with_retries(
+    problem,
+    *,
+    actor_user=None,
+    max_extra_attempts=5,
+):
+    """
+    Build a practice instance with up to ``1 + max_extra_attempts`` tries.
+
+    On the first failure for a ``complete`` problem: demote to ``draft`` and
+    (after retries finish) notify the owner once. If all attempts fail, omit
+    the problem from the assembled test.
+    """
+    from .notifications import notify_owner_complete_problem_render_failure
+
+    max_attempts = 1 + int(max_extra_attempts or 0)
+    if max_attempts < 1:
+        max_attempts = 1
+
+    attempt_summaries = []
+    demoted = False
+    demoted_at = None
+    was_complete = (getattr(problem, "problem_status", None) or "").lower() == "complete"
+
+    for attempt in range(1, max_attempts + 1):
+        result = build_practice_problem_instance(problem)
+        summary = {
+            "attempt": attempt,
+            "ok": bool(result.get("ok")),
+            "random_values": result.get("random_values") or {},
+            "card_inputs": result.get("card_inputs") or {},
+            "failed_tokens": result.get("failed_tokens") or [],
+        }
+        attempt_summaries.append(summary)
+
+        if result.get("ok"):
+            if demoted:
+                notify_owner_complete_problem_render_failure(
+                    problem,
+                    actor_user=actor_user,
+                    attempt_summaries=attempt_summaries,
+                    demoted_at=demoted_at,
+                    succeeded_on_attempt=attempt,
+                )
+            # Drop diagnostics not needed by the practice client
+            instance = dict(result)
+            instance.pop("card_inputs", None)
+            instance.pop("random_values", None)
+            instance.pop("failed_tokens", None)
+            instance.pop("ok", None)
+            for seg in instance.get("loaded_segments") or []:
+                seg.pop("evaluation_ok", None)
+                seg.pop("failure_reason", None)
+            return {
+                "included": True,
+                "instance": instance,
+                "demoted": demoted,
+                "attempt_summaries": attempt_summaries,
+                "succeeded_on_attempt": attempt,
+            }
+
+        if was_complete and not demoted:
+            problem.problem_status = "draft"
+            problem.save(update_fields=["problem_status"])
+            demoted = True
+            demoted_at = timezone.now()
+            was_complete = False
+            logger.warning(
+                "Demoted problem id=%s to draft after practice render failure (attempt %s)",
+                getattr(problem, "id", None),
+                attempt,
+            )
+
+    if demoted:
+        notify_owner_complete_problem_render_failure(
+            problem,
+            actor_user=actor_user,
+            attempt_summaries=attempt_summaries,
+            demoted_at=demoted_at,
+            succeeded_on_attempt=None,
+        )
+
+    logger.warning(
+        "Omitting problem id=%s from practice test after %s failed render attempts",
+        getattr(problem, "id", None),
+        max_attempts,
+    )
+    return {
+        "included": False,
+        "instance": None,
+        "demoted": demoted,
+        "attempt_summaries": attempt_summaries,
+        "succeeded_on_attempt": None,
+        "omitted": True,
+    }
+
+
+def assemble_practice_test(assessment, actor_user=None):
     """
     Walk assessment question groups in order and build ephemeral practice slots.
-    Returns dict with problems, warnings (drafts / zero-count sets), skipped_drafts.
+    Returns dict with problems, warnings (drafts / zero-count sets), skipped_drafts,
+    and omitted_render_failures for problems that could not be rendered.
     """
     BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
     Problem = apps.get_model('assessment_tool', 'Problem')
@@ -7673,8 +8212,39 @@ def assemble_practice_test(assessment):
 
     skipped_drafts = []
     zero_count_sets = []
+    omitted_render_failures = []
     problems = []
     slot_index = 0
+
+    problem_select = (
+        'branch_location',
+        'aqg',
+        'aqg__assessment',
+        'cqd',
+    )
+
+    def _append_built_instance(problem, *, section_name, from_problem_set):
+        nonlocal slot_index
+        build_result = build_practice_problem_instance_with_retries(
+            problem,
+            actor_user=actor_user,
+        )
+        if not build_result.get("included"):
+            omitted_render_failures.append({
+                "problem_id": problem.id,
+                "title": problem.title,
+                "section": section_name,
+                "problem_set": from_problem_set,
+                "demoted": bool(build_result.get("demoted")),
+                "attempts": len(build_result.get("attempt_summaries") or []),
+            })
+            return
+        instance = build_result["instance"]
+        slot_index += 1
+        instance["slot_index"] = slot_index
+        instance["section_name"] = section_name
+        instance["from_problem_set"] = from_problem_set
+        problems.append(instance)
 
     for aqg in aqgs:
         if not aqg.branch_location_id:
@@ -7697,7 +8267,7 @@ def assemble_practice_test(assessment):
                 )
                 pool_problems = list(
                     Problem.objects.filter(branch_location_id__in=[b.id for b in pool_branches])
-                    .select_related('branch_location')
+                    .select_related(*problem_select)
                 )
                 by_branch = {p.branch_location_id: p for p in pool_problems}
                 ordered_pool = []
@@ -7749,16 +8319,19 @@ def assemble_practice_test(assessment):
                 chosen_ordered = [p for p in ordered_pool if p.id in chosen_ids]
 
                 for p in chosen_ordered:
-                    slot_index += 1
-                    instance = build_practice_problem_instance(p)
-                    instance["slot_index"] = slot_index
-                    instance["section_name"] = aqg.name
-                    instance["from_problem_set"] = set_label
-                    problems.append(instance)
+                    _append_built_instance(
+                        p,
+                        section_name=aqg.name,
+                        from_problem_set=set_label,
+                    )
                 continue
 
             # Direct problem under the section
-            problem = Problem.objects.filter(branch_location_id=child.id).select_related('branch_location').first()
+            problem = (
+                Problem.objects.filter(branch_location_id=child.id)
+                .select_related(*problem_select)
+                .first()
+            )
             if not problem:
                 continue
             status = (problem.problem_status or '').lower()
@@ -7770,16 +8343,16 @@ def assemble_practice_test(assessment):
                     "section": aqg.name,
                 })
                 continue
-            slot_index += 1
-            instance = build_practice_problem_instance(problem)
-            instance["slot_index"] = slot_index
-            instance["section_name"] = aqg.name
-            instance["from_problem_set"] = None
-            problems.append(instance)
+            _append_built_instance(
+                problem,
+                section_name=aqg.name,
+                from_problem_set=None,
+            )
 
     return {
         "problems": problems,
         "skipped_drafts": skipped_drafts,
         "zero_count_sets": zero_count_sets,
+        "omitted_render_failures": omitted_render_failures,
         "problem_count": len(problems),
     }

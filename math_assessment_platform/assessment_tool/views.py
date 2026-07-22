@@ -7,9 +7,9 @@ from .models import (
     CustomQuestionDistribution, AssessmentQuestionGroup, 
     CustomQuestionDistribution, CqdPair,
     QuestionBlock, EntitySegment,
-    EntityType, EntityUserInput
+    EntityType, EntityUserInput, Notification
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
 import json
 from django.http import JsonResponse
@@ -239,6 +239,7 @@ def database_viewer(request):
         'entity_segment': EntitySegment,
         'entity_type': EntityType,
         'entity_user_input': EntityUserInput,
+        'notification': Notification,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
@@ -252,6 +253,64 @@ def database_viewer(request):
         'headers': headers,
         'selected_table': table_name
     })
+
+
+@login_required
+def notifications_view(request):
+    from .notifications import (
+        mark_user_notifications_read,
+        notifications_for_user,
+        reason_label_for,
+        utc_isoformat,
+    )
+
+    mark_user_notifications_read(request.user)
+    rows = []
+    for note in notifications_for_user(request.user, include_content=False):
+        rows.append({
+            "id": note.pk,
+            "title": note.title,
+            "reason": note.reason,
+            "reason_label": reason_label_for(note.reason),
+            "creation_date": note.creation_date,
+            "creation_date_utc": (
+                utc_isoformat(note.creation_date) if note.creation_date else None
+            ),
+            "is_read": note.is_read,
+        })
+    return render(request, "assessment_tool/notifications.html", {
+        "notifications": rows,
+        "has_unread_notifications": False,
+    })
+
+
+@login_required
+def notification_detail_view(request, notification_id):
+    from .notifications import build_notification_detail, get_notification_for_user
+
+    note = get_notification_for_user(request.user, notification_id)
+    if note is None:
+        from django.http import Http404
+        raise Http404("Notification not found")
+
+    detail = build_notification_detail(note)
+    return render(request, "assessment_tool/notification_detail.html", {
+        "notification": detail,
+        "has_unread_notifications": False,
+    })
+
+
+@login_required
+@require_POST
+def notification_delete_view(request, notification_id):
+    from .notifications import delete_notification_for_user
+
+    deleted = delete_notification_for_user(request.user, notification_id)
+    if deleted:
+        messages.success(request, "Notification deleted.")
+    else:
+        messages.error(request, "Notification not found.")
+    return redirect("notifications")
 
 
 @login_required
@@ -713,11 +772,27 @@ def delete_item(request, item_type=None, item_id=None):
 
     # 5. Execute
     with transaction.atomic():
-        if item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection', 'problem']:
+        if item_type == 'problem':
+            # Clear cqd_pair rows first — they use DO_NOTHING and block Postgres deletes.
+            problem_item = (
+                Problem.objects.select_related('cqd', 'branch_location')
+                .filter(id=item_id)
+                .first()
+            )
+            old_cqd = None
+            if problem_item:
+                old_cqd = _clear_cqd_membership(problem_item)
+                if problem_item.cqd_id is not None:
+                    problem_item.cqd = None
+                    problem_item.save(update_fields=['cqd'])
+            obj.delete()
+            if old_cqd is not None:
+                refresh_cqd_identity(old_cqd)
+        elif item_type in ['folder', 'course', 'assessment', 'assessment_selection', 'question_selection']:
             obj.delete()
         else:
             return JsonResponse({'error': f'Unsupported purge routing requested for type: {item_type}.'}, status=403)
-            
+
     return JsonResponse({'status': 'success'})
 
 
@@ -2409,9 +2484,10 @@ def assessment_practice_test_start_ajax(request, course_id, assessment_id):
     confirm_drafts = bool(data.get('confirm_drafts'))
     confirm_zero_sets = bool(data.get('confirm_zero_sets'))
 
-    assembled = assemble_practice_test(assessment)
+    assembled = assemble_practice_test(assessment, actor_user=request.user)
     skipped_drafts = assembled.get('skipped_drafts') or []
     zero_count_sets = assembled.get('zero_count_sets') or []
+    omitted_render_failures = assembled.get('omitted_render_failures') or []
 
     needs = []
     if skipped_drafts and not confirm_drafts:
@@ -2436,6 +2512,7 @@ def assessment_practice_test_start_ajax(request, course_id, assessment_id):
         'problems': assembled.get('problems') or [],
         'skipped_drafts': skipped_drafts,
         'zero_count_sets': zero_count_sets,
+        'omitted_render_failures': omitted_render_failures,
         'problem_count': assembled.get('problem_count', 0),
     }, status=200)
 

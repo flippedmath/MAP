@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <h1>Notifications</h1>
+    <p>Select a notification to view its details. Newest first.</p>
+</div>
+
+{% if notifications %}
+<div class="notifications-list">
+    {% for note in notifications %}
+    <article class="notification-item notification-item--list">
+        <div class="notification-list-row">
+            <a href="{% url 'notification_detail' note.id %}" class="notification-list-link">
+                <div class="notification-item-header">
+                    <h2 class="notification-item-title">{{ note.title }}</h2>
+                    <div class="notification-item-meta">
+                        {% if note.creation_date_utc %}
+                            <time class="local-datetime" datetime="{{ note.creation_date_utc }}">{{ note.creation_date_utc }}</time>
+                        {% else %}
+                            Unknown date
+                        {% endif %}
+                    </div>
+                </div>
+                {% if note.reason_label %}
+                    <span class="notification-item-reason">{{ note.reason_label }}</span>
+                {% elif note.reason %}
+                    <span class="notification-item-reason">{{ note.reason }}</span>
+                {% endif %}
+            </a>
+            <form
+                method="post"
+                action="{% url 'notification_delete' note.id %}"
+                class="notification-delete-form"
+                onsubmit="return confirm('Delete this notification?');"
+            >
+                {% csrf_token %}
+                <button type="submit" class="notification-delete-btn" title="Delete notification">
+                    Delete
+                </button>
+            </form>
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card notifications-empty">
+    <p>No notifications yet.</p>
+</div>
+{% endif %}
+{% endblock %}

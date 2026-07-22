@@ -18,12 +18,24 @@ class Command(BaseCommand):
                 "min": {"field": "integer", "value": ["integer"], "default": 1},
                 "max": {"field": "integer", "value": ["integer"], "default": 9},
                 "step": {"field": "integer", "value": ["integer"], "default": 1},
-                "exclude": {"field": "text", "value": ["array(['integer'])"], "default": ""}
+                "exclude": {
+                    "field": "text",
+                    "value": ["array(['integer'])", "integer"],
+                    "default": "",
+                },
+                "exclusive_bounds": {"field": "checkbox", "value": ["boolean"], "default": False},
             },
             "output": ["integer", "double"],
             "entity_name_list": "Dynamic Variables",
             "disabled": False,
-            "note": "Produces a random integer within the range {min} to {max} (inclusive). Use 'Add number to exclude' to omit specific integers from the result pool. {step} is the interval between possible results."
+            "note": (
+                "Produces a random integer within the range {min} to {max}. "
+                "By default the range is inclusive; check <strong>Exclusive min/max</strong> "
+                "to sample the open interval (min, max) on the step lattice. "
+                "Use 'Add number to exclude' to omit specific integers from the result pool — "
+                "each row may be a literal integer or a linked integer entity such as another "
+                "<code>&lt;randIntN&gt;</code>. {step} is the interval between possible results."
+            ),
         },
         {
             "name": "Random Double",
@@ -230,6 +242,8 @@ class Command(BaseCommand):
             "inputs": {
                 "formulas": {"field": "array", "value": ["string", "array(['formula'])"]},
                 "variables": {"field": "text", "value": ["array(['string'])"], "default": "x,y"},
+                "show_grid": {"field": "checkbox", "value": ["boolean"], "default": True},
+                "label_critical_points": {"field": "checkbox", "value": ["boolean"], "default": False},
                 "x-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 0.5]},
                 "y-axis range": {"field": "<'double'> to <'double'> by interval <'double'>", "value": ["array(['double'])"], "default": [-5, 5, 0.5]}
             },
@@ -237,7 +251,10 @@ class Command(BaseCommand):
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Dynamic Variables",
             "disabled": False,
-            "note": "Create a graph using one or more formulas"
+            "note": (
+                "Create a graph using one or more formulas. Optional: label extrema, "
+                "inflection points, and axis intercepts with letters a, b, c… left-to-right."
+            )
         }
     ]
 

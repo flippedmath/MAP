@@ -637,6 +637,7 @@ class Notification(models.Model):
     send_on = models.DateTimeField(blank=True, null=True)
     expr_date = models.DateTimeField(blank=True, null=True, db_comment='If there is a system update for instance, no need to still bring this notification to attention after the update has been scheduled to be completed.')
     reason = models.CharField(max_length=255, blank=True, null=True)
+    is_read = models.BooleanField(default=False)
 
     class Meta:
         managed = False

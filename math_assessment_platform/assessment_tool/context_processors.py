@@ -1,0 +1,14 @@
+"""Template context processors for assessment_tool."""
+
+from .notifications import user_has_unread_notifications
+
+
+def notifications(request):
+    has_unread = False
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_authenticated", False):
+        try:
+            has_unread = user_has_unread_notifications(user)
+        except Exception:
+            has_unread = False
+    return {"has_unread_notifications": has_unread}

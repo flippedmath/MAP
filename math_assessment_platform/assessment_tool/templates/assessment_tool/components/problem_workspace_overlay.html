@@ -168,7 +168,8 @@
 /* answersOrDne preview info: fixed + JS-clamped so overflow parents cannot clip it */
 .aod-preview-info .aod-preview-info-overlay {
     position: fixed !important;
-    z-index: 10050 !important;
+    /* Above #problem-workspace-overlay when tooltip escapes via position:fixed */
+    z-index: 10080 !important;
     bottom: auto !important;
     right: auto !important;
     left: 0;
@@ -703,6 +704,7 @@
     vertical-align: top;
 }
 
+/* Must sit above #problem-workspace-overlay (assessment_setup.css → 10060) */
 #workspace-quill-table-hover-tip {
     position: fixed;
     display: none;
@@ -714,7 +716,7 @@
     border-radius: 4px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     pointer-events: none;
-    z-index: 10050;
+    z-index: 10080;
     white-space: nowrap;
 }
 
@@ -792,10 +794,11 @@
     user-select: none !important;
 }
 
+/* Must sit above #problem-workspace-overlay (assessment_setup.css → 10060) */
 #workspace-table-size-picker {
     position: fixed;
     display: none;
-    z-index: 10020;
+    z-index: 10070;
     background: #ffffff;
     border: 1px solid #cbd5e1;
     border-radius: 8px;
@@ -833,6 +836,7 @@
     font-weight: 600;
 }
 
+/* Must sit above #problem-workspace-overlay (assessment_setup.css → 10060) */
 #workspace-quill-table-menu.custom-ql-context-menu {
     position: fixed;
     display: none;
@@ -841,7 +845,7 @@
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1) !important;
     border-radius: 8px !important;
     padding: 6px 0 !important;
-    z-index: 10030 !important;
+    z-index: 10080 !important;
     min-width: 190px;
     max-width: min(320px, calc(100vw - 16px));
     overflow-x: hidden;

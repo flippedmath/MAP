@@ -24,10 +24,24 @@
         <div class="nav-links">
             {% if user.is_authenticated %}
                 <a href="{% url 'dashboard' %}" style="color: white; text-decoration: none;">Dashboard</a>
-                <form action="{% url 'logout' %}" method="post" style="display:inline;">
-                    {% csrf_token %}
-                    <button type="submit" class="btn" style="padding: 5px 10px; font-size: 0.8rem;">Logout</button>
-                </form>
+                <div class="nav-account-dropdown" data-has-unread="{% if has_unread_notifications %}true{% else %}false{% endif %}">
+                    <button type="button" class="btn nav-account-trigger" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
+                        <span class="nav-account-label">{{ user.user_display_name|default:user.username }}</span>
+                        <i class="fas fa-caret-down" aria-hidden="true"></i>
+                        <span class="nav-unread-dot nav-unread-dot--trigger{% if not has_unread_notifications %} is-hidden{% endif %}" aria-hidden="true"></span>
+                    </button>
+                    <div class="nav-account-menu" role="menu" hidden>
+                        <a href="{% url 'notifications' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Notifications</span>
+                            <span class="nav-unread-dot nav-unread-dot--item is-hidden" aria-hidden="true"></span>
+                        </a>
+                        <div class="nav-account-menu-divider" role="separator"></div>
+                        <form action="{% url 'logout' %}" method="post" class="nav-account-logout-form">
+                            {% csrf_token %}
+                            <button type="submit" class="nav-account-menu-item nav-account-menu-item--button" role="menuitem">Logout</button>
+                        </form>
+                    </div>
+                </div>
             {% else %}
                 <a href="{% url 'login' %}" style="color: white; text-decoration: none;">Login</a>
             {% endif %}
@@ -71,5 +85,9 @@
             <script src="{% static 'assessment_tool/js/single_tab_enforcement.js' %}"></script>
         {% endif %}
     {% endblock extra_js %}
+    {% if user.is_authenticated %}
+        <script src="{% static 'assessment_tool/js/nav_account_menu.js' %}"></script>
+        <script src="{% static 'assessment_tool/js/local_datetime.js' %}"></script>
+    {% endif %}
 </body>
 </html>

@@ -28,6 +28,7 @@ nav {
 .nav-links {
     display: flex;
     gap: 20px;
+    align-items: center;
 }
 
 /* Container that adjusts width based on screen size */
@@ -108,4 +109,433 @@ button:hover { background-color: #1d4ed8; }
     background-color: #e0f2fe;
     color: #075985;
     border-color: #bae6fd;
+}
+
+/* Account dropdown in top nav */
+.nav-account-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.nav-account-trigger {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 0.8rem;
+}
+
+.nav-account-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 200px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    padding: 6px 0;
+    color: var(--text-color);
+}
+
+.nav-account-menu[hidden] {
+    display: none !important;
+}
+
+.nav-account-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 14px;
+    color: var(--text-color);
+    text-decoration: none;
+    font-size: 0.9rem;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    box-sizing: border-box;
+}
+
+.nav-account-menu-item:hover {
+    background: #f1f5f9;
+}
+
+.nav-account-menu-item--button {
+    border-radius: 0;
+    color: var(--text-color);
+    background: transparent;
+    padding: 8px 14px;
+    font-size: 0.9rem;
+}
+
+.nav-account-menu-item--button:hover {
+    background: #f1f5f9;
+    color: var(--text-color);
+}
+
+.nav-account-menu-divider {
+    height: 1px;
+    margin: 6px 10px;
+    background: #e2e8f0;
+}
+
+.nav-account-logout-form {
+    margin: 0;
+}
+
+.nav-unread-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ef4444;
+    flex-shrink: 0;
+}
+
+.nav-unread-dot--trigger {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+}
+
+.nav-unread-dot.is-hidden {
+    display: none;
+}
+
+/* Notifications page */
+.notifications-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.notification-list-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+    flex: 1;
+    min-width: 0;
+}
+
+.notification-list-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.notification-item--list:hover {
+    border-color: #94a3b8;
+    background: #f8fafc;
+}
+
+.notification-delete-form {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.notification-delete-btn {
+    background: transparent;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.notification-delete-btn:hover {
+    background: #fef2f2;
+    color: #991b1b;
+}
+
+.notification-detail-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+.notification-item {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    background: #ffffff;
+}
+
+.notification-item--list {
+    margin: 0;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.notification-item-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 16px;
+    margin-bottom: 0.5rem;
+}
+
+.notification-item-title {
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+.notification-detail-title {
+    margin: 0;
+    font-size: 1.35rem;
+}
+
+.notification-item-meta {
+    color: #64748b;
+    font-size: 0.85rem;
+}
+
+.notification-item-reason {
+    display: inline-block;
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.8rem;
+    color: #475569;
+    background: #f1f5f9;
+    border-radius: 4px;
+    padding: 2px 8px;
+}
+
+.notification-item-content {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+}
+
+.notifications-empty {
+    color: #64748b;
+}
+
+.notification-back {
+    margin: 0 0 12px;
+}
+
+.notification-back a {
+    color: #2563eb;
+    text-decoration: none;
+    font-size: 0.95rem;
+}
+
+.notification-back a:hover {
+    text-decoration: underline;
+}
+
+.notification-summary {
+    margin: 0 0 1rem;
+    color: #334155;
+}
+
+.notification-location-path {
+    margin: 0 0 1rem;
+    color: #475569;
+}
+
+.notification-error-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.notification-error-card {
+    border: 1px solid #fecaca;
+    background: #fff7f7;
+    border-radius: 8px;
+    padding: 12px 14px;
+}
+
+.notification-error-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.notification-error-card-header code {
+    font-size: 0.9rem;
+    background: #fee2e2;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.notification-error-archetype {
+    font-size: 0.8rem;
+    color: #64748b;
+}
+
+.notification-error-issue {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #9f1239;
+    margin-bottom: 4px;
+    text-transform: capitalize;
+}
+
+.notification-error-message {
+    margin: 0;
+    color: #7f1d1d;
+    line-height: 1.45;
+}
+
+.notification-plain-list {
+    margin: 0;
+    padding-left: 1.2rem;
+    color: #1e293b;
+}
+
+.notification-plain-list li {
+    margin-bottom: 0.35rem;
+}
+
+.notification-section-heading {
+    margin: 1.25rem 0 0.75rem;
+    font-size: 1.05rem;
+}
+
+.notification-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px 20px;
+    margin: 0;
+}
+
+.notification-meta-grid dt {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #64748b;
+    margin: 0 0 2px;
+}
+
+.notification-meta-grid dd {
+    margin: 0;
+    color: #1e293b;
+}
+
+.notification-kv-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.notification-kv-list li {
+    display: flex;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    font-size: 0.9rem;
+}
+
+.notification-kv-list li:last-child {
+    border-bottom: none;
+}
+
+.notification-kv-key {
+    min-width: 120px;
+    color: #475569;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+}
+
+.notification-kv-value {
+    color: #1e293b;
+    word-break: break-word;
+}
+
+.notification-attempts {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.notification-attempt {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #f8fafc;
+}
+
+.notification-attempt.is-fail {
+    border-color: #fecaca;
+    background: #fff7f7;
+}
+
+.notification-attempt.is-ok {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+}
+
+.notification-attempt-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.notification-attempt-status {
+    font-size: 0.85rem;
+    color: #64748b;
+}
+
+.notification-error-list {
+    margin: 0 0 8px;
+    padding-left: 1.1rem;
+    color: #991b1b;
+}
+
+.notification-error-list--primary {
+    margin: 0;
+    color: #7f1d1d;
+    line-height: 1.5;
+}
+
+.notification-error-list code {
+    font-size: 0.85rem;
+    background: #fee2e2;
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+.notification-id-hint {
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+
+.notification-attempts-details > summary {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1e293b;
+    margin-bottom: 0.75rem;
+}
+
+.notification-attempts-details .notification-attempts {
+    margin-top: 0.75rem;
+}
+
+.notification-nested-details {
+    margin-top: 6px;
+    font-size: 0.9rem;
+}
+
+.notification-nested-details summary {
+    cursor: pointer;
+    color: #475569;
 }

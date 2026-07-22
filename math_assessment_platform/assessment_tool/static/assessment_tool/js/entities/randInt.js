@@ -2,6 +2,7 @@ import { safeNumValue, triggerCardLiveSync, escapeHtmlText } from './helpers.js'
 
 /**
  * randInt entity module — integer random value generator.
+ * Exclude rows accept literal integers or linked integer-producing entities (e.g. other randInt).
  */
 export function processEntity(contextData) {
     if (!contextData || !contextData.action) return null;
@@ -28,6 +29,42 @@ export function processEntity(contextData) {
     }
 }
 
+function escapeHtmlAttr(val) {
+    return String(val ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+/**
+ * Return a canonical `<token>` for linked exclude entries, or '' for literals.
+ * Never wrap bare integers (e.g. "0") — that incorrectly became "<0>" pills.
+ */
+function normalizeExcludeToken(raw) {
+    let tok = String(raw ?? '')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .trim();
+    if (!tok) return '';
+
+    // Plain integer excludes stay as text-field literals
+    if (/^-?\d+$/.test(tok)) return '';
+
+    if (/^<[^<>]+>$/.test(tok)) {
+        const inner = tok.slice(1, -1).trim();
+        // Recover corrupted saves where "0" was wrapped as "<0>"
+        if (/^-?\d+$/.test(inner)) return '';
+        return tok;
+    }
+
+    // Bare entity identifier (e.g. randInt4) — wrap as a link token
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(tok)) {
+        return `<${tok}>`;
+    }
+    return '';
+}
+
 function parseSavedExclusions(savedValues = {}) {
     const raw = savedValues.exclude;
     if (raw == null || raw === '') return [];
@@ -42,9 +79,37 @@ function parseSavedExclusions(savedValues = {}) {
         .filter(Boolean);
 }
 
+function coerceBool(raw, defaultValue = false) {
+    if (raw == null || raw === '') return defaultValue;
+    if (typeof raw === 'boolean') return raw;
+    const s = String(raw).trim().toLowerCase();
+    if (['true', '1', 'yes', 'on', 'checked'].includes(s)) return true;
+    if (['false', '0', 'no', 'off'].includes(s)) return false;
+    return defaultValue;
+}
+
+/** Inclusive [min,max] or exclusive (min,max) lattice endpoints for step sampling. */
+function effectiveRandIntLattice(minVal, maxVal, stepVal, exclusive) {
+    if (!(stepVal > 0) || Number.isNaN(minVal) || Number.isNaN(maxVal)) {
+        return null;
+    }
+    const start = exclusive ? minVal + stepVal : minVal;
+    if (exclusive) {
+        if (start >= maxVal) return null;
+        const maxK = Math.floor((maxVal - start - 1) / stepVal);
+        if (maxK < 0) return null;
+        return { start, maxK };
+    }
+    if (start > maxVal) return null;
+    const maxK = Math.floor((maxVal - start) / stepVal);
+    if (maxK < 0) return null;
+    return { start, maxK };
+}
+
 function getFieldsHtml(savedValues) {
     const exclusions = parseSavedExclusions(savedValues);
-    const excludeRowsHtml = exclusions.map(value => buildExcludeRowHtml(value)).join('');
+    const excludeRowsHtml = exclusions.map((value, index) => buildExcludeRowHtml(value, index)).join('');
+    const exclusiveBounds = coerceBool(savedValues.exclusive_bounds, false);
 
     return `
         <div style="display: flex; flex-direction: column; gap: 10px; width: 100%; box-sizing: border-box;">
@@ -74,7 +139,15 @@ function getFieldsHtml(savedValues) {
                 </div>
             </div>
 
-            <div class="randint-exclude-section linked-input-wrapper" data-input-key="exclude" data-input-type="text" style="display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
+            <div class="linked-input-wrapper" data-input-key="exclusive_bounds" data-input-type="checkbox" style="display: flex; align-items: center; gap: 8px; width: 100%; flex-wrap: wrap;">
+                <label style="font-size: 0.75rem; color: #475569; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; margin: 0;">
+                    <input type="checkbox" class="val-randint-exclusive-bounds" ${exclusiveBounds ? 'checked' : ''} style="cursor: pointer;">
+                    Exclusive min/max (open interval)
+                </label>
+                <span style="font-size: 0.7rem; color: #94a3b8;">Default unchecked: inclusive. Checked: exclude the min and max endpoints.</span>
+            </div>
+
+            <div class="randint-exclude-section" style="display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; border-top: 1px dashed #cbd5e1; padding-top: 8px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
                     <span style="font-size: 0.75rem; font-weight: 600; color: #475569;">Exclude integers</span>
                     <button type="button" class="btn-add-randint-exclude" style="background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; font-size: 0.72rem; padding: 3px 8px; border-radius: 4px; font-weight: 600; cursor: pointer;">
@@ -85,26 +158,43 @@ function getFieldsHtml(savedValues) {
                     ${excludeRowsHtml}
                 </div>
                 <p class="randint-exclude-empty-hint" style="display: ${exclusions.length ? 'none' : 'block'}; margin: 0; font-size: 0.72rem; color: #94a3b8; font-style: italic;">
-                    No excluded integers. Click "Add number to exclude" to remove specific values from the random pool.
+                    No excluded integers. Add a literal integer or link another randInt / integer token.
                 </p>
             </div>
         </div>
     `;
 }
 
-function buildExcludeRowHtml(value = '') {
-    const safeValue = String(value ?? '').replace(/"/g, '&quot;');
+function buildExcludeRowHtml(value = '', index = 0) {
+    const linkedToken = normalizeExcludeToken(value);
+    const linked = !!linkedToken;
+    const numericValue = linked ? '' : String(value ?? '').replace(/"/g, '&quot;');
+    const displayTok = linked ? linkedToken.replace(/[<>]/g, '') : '';
+
     return `
-        <div class="randint-exclude-row" style="display: flex; align-items: center; gap: 8px; width: 100%; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 4px 6px; box-sizing: border-box;">
-            <label style="font-size: 0.75rem; color: #64748b; flex-grow: 1; display: flex; align-items: center; gap: 6px; margin: 0;">
+        <div class="randint-exclude-row linked-input-wrapper" data-input-key="exclude_${index}" data-input-type="integer" data-row-index="${index}" ${linked ? `data-bound-token="${escapeHtmlAttr(linkedToken)}"` : ''} style="position: relative; display: flex; align-items: center; gap: 8px; width: 100%; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 4px 6px; box-sizing: border-box;">
+            <label style="font-size: 0.75rem; color: #64748b; flex-grow: 1; display: ${linked ? 'none' : 'flex'}; align-items: center; gap: 6px; margin: 0;">
                 <span style="white-space: nowrap;">Exclude:</span>
-                <input type="number" step="1" class="val-randint-exclude" value="${safeValue}" placeholder="integer" style="flex-grow: 1; width: 100%; box-sizing: border-box; font-size: 0.8rem; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px;">
+                <input type="number" step="1" class="val-randint-exclude" value="${numericValue}" placeholder="integer" style="flex-grow: 1; width: 100%; box-sizing: border-box; font-size: 0.8rem; padding: 4px; border: 1px solid #cbd5e1; border-radius: 4px;">
             </label>
-            <button type="button" class="btn-remove-randint-exclude" title="Remove exclusion" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.85rem; padding: 2px 4px;">
+            ${linked ? `<span class="linked-token-pill" data-indexed-token="${escapeHtmlAttr(displayTok)}" style="background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; padding: 4px 8px; border-radius: 4px; font-family: monospace; font-weight: 600; font-size: 0.75rem; display: inline-block; flex-grow: 1; box-sizing: border-box; text-align: center;">${escapeHtmlAttr(linkedToken)}</span>` : ''}
+            <button type="button" class="btn-input-link-trigger ${linked ? 'is-linked' : ''}" title="${linked ? 'Unlink' : 'Link integer token'}" style="background: #ffffff; border: 1px solid ${linked ? '#fca5a5' : '#cbd5e1'}; border-radius: 4px; color: ${linked ? '#ef4444' : '#94a3b8'}; cursor: pointer; font-size: 0.75rem; height: 26px; width: 26px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                <i class="fas ${linked ? 'fa-times' : 'fa-link'}"></i>
+            </button>
+            <div class="linkable-tokens-dropdown" style="display: none; position: absolute; top: 100%; left: 0; background: white; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); z-index: 50; min-width: 140px; padding: 4px 0; margin-top: 2px;"></div>
+            <button type="button" class="btn-remove-randint-exclude" title="Remove exclusion" style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.85rem; padding: 2px 4px; flex-shrink: 0;">
                 <i class="fas fa-times-circle"></i>
             </button>
         </div>
     `;
+}
+
+function reindexExcludeRows(card) {
+    if (!card) return;
+    card.querySelectorAll('.randint-exclude-row').forEach((row, i) => {
+        row.setAttribute('data-row-index', String(i));
+        row.setAttribute('data-input-key', `exclude_${i}`);
+    });
 }
 
 function refreshExcludeEmptyHint(card) {
@@ -125,7 +215,8 @@ function bindEvents({ card }) {
     addBtn.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopPropagation();
-        list.insertAdjacentHTML('beforeend', buildExcludeRowHtml(''));
+        const nextIndex = list.querySelectorAll('.randint-exclude-row').length;
+        list.insertAdjacentHTML('beforeend', buildExcludeRowHtml('', nextIndex));
         refreshExcludeEmptyHint(card);
         const newest = list.querySelector('.randint-exclude-row:last-child .val-randint-exclude');
         if (newest) newest.focus();
@@ -138,6 +229,7 @@ function bindEvents({ card }) {
         e.preventDefault();
         e.stopPropagation();
         removeBtn.closest('.randint-exclude-row')?.remove();
+        reindexExcludeRows(card);
         refreshExcludeEmptyHint(card);
         triggerCardLiveSync(card);
     });
@@ -145,11 +237,17 @@ function bindEvents({ card }) {
     return true;
 }
 
-function collectExcludeIntegers(card) {
+function collectExcludeEntries(card) {
     if (!card) return [];
     const values = [];
-    card.querySelectorAll('.val-randint-exclude').forEach(input => {
-        const raw = String(input.value ?? '').trim();
+    card.querySelectorAll('.randint-exclude-row').forEach((row) => {
+        const bound = normalizeExcludeToken(row.getAttribute('data-bound-token') || '');
+        if (bound) {
+            values.push(bound);
+            return;
+        }
+        const input = row.querySelector('.val-randint-exclude');
+        const raw = String(input?.value ?? '').trim();
         if (raw === '') return;
         values.push(raw);
     });
@@ -159,9 +257,15 @@ function collectExcludeIntegers(card) {
 function serialize({ card, inputsCollected }) {
     if (!card || !inputsCollected) return inputsCollected;
 
-    const excludes = collectExcludeIntegers(card);
-    // Persist as comma-separated integers for RandomIntegerEntity server parsing
+    inputsCollected.exclusive_bounds = !!card.querySelector('.val-randint-exclusive-bounds')?.checked;
+
+    const excludes = collectExcludeEntries(card);
     inputsCollected.exclude = excludes.length ? excludes.join(', ') : '';
+
+    // Drop per-row keys so only the comma-separated exclude field is persisted
+    Object.keys(inputsCollected).forEach((k) => {
+        if (/^exclude_\d+$/.test(k)) delete inputsCollected[k];
+    });
     return inputsCollected;
 }
 
@@ -171,42 +275,49 @@ function evaluate({ card, tokenIdentifier, visitedTokens = [], getLiveComponentV
     const minStr = getLiveComponentValue(card, 'min', '1', visitedTokens);
     const maxStr = getLiveComponentValue(card, 'max', '9', visitedTokens);
     const stepStr = getLiveComponentValue(card, 'step', '1', visitedTokens);
+    const exclusive = !!card.querySelector('.val-randint-exclusive-bounds')?.checked;
 
     const minVal = parseInt(minStr, 10);
     const maxVal = parseInt(maxStr, 10);
     const stepVal = parseInt(stepStr, 10);
 
     const excludeSet = new Set();
-    collectExcludeIntegers(card).forEach(raw => {
-        if (/^-?\d+$/.test(raw)) {
-            excludeSet.add(parseInt(raw, 10));
+    card.querySelectorAll('.randint-exclude-row').forEach((row) => {
+        const key = row.getAttribute('data-input-key');
+        if (!key) return;
+        const resolved = String(getLiveComponentValue(card, key, '', visitedTokens) ?? '').trim();
+        if (/^-?\d+$/.test(resolved)) {
+            excludeSet.add(parseInt(resolved, 10));
         }
     });
 
-    if (!isNaN(minVal) && !isNaN(maxVal) && stepVal > 0 && minVal <= maxVal) {
-        const pool = [];
-        let current = minVal;
-        while (current <= maxVal) {
-            if (!excludeSet.has(current)) {
-                pool.push(current);
-            }
-            current += stepVal;
-        }
+    const lattice = effectiveRandIntLattice(minVal, maxVal, stepVal, exclusive);
+    if (!lattice) {
+        const mode = exclusive ? 'exclusive' : 'inclusive';
+        return `⚠️ Error: no integers in ${mode} range from ${minVal} to ${maxVal} (step ${stepVal}).`;
+    }
 
-        if (pool.length > 0) {
-            const seedAttr = card.getAttribute('data-shuffle-seed');
-            let targetIndex = 0;
-            if (seedAttr) {
-                targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
-            } else {
-                const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                targetIndex = baseTextSeed % pool.length;
-            }
-            if (targetIndex >= pool.length) targetIndex = pool.length - 1;
-            return pool[targetIndex].toString();
+    const pool = [];
+    for (let k = 0; k <= lattice.maxK; k += 1) {
+        const current = lattice.start + k * stepVal;
+        if (!excludeSet.has(current)) {
+            pool.push(current);
         }
     }
-    return null;
+
+    if (pool.length > 0) {
+        const seedAttr = card.getAttribute('data-shuffle-seed');
+        let targetIndex = 0;
+        if (seedAttr) {
+            targetIndex = Math.floor(parseFloat(seedAttr) * pool.length);
+        } else {
+            const baseTextSeed = tokenIdentifier.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            targetIndex = baseTextSeed % pool.length;
+        }
+        if (targetIndex >= pool.length) targetIndex = pool.length - 1;
+        return pool[targetIndex].toString();
+    }
+    return '⚠️ Error: all candidate integers were removed by the exclude list.';
 }
 
 function renderPreviewToken({ displayVal }) {

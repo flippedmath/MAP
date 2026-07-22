@@ -601,7 +601,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // 🎯 PRIORITY A: Check if the server has stored a verified calculated value directly on the card markup
         const calculatedValueFallback = card.getAttribute('data-simulated-value');
-        if (calculatedValueFallback !== null && calculatedValueFallback !== undefined && calculatedValueFallback !== '' && calculatedValueFallback !== 'None' && calculatedValueFallback !== 'null') {
+        if (
+            calculatedValueFallback !== null
+            && calculatedValueFallback !== undefined
+            && calculatedValueFallback !== ''
+            && calculatedValueFallback !== 'None'
+            && calculatedValueFallback !== 'null'
+            && !String(calculatedValueFallback).startsWith('⚠️')
+        ) {
             return calculatedValueFallback;
         }
 
@@ -1091,16 +1098,18 @@ document.addEventListener('DOMContentLoaded', function() {
             node.innerHTML = '';
             node.appendChild(table);
             applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
-            // Expand row heights to fit multi-line content in preview
+            // Grow-only vs editor-locked heights. Detached preview measures often
+            // report NESTED_MIN_ROW (16) and must not overwrite real rowHeights.
             const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
-            const heights = rows.map(tr => {
+            const priorHeights = (config.rowHeights || []).slice();
+            const heights = rows.map((tr, i) => {
                 let contentH = NESTED_MIN_ROW;
                 Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
                     contentH = Math.max(contentH, Math.ceil(td.scrollHeight) || NESTED_MIN_ROW);
                 });
-                return Math.max(NESTED_MIN_ROW, contentH);
+                return Math.max(NESTED_MIN_ROW, contentH, priorHeights[i] || 0);
             });
-            if (heights.some((h, i) => h !== (config.rowHeights[i] || 0))) {
+            if (heights.some((h, i) => h !== (priorHeights[i] || 0))) {
                 config.rowHeights = heights;
                 applyNestedInnerLayout(table, config.colWidths, config.rowHeights);
             }
@@ -1392,11 +1401,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // After entities/KaTeX/graphs paint: expand flagged tables, or shrink into fixed cells
         applyPreviewTableEntityFitModes(renderTarget);
-        // Remeasure once plot SVG layout settles
-        setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 40);
-        setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 200);
-        // Graphs finish async — refresh canvas underlays that may clone them
-        setTimeout(() => refreshAllCanvasUnderlays(renderTarget), 120);
+        // Remeasure once plot SVG layout settles (cancel prior timers — each keystroke
+        // used to stack delayed expands and ratchet nested/outer heights).
+        if (window.__workspacePreviewFitTimers) {
+            window.__workspacePreviewFitTimers.forEach(id => clearTimeout(id));
+        }
+        window.__workspacePreviewFitTimers = [
+            setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 40),
+            setTimeout(() => applyPreviewTableEntityFitModes(renderTarget), 200),
+            setTimeout(() => refreshAllCanvasUnderlays(renderTarget), 120),
+        ];
     }
 
     function mountPreviewCanvases(root) {
@@ -2040,14 +2054,23 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             if (table.classList.contains('ql-nested-table-inner') || table.closest('.ql-workspace-nested-table')) {
-                applyNestedInnerLayout(table, nextWidths, nextHeights);
-                // If nested grew, also enlarge the outer host cell so the preview isn't clipped by the parent cell
+                // Nested tables: trust editor-locked data-value sizes. Live/scroll
+                // expand ratchets with absolute-fill CSS + delayed fit passes.
                 const embed = table.closest('.ql-workspace-nested-table');
+                const cfg = parseNestedTableConfig(embed ? embed.getAttribute('data-value') || '' : '');
+                const lockedW = (cfg.colWidths && cfg.colWidths.length)
+                    ? cfg.colWidths.map(w => Math.max(NESTED_MIN_COL, Math.round(w)))
+                    : nextWidths;
+                const lockedH = (cfg.rowHeights && cfg.rowHeights.length)
+                    ? cfg.rowHeights.map(h => Math.max(NESTED_MIN_ROW, Math.round(h)))
+                    : nextHeights;
+                applyNestedInnerLayout(table, lockedW, lockedH);
+                // If nested grew, also enlarge the outer host cell so the preview isn't clipped by the parent cell
                 const host = embed ? embed.closest('td, th') : null;
                 const outerTable = host ? host.closest('table') : null;
                 if (host && outerTable && !isNestedTableElement(outerTable) && previewTableShouldExpandEntities(outerTable)) {
-                    const neededW = nextWidths.reduce((a, b) => a + b, 0);
-                    const neededH = nextHeights.reduce((a, b) => a + b, 0);
+                    const neededW = lockedW.reduce((a, b) => a + b, 0);
+                    const neededH = lockedH.reduce((a, b) => a + b, 0);
                     const outerRows = Array.from(outerTable.querySelectorAll(':scope > tr, :scope > tbody > tr'));
                     const outerRow = host.parentElement;
                     const outerRowIndex = outerRows.indexOf(outerRow);
@@ -2067,6 +2090,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                     if (outerColIndex >= 0) {
                         while (outerWidths.length <= outerColIndex) outerWidths.push(40);
+                        // Grow-only host to nested sum — never shrink below current
                         outerWidths[outerColIndex] = Math.max(outerWidths[outerColIndex] || 0, neededW);
                     }
                     if (outerRowIndex >= 0) {
@@ -4306,10 +4330,18 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
             syncWorkspaceNestedTableNode(node, { relayout: false });
+            // Content sync + preview only. Full grow/fit rewrites outer cols from stale
+            // data-value widths and snaps the table; only grow when the cell overflows.
+            scheduleNestedPreviewUpdate();
+            const tr = td.parentElement;
+            const lockedH = parseFloat(tr && tr.style.height) || 0;
+            const overflows = lockedH > 0
+                ? (td.scrollHeight > lockedH + 1)
+                : false;
+            if (!overflows) return;
             if (node.__growFitTimer) clearTimeout(node.__growFitTimer);
             node.__growFitTimer = setTimeout(() => {
                 growNestedEmbedToContentAndFitOuter(node);
-                scheduleNestedPreviewUpdate();
             }, 60);
         });
         // Grow outer host when nested images finish loading (after hydrate/reload)
@@ -4536,6 +4568,30 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!table) return;
         const config = parseNestedTableConfig(embed.getAttribute('data-value') || '');
         const rows = Array.from(table.querySelectorAll(':scope > tr, :scope > tbody > tr'));
+        const priorHeights = (config.rowHeights || []).slice();
+
+        // Nested inner table is CSS absolute-fill; style/colWidths can lag the live embed.
+        // Reconcile column widths UP to the live embed so fitOuter never snaps 375→48.
+        const liveEmbedW = Math.max(
+            0,
+            Math.round(embed.getBoundingClientRect().width)
+            || Math.round((getHostOuterCellForNested(embed) || {}).clientWidth || 0)
+        );
+        let widthSum = config.colWidths.reduce((a, b) => a + b, 0) || 0;
+        if (liveEmbedW > widthSum + 1 && config.colWidths.length) {
+            const scale = liveEmbedW / (widthSum || 1);
+            config.colWidths = config.colWidths.map(w =>
+                Math.max(NESTED_MIN_COL, Math.round((w || NESTED_MIN_COL) * scale))
+            );
+            const drift = liveEmbedW - config.colWidths.reduce((a, b) => a + b, 0);
+            if (config.colWidths.length) {
+                config.colWidths[config.colWidths.length - 1] = Math.max(
+                    NESTED_MIN_COL,
+                    config.colWidths[config.colWidths.length - 1] + drift
+                );
+            }
+            widthSum = liveEmbedW;
+        }
 
         // Temporarily release fixed heights so scrollHeight reflects content (newlines, wrap)
         rows.forEach(tr => {
@@ -4547,12 +4603,14 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
 
-        config.rowHeights = rows.map(tr => {
+        config.rowHeights = rows.map((tr, i) => {
             let contentH = NESTED_MIN_ROW;
             Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
                 contentH = Math.max(contentH, Math.ceil(td.scrollHeight) || NESTED_MIN_ROW);
             });
-            return Math.max(NESTED_MIN_ROW, contentH);
+            // Grow-only vs prior locked height — avoid shrink flicker while typing
+            const prior = priorHeights[i] || 0;
+            return Math.max(NESTED_MIN_ROW, contentH, prior);
         });
 
         while (config.colWidths.length < config.cols) config.colWidths.push(Math.max(NESTED_MIN_COL, 48));
@@ -4586,12 +4644,26 @@ document.addEventListener('DOMContentLoaded', function() {
         window.__workspaceTableLayoutQuiet = true;
         try {
             const widths = readLiveColumnWidths(coords.table);
+            const prevOuterCol = widths[coords.colIndex];
+            const prevOuterRow = (() => {
+                const tr = coords.rows[coords.rowIndex];
+                const h = tr && parseFloat(tr.style.height);
+                return Number.isNaN(h) ? 0 : h;
+            })();
             while (widths.length <= coords.colIndex) widths.push(limits.minCol);
-            widths[coords.colIndex] = Math.max(limits.minCol, neededW);
+            // Grow-only: never shrink the outer host to stale nested colWidths
+            // (absolute-fill nested tables often display larger than data-value sums).
+            widths[coords.colIndex] = Math.max(
+                limits.minCol,
+                neededW,
+                Math.round(prevOuterCol || 0)
+            );
             applyColumnWidths(coords.table, widths);
 
             const heights = coords.rows.map((tr, i) => {
-                if (i === coords.rowIndex) return Math.max(limits.minRow, neededH);
+                if (i === coords.rowIndex) {
+                    return Math.max(limits.minRow, neededH, Math.round(prevOuterRow || 0));
+                }
                 const fromStyle = parseFloat(tr.style.height);
                 return Math.max(
                     limits.minRow,
@@ -5422,18 +5494,22 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function showWorkspaceTableHoverTip(table) {
-        if (!table || isNestedTableElement(table) || table.classList.contains('ql-table-object-selected')) {
+        if (!table || table.classList.contains('ql-table-object-selected')) {
             hideWorkspaceTableHoverTip();
             return;
         }
         const tip = ensureWorkspaceTableHoverTip();
+        tip.textContent = isNestedTableElement(table)
+            ? '🖱️ Right-click cells for inner table options'
+            : '🖱️ Right-click cells for row/column options';
         const rect = table.getBoundingClientRect();
         tip.style.display = 'block';
-        // Prefer above the table; if clipped by viewport, place just inside top-left.
-        let top = rect.top - 24;
-        let left = rect.left + 28;
-        if (top < 8) top = rect.top + 4;
+        // Prefer above the top-right corner; if clipped, place just inside the table.
         const tipWidth = tip.offsetWidth || 280;
+        let top = rect.top - 24;
+        let left = rect.right - tipWidth;
+        if (top < 8) top = rect.top + 4;
+        if (left < 8) left = 8;
         if (left + tipWidth > window.innerWidth - 8) {
             left = Math.max(8, window.innerWidth - tipWidth - 8);
         }
@@ -5446,7 +5522,7 @@ document.addEventListener('DOMContentLoaded', function() {
         htmlCanvasEditor.dataset.tableHoverTipBound = '1';
         htmlCanvasEditor.addEventListener('mouseover', function(e) {
             const table = e.target.closest && e.target.closest('table');
-            if (!table || !workspaceQuillInstance?.root.contains(table) || isNestedTableElement(table)) {
+            if (!table || !workspaceQuillInstance?.root.contains(table)) {
                 return;
             }
             showWorkspaceTableHoverTip(table);
@@ -7663,7 +7739,265 @@ document.addEventListener('DOMContentLoaded', function() {
             chartInstance.draw();
         }
 
+        // Critical-point letter overlays (extrema / inflection / intercepts)
+        paintGraphCriticalAnnotations(targetEl, chartInstance, graphConfig, {
+            xMin, xMax, yMin, yMax,
+        });
+
         return chartInstance;
+    }
+
+    function paintGraphCriticalAnnotations(targetEl, chartInstance, graphConfig, bounds) {
+        if (!targetEl || !chartInstance || !chartInstance.meta) return;
+        const annotations = Array.isArray(graphConfig?.annotations) ? graphConfig.annotations : [];
+        if (!annotations.length || !graphConfig?.visualization?.label_critical_points) return;
+
+        const svg = targetEl.querySelector('svg');
+        if (!svg) return;
+
+        const prev = svg.querySelector('g.graph-critical-labels');
+        if (prev) prev.remove();
+
+        const xScale = chartInstance.meta.xScale;
+        const yScale = chartInstance.meta.yScale;
+        if (typeof xScale !== 'function' || typeof yScale !== 'function') return;
+
+        const xMin = Number(bounds.xMin);
+        const xMax = Number(bounds.xMax);
+        const yMin = Number(bounds.yMin);
+        const yMax = Number(bounds.yMax);
+
+        const ns = 'http://www.w3.org/2000/svg';
+        const g = document.createElementNS(ns, 'g');
+        g.setAttribute('class', 'graph-critical-labels');
+        g.setAttribute('pointer-events', 'none');
+
+        // Marker defs for callout arrows (unique id per SVG to avoid collisions)
+        const markerId = `graph-critical-arrow-${Math.random().toString(36).slice(2, 9)}`;
+        let defs = svg.querySelector('defs.graph-critical-defs');
+        if (!defs) {
+            defs = document.createElementNS(ns, 'defs');
+            defs.setAttribute('class', 'graph-critical-defs');
+            svg.insertBefore(defs, svg.firstChild);
+        } else {
+            defs.innerHTML = '';
+        }
+        const marker = document.createElementNS(ns, 'marker');
+        marker.setAttribute('id', markerId);
+        marker.setAttribute('viewBox', '0 0 8 8');
+        marker.setAttribute('refX', '7');
+        marker.setAttribute('refY', '4');
+        marker.setAttribute('markerWidth', '6');
+        marker.setAttribute('markerHeight', '6');
+        marker.setAttribute('orient', 'auto');
+        const tip = document.createElementNS(ns, 'path');
+        tip.setAttribute('d', 'M0,0 L8,4 L0,8 Z');
+        tip.setAttribute('fill', '#0f172a');
+        marker.appendChild(tip);
+        defs.appendChild(marker);
+
+        const canvas = svg.querySelector('.canvas') || svg.querySelector('g.canvas') || svg;
+        canvas.appendChild(g);
+
+        const axisY0 = (0 >= yMin && 0 <= yMax) ? 0 : null;
+        const axisX0 = (0 >= xMin && 0 <= xMax) ? 0 : null;
+        const xAxisPy = axisY0 != null ? yScale(axisY0) : null;
+        const yAxisPx = axisX0 != null ? xScale(axisX0) : null;
+
+        const LABEL_W = 14;
+        const LABEL_H = 14;
+        const MIN_GAP = 16;
+        const AXIS_CLEAR = 12;
+        const POINT_CLEAR = 14;
+
+        const candidates = [];
+        annotations.forEach((ann, index) => {
+            if (!ann || ann.label == null) return;
+            const x = Number(ann.x);
+            const y = Number(ann.y);
+            if (![x, y].every(Number.isFinite)) return;
+            if (x < xMin || x > xMax || y < yMin || y > yMax) return;
+
+            const kind = ann.kind || '';
+            const px = xScale(x);
+            const py = yScale(y);
+            candidates.push({ ann, kind, px, py, index });
+        });
+
+        function rectsOverlap(a, b, pad = MIN_GAP) {
+            return Math.abs(a.tx - b.tx) < pad && Math.abs(a.ty - b.ty) < pad;
+        }
+
+        function nearAxis(tx, ty) {
+            if (xAxisPy != null && Math.abs(ty - xAxisPy) < AXIS_CLEAR) return true;
+            if (yAxisPx != null && Math.abs(tx - yAxisPx) < AXIS_CLEAR) return true;
+            return false;
+        }
+
+        function nearPoint(tx, ty, px, py) {
+            return Math.hypot(tx - px, ty - py) < POINT_CLEAR;
+        }
+
+        function conflicts(tx, ty, px, py, placed) {
+            if (nearAxis(tx, ty)) return true;
+            if (nearPoint(tx, ty, px, py)) return true;
+            for (let i = 0; i < placed.length; i += 1) {
+                if (rectsOverlap({ tx, ty }, placed[i])) return true;
+            }
+            return false;
+        }
+
+        // Candidate label positions for a point (text anchor handled per slot)
+        function slotOptions(c) {
+            const { kind, px, py, index } = c;
+            const side = (index % 2 === 0) ? -1 : 1;
+            const slots = [];
+
+            if (kind === 'y_intercept') {
+                slots.push({ tx: px - 12, ty: py + 4, anchor: 'end', guide: 'none', callout: false });
+                slots.push({ tx: px - 22, ty: py + 4, anchor: 'end', guide: 'none', callout: true });
+                slots.push({ tx: px - 28, ty: py - 16, anchor: 'end', guide: 'none', callout: true });
+                slots.push({ tx: px - 28, ty: py + 20, anchor: 'end', guide: 'none', callout: true });
+            } else {
+                // Prefer under x-axis with vertical dotted guide when axis is visible
+                if (xAxisPy != null) {
+                    slots.push({ tx: px, ty: xAxisPy + 14, anchor: 'middle', guide: 'axis', callout: false });
+                    slots.push({ tx: px, ty: xAxisPy + 26, anchor: 'middle', guide: 'axis', callout: true });
+                    slots.push({ tx: px + side * 12, ty: xAxisPy + 28, anchor: 'middle', guide: 'axis', callout: true });
+                    slots.push({ tx: px + side * 18, ty: xAxisPy + 38, anchor: 'middle', guide: 'axis', callout: true });
+                }
+                // Near-point callouts (away from curve/axis)
+                slots.push({ tx: px + side * 16, ty: py + 22, anchor: 'middle', guide: 'none', callout: true });
+                slots.push({ tx: px + side * 16, ty: py - 18, anchor: 'middle', guide: 'none', callout: true });
+                slots.push({ tx: px + side * 28, ty: py + 4, anchor: side < 0 ? 'end' : 'start', guide: 'none', callout: true });
+                slots.push({ tx: px - side * 28, ty: py + 4, anchor: side < 0 ? 'start' : 'end', guide: 'none', callout: true });
+                slots.push({ tx: px + side * 22, ty: py + 34, anchor: 'middle', guide: 'none', callout: true });
+                slots.push({ tx: px + side * 10, ty: py - 30, anchor: 'middle', guide: 'none', callout: true });
+            }
+            return slots;
+        }
+
+        const placed = [];
+        candidates.forEach((c) => {
+            const slots = slotOptions(c);
+            let chosen = null;
+            for (let s = 0; s < slots.length; s += 1) {
+                const slot = slots[s];
+                if (!conflicts(slot.tx, slot.ty, c.px, c.py, placed)) {
+                    chosen = slot;
+                    break;
+                }
+            }
+            if (!chosen) {
+                // Last resort: push further down/out with forced callout
+                const side = (c.index % 2 === 0) ? -1 : 1;
+                const fall = 40 + placed.length * 10;
+                chosen = {
+                    tx: c.px + side * 18,
+                    ty: (xAxisPy != null ? xAxisPy : c.py) + fall,
+                    anchor: 'middle',
+                    guide: 'none',
+                    callout: true,
+                };
+            }
+            placed.push({
+                ...c,
+                ...chosen,
+                // Approximate footprint for later collision checks
+                tw: LABEL_W,
+                th: LABEL_H,
+            });
+        });
+
+        // Second pass: only nudge when still overlapping another label
+        for (let i = 0; i < placed.length; i += 1) {
+            const p = placed[i];
+            let bumped = false;
+            for (let j = 0; j < placed.length; j += 1) {
+                if (i === j) continue;
+                if (rectsOverlap(p, placed[j])) {
+                    bumped = true;
+                    break;
+                }
+            }
+            if (!bumped) continue;
+            const side = (p.index % 2 === 0) ? -1 : 1;
+            p.tx = p.px + side * (22 + i * 4);
+            p.ty = p.py + (xAxisPy != null && p.py >= xAxisPy ? 26 + i * 6 : -24 - i * 6);
+            p.anchor = 'middle';
+            p.guide = 'none';
+            p.callout = true;
+        }
+
+        placed.forEach((p) => {
+            const { kind, px, py, tx, ty, anchor, callout, ann } = p;
+
+            // Vertical dotted guide to the x-axis for any point that is not on an axis
+            // (kept even when the letter uses a callout arrow).
+            const onXAxis = xAxisPy != null && Math.abs(py - xAxisPy) < 6;
+            const drawAxisGuide = xAxisPy != null
+                && kind !== 'y_intercept'
+                && !onXAxis;
+            if (drawAxisGuide) {
+                const line = document.createElementNS(ns, 'line');
+                line.setAttribute('x1', String(px));
+                line.setAttribute('y1', String(py));
+                line.setAttribute('x2', String(px));
+                line.setAttribute('y2', String(xAxisPy));
+                line.setAttribute('stroke', '#334155');
+                line.setAttribute('stroke-width', '1.25');
+                line.setAttribute('stroke-dasharray', '3 3');
+                g.appendChild(line);
+            }
+
+            if (callout) {
+                // Shorten arrow so tip stops just before the point marker
+                const dx = px - tx;
+                const dy = py - ty;
+                const dist = Math.hypot(dx, dy) || 1;
+                const inset = 5;
+                const ax2 = px - (dx / dist) * inset;
+                const ay2 = py - (dy / dist) * inset;
+                // Start slightly away from letter center
+                const ax1 = tx + (dx / dist) * 6;
+                const ay1 = ty + (dy / dist) * 2;
+
+                const arrow = document.createElementNS(ns, 'line');
+                arrow.setAttribute('x1', String(ax1));
+                arrow.setAttribute('y1', String(ay1));
+                arrow.setAttribute('x2', String(ax2));
+                arrow.setAttribute('y2', String(ay2));
+                arrow.setAttribute('stroke', '#0f172a');
+                arrow.setAttribute('stroke-width', '1.15');
+                arrow.setAttribute('marker-end', `url(#${markerId})`);
+                g.appendChild(arrow);
+
+                // Small open circle at the represented point
+                const dot = document.createElementNS(ns, 'circle');
+                dot.setAttribute('cx', String(px));
+                dot.setAttribute('cy', String(py));
+                dot.setAttribute('r', '2.5');
+                dot.setAttribute('fill', '#fff');
+                dot.setAttribute('stroke', '#0f172a');
+                dot.setAttribute('stroke-width', '1.25');
+                g.appendChild(dot);
+            }
+
+            const text = document.createElementNS(ns, 'text');
+            text.setAttribute('x', String(tx));
+            text.setAttribute('y', String(ty));
+            text.setAttribute('text-anchor', anchor || 'middle');
+            text.setAttribute('font-size', '12');
+            text.setAttribute('font-style', 'italic');
+            text.setAttribute('font-family', 'Georgia, "Times New Roman", serif');
+            text.setAttribute('fill', '#0f172a');
+            // Soft halo so letters stay readable over grid/curve
+            text.setAttribute('paint-order', 'stroke');
+            text.setAttribute('stroke', '#ffffff');
+            text.setAttribute('stroke-width', '3');
+            text.textContent = String(ann.label);
+            g.appendChild(text);
+        });
     }
 
     // -------------------------------------------------------------------------
