@@ -499,7 +499,7 @@ class Command(BaseCommand):
             "note": (
                 "Piecewise graph from segments: each row is "
                 "<code>coord | divider | type | divider | coord</code>. "
-                "Types: concave-down / concave-up parabola, line, cubic parabola. "
+                "Types: concave-down / concave-up parabola, line, cubic polynomial. "
                 "Dividers draw open (<code>&lt;</code>/<code>&gt;</code>), filled "
                 "(<code>&lt;=</code>/<code>&gt;=</code>), a directional arrow "
                 "(<code>arrow</code> / →) along the segment, or no endpoint marker (<code>none</code>). "

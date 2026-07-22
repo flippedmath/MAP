@@ -703,7 +703,7 @@ def build_segment_samples(
         out["samples"] = sample_parabola(a, h, k, x1, x2)
         return out
 
-    if kind == "cubic_parabola":
+    if kind == "cubic_polynomial":
         if len(points) > 2:
             raise ValueError("Cubic segments allow at most two vertices.")
         if len(points) == 2 and abs(points[0][0] - points[1][0]) < EPS:

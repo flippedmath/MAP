@@ -6286,7 +6286,7 @@ class GraphBetweenPointsEntity(BaseEntity):
         "concave_down_parabola",
         "concave_up_parabola",
         "line",
-        "cubic_parabola",
+        "cubic_polynomial",
     )
     START_DIVIDERS = ("<", "<=", "none", "arrow")
     END_DIVIDERS = (">", ">=", "none", "arrow")
@@ -6461,7 +6461,7 @@ class GraphBetweenPointsEntity(BaseEntity):
             already = [v for v in vertices if v["segment_id"] == preferred]
             if target["type"] in ("concave_down_parabola", "concave_up_parabola") and len(already) >= 1:
                 continue
-            if target["type"] == "cubic_parabola" and len(already) >= 2:
+            if target["type"] == "cubic_polynomial" and len(already) >= 2:
                 continue
             # Point is auto-calculated; ignore author-provided coordinates.
             vertices.append({"id": vid, "point": [], "segment_id": preferred})

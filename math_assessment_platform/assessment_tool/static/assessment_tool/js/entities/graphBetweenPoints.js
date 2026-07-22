@@ -8,7 +8,7 @@ const SEGMENT_TYPES = [
     { value: 'concave_down_parabola', label: 'concave-down parabola' },
     { value: 'concave_up_parabola', label: 'concave-up parabola' },
     { value: 'line', label: 'line' },
-    { value: 'cubic_parabola', label: 'cubic parabola' },
+    { value: 'cubic_polynomial', label: 'cubic polynomial' },
 ];
 
 const START_DIVIDERS = [
@@ -229,7 +229,7 @@ function assignableSegmentOptions(segments, allVertices = [], currentVtxId = nul
         if (s.type === 'concave_down_parabola' || s.type === 'concave_up_parabola') {
             return used < 1;
         }
-        if (s.type === 'cubic_parabola') {
+        if (s.type === 'cubic_polynomial') {
             return used < 2;
         }
         return false;
@@ -349,7 +349,7 @@ function sampleStudentSegment(seg, bounds) {
         return samples;
     }
 
-    if (type === 'cubic_parabola') {
+    if (type === 'cubic_polynomial') {
         // Smooth cubic wiggle between endpoints (two interior extrema vibe)
         const midY = (y1 + y2) / 2;
         const amp = Math.max(0.6, Math.abs(y2 - y1) * 0.45 + Math.abs(span) * 0.15);
