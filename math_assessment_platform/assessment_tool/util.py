@@ -32,6 +32,45 @@ GREEK_VAR_BASE_PATTERN = (
 )
 
 
+def truncate_to_decimals(value, places):
+    """Chop toward zero to ``places`` decimal digits (not banker's round)."""
+    try:
+        places = int(places)
+    except (TypeError, ValueError):
+        places = 0
+    if places < 0:
+        places = 0
+    factor = 10 ** places
+    return math.trunc(float(value) * factor) / float(factor)
+
+
+def numeric_match_rounded(student, correct, places):
+    """
+    True when student and correct match after rounding both to ``places``.
+
+    When ``places >= 2``, also accept a truncating match (toward zero), so e.g.
+    correct 1.99899 at 3 places accepts both 1.999 (rounded) and 1.998 (truncated).
+    """
+    try:
+        places = int(places)
+    except (TypeError, ValueError):
+        places = 0
+    if places < 0:
+        places = 0
+    try:
+        s = float(student)
+        c = float(correct)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(s) and math.isfinite(c)):
+        return False
+    if round(s, places) == round(c, places):
+        return True
+    if places >= 2:
+        return truncate_to_decimals(s, places) == truncate_to_decimals(c, places)
+    return False
+
+
 def _is_valid_algebraic_variable_name(item):
     """
     Return (ok: bool, error_message: str|None) for a declared variable identifier.
@@ -3739,6 +3778,7 @@ class NumAnswerEntity(BaseEntity):
     """
     Answer-field numeric response: correct value (literal or linked int/double)
     compared to the student answer after rounding both to N decimal places.
+    When N ≥ 2, truncation (toward zero) is also accepted.
     """
 
     def _coerce_bool(self, raw):
@@ -3877,9 +3917,7 @@ class NumAnswerEntity(BaseEntity):
                 "detail": f"Incorrect (rounded to {places} decimals)",
             }
 
-        rounded_student = round(student_val, places)
-        rounded_correct = round(float(correct), places)
-        if rounded_student == rounded_correct:
+        if numeric_match_rounded(student_val, float(correct), places):
             return {"earned": pts, "max": pts, "detail": "Correct"}
         return {
             "earned": 0.0,
@@ -3896,7 +3934,8 @@ class ShortAnswerEntity(BaseEntity):
     (count_ops(student) <= count_ops(correct)). Comparison helpers live on BaseEntity.
 
     Optional accept_rounded_decimals: after the normal rules fail, evaluate both
-    sides numerically and accept if round(student, 3) == round(correct, 3).
+    sides numerically and accept if they match at 3 decimal places (rounding, and
+    for ≥2 places also truncation toward zero).
     """
 
     ROUNDED_DECIMAL_PLACES = 3
@@ -4010,7 +4049,7 @@ class ShortAnswerEntity(BaseEntity):
             if (
                 student_num is not None
                 and correct_num is not None
-                and round(student_num, places) == round(correct_num, places)
+                and numeric_match_rounded(student_num, correct_num, places)
             ):
                 return {
                     "earned": pts,
@@ -4452,7 +4491,7 @@ class ArrayMatchingUnorderedEntity(BaseEntity):
             na = float(str(student_piece).strip())
             nb = float(str(key_piece).strip())
             if math.isfinite(na) and math.isfinite(nb):
-                return round(na, 3) == round(nb, 3)
+                return numeric_match_rounded(na, nb, 3)
         except (TypeError, ValueError):
             pass
         # SymPy parse (fractions / oo)
@@ -5286,14 +5325,14 @@ class AnswersOrDneEntity(BaseEntity):
         if student_expr is not None and correct_expr is not None:
             if self._exprs_equivalent(student_expr, correct_expr):
                 return True
-            # Fallback for messy floats: same 3-decimal rounding as shortAnswer option
+            # Fallback for messy floats: same 3-decimal rounding (+ truncation) as shortAnswer
             try:
                 s_num = float(sp.N(student_expr))
                 c_num = float(sp.N(correct_expr))
                 if (
                     math.isfinite(s_num)
                     and math.isfinite(c_num)
-                    and round(s_num, 3) == round(c_num, 3)
+                    and numeric_match_rounded(s_num, c_num, 3)
                 ):
                     return True
             except Exception:

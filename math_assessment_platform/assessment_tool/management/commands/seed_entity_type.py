@@ -255,7 +255,10 @@ class Command(BaseCommand):
             "points": {"field": "double", "value": ["double"], "default": 1.0},
             "entity_name_list": "Answer Input Fields",
             "disabled": False,
-            "note": "Compare student number to the correct value after rounding both to N decimal places (default 3)."
+            "note": (
+                "Compare student number to the correct value after rounding both to N decimal places (default 3). "
+                "When N ≥ 2, truncated answers are also accepted (e.g. 1.99899 at 3 places matches 1.999 or 1.998)."
+            )
         },
         {
             "name": "Short Answer",
@@ -273,7 +276,8 @@ class Command(BaseCommand):
                 "Trim + case-insensitive exact match first. Otherwise sympy equivalence vs the simplified key; "
                 "rearrangements allowed but answers that still need simplifying are incorrect. May link a formula entity. "
                 "Optional checkbox accepts numeric answers that match after rounding both sides to 3 decimal places "
-                "(e.g. 8/9 and 0.88889 both round to 0.889). "
+                "(e.g. 8/9 and 0.88889 both round to 0.889); when N ≥ 2, truncated forms are also accepted "
+                "(e.g. 1.99899 matches 1.999 or 1.998). "
                 "Expression entry: \"**\" is the same as \"^\". \"*\" is only required between two variables "
                 "(e.g. x*y); it is not required when a number is followed by a variable (e.g. 2x). "
                 "Formatting follows the same rules as editing a formula entity field — see that entity's info note for more detail."
