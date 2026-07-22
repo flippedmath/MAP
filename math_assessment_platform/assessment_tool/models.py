@@ -473,42 +473,36 @@ class CqdPair(models.Model):
 
 
 class CustomQuestionDistribution(models.Model):
+    DEFAULT_NAME = "Problem Set"
+
     assigned_folder = models.OneToOneField(BranchGroup, on_delete=models.CASCADE, db_column='assigned_folder', related_name='cqd')
     suggested_count = models.IntegerField()
+    name = models.CharField(max_length=255, default=DEFAULT_NAME)
 
     def get_unique_name(self):
-        # 🎯 FIX: Explicitly check for the view-attached attribute first.
-        # This completely skips evaluating the fallback expression if num_pairs exists.
-        if hasattr(self, 'num_pairs'):
-            num = self.num_pairs
-        else:
-            try:
-                # Fall back to your database relation (using standard reverse naming layout)
-                num = self.cqdpair_set.count()
-            except (AttributeError, ValueError):
-                try:
-                    num = self.cqdpair.count()
-                except (AttributeError, ValueError):
-                    # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
-                    num = 0
-                
-        return f"ID ({self.id}) - Count = {num}"
-    
+        """Internal branch_group folder label (must stay unique-ish in explorer trees)."""
+        label = (self.name or self.DEFAULT_NAME).strip() or self.DEFAULT_NAME
+        if self.id:
+            return f"{label} ({self.id})"
+        return label
+
     def get_display_name(self):
-        if hasattr(self, 'num_pairs'):
-            num = self.num_pairs
-        else:
+        label = (self.name or "").strip()
+        return label or self.DEFAULT_NAME
+
+    def get_problem_pool_count(self):
+        """Number of concrete problems currently inside this problem set."""
+        if hasattr(self, "num_pairs"):
             try:
-                # Fall back to your database relation (using standard reverse naming layout)
-                num = self.cqdpair_set.count()
-            except (AttributeError, ValueError):
-                try:
-                    num = self.cqdpair.count()
-                except (AttributeError, ValueError):
-                    # Safe fallback if the record is brand-new or unmanaged descriptors aren't ready
-                    num = 0
-        return f"Problem Set Count = {num}"
-                
+                return int(self.num_pairs or 0)
+            except (TypeError, ValueError):
+                return 0
+        if not self.assigned_folder_id:
+            return 0
+        try:
+            return self.assigned_folder.children.filter(folder_type="problem").count()
+        except Exception:
+            return 0
 
     class Meta:
         managed = False

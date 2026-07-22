@@ -410,6 +410,7 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
     if (!targetEl || !config || config.archetype !== 'slopeFieldGraph') return;
 
     const mode = options.mode || 'author';
+    const readOnly = !!options.readOnly;
     const width = Math.max(120, Math.round(options.width || 340));
     const height = Math.max(120, Math.round(options.height || 240));
     const padL = 36;
@@ -756,28 +757,32 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             options.onSelectionChange(selected.slice());
         }
 
-        svg.addEventListener('click', (evt) => {
-            const dot = evt.target.closest?.('.slope-lattice-dot');
-            if (!dot || !svg.contains(dot)) return;
-            if (dot.getAttribute('data-selectable') !== '1') return;
-            const x = parseFloat(dot.getAttribute('data-x'));
-            const y = parseFloat(dot.getAttribute('data-y'));
-            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        if (!readOnly) {
+            svg.addEventListener('click', (evt) => {
+                const dot = evt.target.closest?.('.slope-lattice-dot');
+                if (!dot || !svg.contains(dot)) return;
+                if (dot.getAttribute('data-selectable') !== '1') return;
+                const x = parseFloat(dot.getAttribute('data-x'));
+                const y = parseFloat(dot.getAttribute('data-y'));
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-            const key = pointKey(x, y);
-            const idx = selected.findIndex(([sx, sy]) => pointKey(sx, sy) === key);
-            if (idx >= 0) {
-                selected.splice(idx, 1);
-            } else {
-                selected.push([x, y]);
-            }
-            targetEl.setAttribute('data-selected-points', JSON.stringify(selected));
-            drawAuthorTicks();
-            drawDots();
-            if (typeof options.onSelectionChange === 'function') {
-                options.onSelectionChange(selected.slice());
-            }
-        });
+                const key = pointKey(x, y);
+                const idx = selected.findIndex(([sx, sy]) => pointKey(sx, sy) === key);
+                if (idx >= 0) {
+                    selected.splice(idx, 1);
+                } else {
+                    selected.push([x, y]);
+                }
+                targetEl.setAttribute('data-selected-points', JSON.stringify(selected));
+                drawAuthorTicks();
+                drawDots();
+                if (typeof options.onSelectionChange === 'function') {
+                    options.onSelectionChange(selected.slice());
+                }
+            });
+        } else {
+            svg.style.pointerEvents = 'none';
+        }
     } else {
         // Student mode: dots only; marked dots interactive
         drawDots();
@@ -845,7 +850,7 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             draft.el.setAttribute('class', 'slope-student-locked');
             draft.el.setAttribute('data-x', String(draft.x));
             draft.el.setAttribute('data-y', String(draft.y));
-            draft.el.style.cursor = 'pointer';
+            draft.el.style.cursor = readOnly ? 'default' : 'pointer';
             locked.set(key, {
                 x: draft.x,
                 y: draft.y,
@@ -861,10 +866,15 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             const key = pointKey(dx, dy);
             clearLockedAt(key);
             const circle = createUndefinedCircle(xToPx(dx), yToPx(dy), {
-                interactive: true,
+                interactive: !readOnly,
+                marked: readOnly,
                 x: dx,
                 y: dy
             });
+            if (readOnly) {
+                circle.style.cursor = 'default';
+                circle.setAttribute('pointer-events', 'none');
+            }
             studentLayer.appendChild(circle);
             locked.set(key, { x: dx, y: dy, kind: 'undefined', el: circle });
             notifyAnswerChange();
@@ -880,10 +890,15 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             const kind = String(mark.kind || '').toLowerCase();
             if (kind === 'undefined') {
                 const circle = createUndefinedCircle(xToPx(x), yToPx(y), {
-                    interactive: true,
+                    interactive: !readOnly,
+                    marked: readOnly,
                     x,
                     y
                 });
+                if (readOnly) {
+                    circle.style.cursor = 'default';
+                    circle.setAttribute('pointer-events', 'none');
+                }
                 studentLayer.appendChild(circle);
                 locked.set(key, { x, y, kind: 'undefined', el: circle });
                 return;
@@ -902,13 +917,21 @@ export function renderSlopeFieldCanvas(targetEl, config, options = {}) {
             line.setAttribute('class', 'slope-student-locked');
             line.setAttribute('data-x', String(x));
             line.setAttribute('data-y', String(y));
-            line.style.cursor = 'pointer';
+            line.style.cursor = readOnly ? 'default' : 'pointer';
+            if (readOnly) {
+                line.setAttribute('pointer-events', 'none');
+            }
             studentLayer.appendChild(line);
             locked.set(key, { x, y, kind: 'slope', angle, el: line });
         }
 
         const initialMarks = Array.isArray(options.initialMarks) ? options.initialMarks : [];
         initialMarks.forEach(restoreMark);
+
+        if (readOnly) {
+            svg.style.pointerEvents = 'none';
+            return;
+        }
 
         function svgPointFromEvent(evt) {
             const pt = svg.createSVGPoint();

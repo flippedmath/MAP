@@ -7752,5 +7752,11 @@ document.addEventListener('DOMContentLoaded', function() {
         clearAnswers() {
             this._clearAnswerStore();
         },
+        renderSlopeFieldCanvas(targetEl, config, options = {}) {
+            return renderSlopeFieldCanvas(targetEl, config, options);
+        },
+        renderGraphBetweenPointsCanvas(targetEl, config, options = {}) {
+            return renderGraphBetweenPointsCanvas(targetEl, config, options);
+        },
     };
 });

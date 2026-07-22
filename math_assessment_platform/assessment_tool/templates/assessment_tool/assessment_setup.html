@@ -120,6 +120,7 @@
         moveProblemToSetUrl: "{% url 'move_problem_to_cqd_ajax' course.id assessment.id %}",
         removeProblemFromSetUrl: "{% url 'remove_problem_from_cqd_ajax' course.id assessment.id %}",
         problemSetProblemsUrlTemplate: "{% url 'cqd_problems_list_ajax' course.id assessment.id 999999 %}".replace("999999", "{cqd_id}"),
+        renameCqdUrl: "{% url 'update_cqd_name_ajax' %}",
         saveProblemUrl: "{% url 'save_problem_workspace' course.id %}"
     };
 </script>

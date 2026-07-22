@@ -1863,12 +1863,12 @@ def add_cqd_to_aqg_ajax(request):
             # 2. Allocate the concrete CustomQuestionDistribution database payload row layer
             new_cqd_item = CustomQuestionDistribution.objects.create(
                 assigned_folder=cqd_branch_node,
-                suggested_count=1  
+                suggested_count=1,
+                name=CustomQuestionDistribution.DEFAULT_NAME,
             )
-            
-            # Set a temporary query attribute variable hook to reflect 0 initialization sub-pairs safely inside get_unique_name
-            new_cqd_item.num_pairs = 0
 
+            # Pool starts empty; folder label uses id + display name
+            new_cqd_item.num_pairs = 0
             cqd_branch_node.name = new_cqd_item.get_unique_name()
             cqd_branch_node.save(update_fields=['name', 'modification_date']) 
         
@@ -1923,6 +1923,48 @@ def update_cqd_count_ajax(request):
 
     except Exception as e:
         return JsonResponse({'error': f"Database Write Operation Failure: {str(e)}"}, status=500)
+
+
+@login_required
+def update_cqd_name_ajax(request):
+    if request.method != 'POST':
+        return JsonResponse({'error': 'Method not allowed'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        cqd_id = data.get('cqd_id')
+        raw_name = str(data.get('name') or '').strip()
+        clean_name = re.sub(r'\s+', ' ', raw_name)
+
+        if not clean_name:
+            return JsonResponse({'success': False, 'error': 'Problem set name cannot be empty.'}, status=400)
+        if len(clean_name) > 255:
+            return JsonResponse({'success': False, 'error': 'Problem set name is too long.'}, status=400)
+
+        if getattr(request.user, 'user_type', None) == 'IT_Support' or request.user.is_staff:
+            cqd_item = get_object_or_404(
+                CustomQuestionDistribution.objects.select_related('assigned_folder'),
+                id=cqd_id,
+            )
+        else:
+            cqd_item = get_object_or_404(
+                CustomQuestionDistribution.objects.select_related('assigned_folder'),
+                id=cqd_id,
+                assigned_folder__owner=request.user,
+            )
+
+        with transaction.atomic():
+            cqd_item.name = clean_name
+            cqd_item.save(update_fields=['name'])
+            display_name, count = refresh_cqd_identity(cqd_item)
+
+        return JsonResponse({
+            'success': True,
+            'name': display_name,
+            'count': count,
+        }, status=200)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=400)
     
 
 @login_required

@@ -152,6 +152,27 @@ function formatGradeNumber(n) {
     return String(Math.round(num * 1000) / 1000);
 }
 
+function formatVisualCompareHtml(field, previewId) {
+    const preview = field?.visual_preview;
+    const kind = preview?.kind;
+    if (!previewId || !preview?.config) return '';
+    if (kind !== 'slopeFieldGraph' && kind !== 'graphBetweenPoints') return '';
+    return `
+        <div class="practice-reveal-answers practice-visual-compare" data-visual-id="${escapeHtml(previewId)}" data-visual-kind="${escapeHtml(kind)}">
+            <div class="practice-visual-pair">
+                <div class="practice-visual-pane">
+                    <div class="practice-answer-label">Your answer</div>
+                    <div class="practice-visual-host" data-role="visual-student"></div>
+                </div>
+                <div class="practice-visual-pane">
+                    <div class="practice-answer-label">Expected</div>
+                    <div class="practice-visual-host" data-role="visual-expected"></div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function waitForPreviewApi(timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
         const started = Date.now();
@@ -207,6 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let confirmDrafts = false;
     let confirmZeroSets = false;
     let lastGradePayload = null;
+    const visualPreviewById = new Map();
 
     function setStatus(msg) {
         if (statusEl) statusEl.textContent = msg || '';
@@ -467,46 +489,187 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function fieldRequiresManual(f) {
+        if (f && f.requires_manual_grading) return true;
+        const maxPts = Number(f?.max) || 0;
+        return maxPts > 0 && (f?.archetype === 'longAnswer' || f?.archetype === 'canvas');
+    }
+
+    function clampEarned(raw, maxPts) {
+        let n = Number(raw);
+        if (!Number.isFinite(n)) n = 0;
+        if (n < 0) n = 0;
+        if (Number.isFinite(maxPts) && n > maxPts) n = maxPts;
+        return n;
+    }
+
+    function scoresNearlyEqual(a, b) {
+        return Math.abs(Number(a) - Number(b)) < 1e-9;
+    }
+
+    function updateGradeTotalsFromDom() {
+        if (!gradingResults || !gradingTotal) return;
+        let grandEarned = 0;
+        let grandMax = 0;
+
+        gradingResults.querySelectorAll('.practice-grade-problem').forEach((problemEl) => {
+            let problemEarned = 0;
+            let problemMax = 0;
+            problemEl.querySelectorAll('.practice-grade-field').forEach((fieldEl) => {
+                const maxPts = Number(fieldEl.getAttribute('data-max')) || 0;
+                const input = fieldEl.querySelector('.practice-grade-earned-input');
+                const earned = clampEarned(input ? input.value : fieldEl.getAttribute('data-earned'), maxPts);
+                problemEarned += earned;
+                problemMax += maxPts;
+
+                const autoEarned = Number(fieldEl.getAttribute('data-auto-earned')) || 0;
+                const resetBtn = fieldEl.querySelector('.practice-grade-reset-btn');
+                if (resetBtn) {
+                    resetBtn.disabled = scoresNearlyEqual(earned, autoEarned);
+                }
+                fieldEl.setAttribute('data-earned', String(earned));
+                fieldEl.setAttribute(
+                    'data-fully-correct',
+                    maxPts > 0 && earned >= maxPts - 1e-9 ? '1' : '0'
+                );
+                fieldEl.classList.toggle('is-overridden', !scoresNearlyEqual(earned, autoEarned));
+                fieldEl.classList.toggle('is-manual-pending', fieldRequiresManual({
+                    requires_manual_grading: fieldEl.getAttribute('data-manual') === '1',
+                    max: maxPts,
+                }) && scoresNearlyEqual(earned, autoEarned));
+            });
+
+            const totalEl = problemEl.querySelector('[data-role="problem-total"]');
+            if (totalEl) {
+                totalEl.textContent = `${formatGradeNumber(problemEarned)} / ${formatGradeNumber(problemMax)}`;
+            }
+            grandEarned += problemEarned;
+            grandMax += problemMax;
+        });
+
+        gradingTotal.innerHTML = `
+            <span>Total</span>
+            <span>${formatGradeNumber(grandEarned)} / ${formatGradeNumber(grandMax)}</span>
+        `;
+    }
+
+    function bindGradeScoreControls(root) {
+        if (!root) return;
+        root.querySelectorAll('.practice-grade-earned-input').forEach((input) => {
+            const sync = () => {
+                const fieldEl = input.closest('.practice-grade-field');
+                if (!fieldEl) return;
+                const maxPts = Number(fieldEl.getAttribute('data-max')) || 0;
+                const clamped = clampEarned(input.value, maxPts);
+                if (String(clamped) !== String(input.value)) {
+                    input.value = formatGradeNumber(clamped);
+                }
+                updateGradeTotalsFromDom();
+            };
+            input.addEventListener('change', sync);
+            input.addEventListener('input', sync);
+        });
+        root.querySelectorAll('.practice-grade-reset-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const fieldEl = btn.closest('.practice-grade-field');
+                if (!fieldEl) return;
+                const autoEarned = Number(fieldEl.getAttribute('data-auto-earned')) || 0;
+                const input = fieldEl.querySelector('.practice-grade-earned-input');
+                if (input) input.value = formatGradeNumber(autoEarned);
+                updateGradeTotalsFromDom();
+            });
+        });
+    }
+
     function renderGradeResults(data) {
         if (!gradingSection || !gradingResults || !gradingTotal) return;
         gradingSection.hidden = false;
         lastGradePayload = data;
+        visualPreviewById.clear();
 
         const scoredProblems = (data.problems || []).filter((p) => {
             const maxPts = Number(p.max);
             return Number.isFinite(maxPts) && maxPts > 0;
         });
 
-        const rows = scoredProblems.map((p) => {
-            const fields = (p.fields || []).map((f) => {
+        const rows = scoredProblems.map((p, problemIdx) => {
+            const fields = (p.fields || []).map((f, fieldIdx) => {
+                const maxPts = Number(f.max) || 0;
+                if (!(maxPts > 0)) return '';
+                const autoEarned = Number(
+                    f.auto_earned !== undefined && f.auto_earned !== null
+                        ? f.auto_earned
+                        : f.earned
+                ) || 0;
+                const earned = Number(f.earned) || 0;
+                const manual = fieldRequiresManual(f);
                 const incomplete = !f.fully_correct;
+                let visualCompareHtml = '';
+                const visualKind = f.visual_preview?.kind;
+                if (
+                    !manual
+                    && incomplete
+                    && (visualKind === 'slopeFieldGraph' || visualKind === 'graphBetweenPoints')
+                    && f.visual_preview?.config
+                ) {
+                    const previewId = `p${problemIdx}-f${fieldIdx}-${String(f.sequence_token || f.token || fieldIdx)}`;
+                    visualPreviewById.set(previewId, f.visual_preview);
+                    visualCompareHtml = formatVisualCompareHtml(f, previewId);
+                }
+                const hasVisual = !!visualCompareHtml;
                 const expected = Array.isArray(f.expected_answers) ? f.expected_answers.filter(Boolean) : [];
                 const multilineExpected = f.archetype === 'answersOrDne' || expected.length > 1;
-                const expectedHtml = (incomplete && expected.length)
+                const expectedHtml = (!manual && !hasVisual && incomplete && expected.length)
                     ? `<div class="practice-reveal-answers practice-expected-answers">
                             <div class="practice-answer-label">Expected</div>
                             ${formatExpectedListHtml(expected, { multiline: multilineExpected })}
                        </div>`
                     : '';
-                const studentHtml = incomplete
-                    ? `<div class="practice-reveal-answers practice-student-answers">
-                            <div class="practice-answer-label">Your answer</div>
+                const studentAlways = manual;
+                const studentHtml = (!hasVisual && (incomplete || studentAlways))
+                    ? `<div class="practice-student-answers${studentAlways ? ' practice-always-show' : ' practice-reveal-answers'}">
+                            <div class="practice-answer-label">${manual ? 'Student answer' : 'Your answer'}</div>
                             <div class="practice-answer-body">${formatStudentAnswerHtml(f)}</div>
                        </div>`
                     : '';
                 const detail = f.detail
                     ? `<div class="practice-grade-field-meta">${escapeHtml(f.detail)}</div>`
                     : '';
+                const manualBadge = manual
+                    ? '<span class="practice-manual-badge">Manual grade</span>'
+                    : '';
                 return `
-                    <div class="practice-grade-field" data-fully-correct="${f.fully_correct ? '1' : '0'}">
-                        <div>
-                            <div>${escapeHtml(f.label || f.token || 'Field')}</div>
+                    <div class="practice-grade-field${manual ? ' is-manual-pending' : ''}"
+                         data-fully-correct="${f.fully_correct ? '1' : '0'}"
+                         data-auto-earned="${escapeHtml(String(autoEarned))}"
+                         data-earned="${escapeHtml(String(earned))}"
+                         data-max="${escapeHtml(String(maxPts))}"
+                         data-manual="${manual ? '1' : '0'}">
+                        <div class="practice-grade-field-main">
+                            <div class="practice-grade-field-title">
+                                ${escapeHtml(f.label || f.token || 'Field')}
+                                ${manualBadge}
+                            </div>
                             ${detail}
                             ${studentHtml}
                             ${expectedHtml}
+                            ${visualCompareHtml}
                         </div>
-                        <div style="font-weight:700; color:#166534; white-space:nowrap;">
-                            ${formatGradeNumber(f.earned)} / ${formatGradeNumber(f.max)}
+                        <div class="practice-grade-score">
+                            <div class="practice-grade-score-edit">
+                                <input type="number"
+                                       class="practice-grade-earned-input"
+                                       min="0"
+                                       max="${escapeHtml(String(maxPts))}"
+                                       step="any"
+                                       value="${escapeHtml(formatGradeNumber(earned))}"
+                                       aria-label="Earned points for ${escapeHtml(f.label || f.token || 'field')}">
+                                <span class="practice-grade-score-max">/ ${formatGradeNumber(maxPts)}</span>
+                            </div>
+                            <div class="practice-grade-auto-row">
+                                <span class="practice-grade-auto-label">Auto: ${formatGradeNumber(autoEarned)}</span>
+                                <button type="button" class="practice-grade-reset-btn" disabled title="Reset to automatic score">Reset</button>
+                            </div>
                         </div>
                     </div>
                 `;
@@ -516,7 +679,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="practice-grade-problem">
                     <div class="practice-grade-problem-header">
                         <strong>${escapeHtml(String(p.slot_index || ''))}. ${escapeHtml(p.title || `Problem ${p.problem_id}`)}</strong>
-                        <span>${formatGradeNumber(p.earned)} / ${formatGradeNumber(p.max)}</span>
+                        <span data-role="problem-total">${formatGradeNumber(p.earned)} / ${formatGradeNumber(p.max)}</span>
                     </div>
                     ${fields || '<div class="practice-grade-field-meta">No answer fields.</div>'}
                 </div>
@@ -524,16 +687,76 @@ document.addEventListener('DOMContentLoaded', () => {
         }).join('');
 
         gradingResults.innerHTML = rows || '<p style="color:#94a3b8;">No scored problems to display.</p>';
-
-        const visibleEarned = scoredProblems.reduce((sum, p) => sum + (Number(p.earned) || 0), 0);
-        const visibleMax = scoredProblems.reduce((sum, p) => sum + (Number(p.max) || 0), 0);
-        gradingTotal.innerHTML = `
-            <span>Total</span>
-            <span>${formatGradeNumber(visibleEarned)} / ${formatGradeNumber(visibleMax)}</span>
-        `;
-
+        bindGradeScoreControls(gradingResults);
+        updateGradeTotalsFromDom();
+        mountVisualGradePreviews(gradingResults);
         applyExpectedVisibility();
         gradingSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function mountVisualGradePreviews(root) {
+        if (!root) return;
+        const api = window.PracticeTestPreviewAPI;
+        if (!api) return;
+
+        root.querySelectorAll('.practice-visual-compare').forEach((wrap) => {
+            if (wrap.getAttribute('data-mounted') === '1') return;
+            const previewId = wrap.getAttribute('data-visual-id') || '';
+            const preview = visualPreviewById.get(previewId);
+            if (!preview || !preview.config) return;
+            const config = preview.config;
+            const studentHost = wrap.querySelector('[data-role="visual-student"]');
+            const expectedHost = wrap.querySelector('[data-role="visual-expected"]');
+            const size = { width: 280, height: 200 };
+            try {
+                if (preview.kind === 'slopeFieldGraph') {
+                    if (typeof api.renderSlopeFieldCanvas !== 'function') return;
+                    const marks = Array.isArray(preview.student_marks) ? preview.student_marks : [];
+                    if (studentHost) {
+                        api.renderSlopeFieldCanvas(studentHost, config, {
+                            mode: 'student',
+                            initialMarks: marks,
+                            readOnly: true,
+                            ...size,
+                        });
+                    }
+                    if (expectedHost) {
+                        api.renderSlopeFieldCanvas(expectedHost, config, {
+                            mode: 'author',
+                            readOnly: true,
+                            ...size,
+                        });
+                    }
+                } else if (preview.kind === 'graphBetweenPoints') {
+                    if (typeof api.renderGraphBetweenPointsCanvas !== 'function') return;
+                    const studentSegs = Array.isArray(preview.student_segments)
+                        ? preview.student_segments
+                        : [];
+                    const expectedSegs = Array.isArray(preview.expected_segments)
+                        ? preview.expected_segments
+                        : [];
+                    if (studentHost) {
+                        api.renderGraphBetweenPointsCanvas(studentHost, config, {
+                            mode: 'student',
+                            studentSegments: studentSegs,
+                            ...size,
+                        });
+                    }
+                    if (expectedHost) {
+                        api.renderGraphBetweenPointsCanvas(expectedHost, config, {
+                            mode: 'student',
+                            studentSegments: expectedSegs,
+                            ...size,
+                        });
+                    }
+                } else {
+                    return;
+                }
+                wrap.setAttribute('data-mounted', '1');
+            } catch (err) {
+                console.error('Failed to render visual grade preview', err);
+            }
+        });
     }
 
     function applyExpectedVisibility() {

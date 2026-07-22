@@ -340,7 +340,8 @@ def _clear_cqd_membership(problem):
 
 def refresh_cqd_identity(cqd):
     """
-    Recompute problem-set count from folder children and sync display/folder names.
+    Recompute problem-set pool size from folder children and sync the branch folder
+    label. Display name comes from cqd.name (not the pool count).
     Returns (display_name, count).
     """
     BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
@@ -7056,6 +7057,72 @@ def _blueprint_is_answer_field(pattern_blueprint):
     )
 
 
+def _slope_field_visual_preview(validator, student_input):
+    """
+    Bundle slope-field render config + student marks for practice-test grade UI.
+    """
+    try:
+        raw = validator.evaluate_output()
+        if isinstance(raw, dict):
+            config = raw
+        else:
+            config = json.loads(str(raw or ""))
+        if not isinstance(config, dict) or config.get("archetype") != "slopeFieldGraph":
+            return None
+    except Exception:
+        return None
+
+    marks = []
+    if isinstance(student_input, dict):
+        raw_marks = student_input.get("marks")
+        if isinstance(raw_marks, list):
+            marks = raw_marks
+    elif isinstance(student_input, list):
+        marks = student_input
+
+    return {
+        "kind": "slopeFieldGraph",
+        "config": config,
+        "student_marks": marks,
+    }
+
+
+def _graph_between_points_visual_preview(validator, student_input):
+    """
+    Bundle graph-between-points render config + student segments for grade UI.
+    """
+    try:
+        raw = validator.evaluate_output()
+        if isinstance(raw, dict):
+            config = raw
+        else:
+            config = json.loads(str(raw or ""))
+        if not isinstance(config, dict) or config.get("archetype") != "graphBetweenPoints":
+            return None
+    except Exception:
+        return None
+
+    student_segs = []
+    if isinstance(student_input, dict):
+        raw = student_input.get("segments")
+        if isinstance(raw, list):
+            student_segs = [s for s in raw if isinstance(s, dict)]
+    elif isinstance(student_input, list):
+        student_segs = [s for s in student_input if isinstance(s, dict)]
+
+    expected_segs = [
+        s for s in (config.get("segments") or [])
+        if isinstance(s, dict) and s.get("student_draw")
+    ]
+
+    return {
+        "kind": "graphBetweenPoints",
+        "config": config,
+        "student_segments": student_segs,
+        "expected_segments": expected_segs,
+    }
+
+
 def _format_student_answer_lines(student_input, validator=None, archetype=None):
     """
     Human-readable student answer lines for practice-test grade UI
@@ -7140,7 +7207,8 @@ def _format_student_answer_lines(student_input, validator=None, archetype=None):
             cells = student_input.get("cells") or {}
             return [f"{k}: {v}" for k, v in sorted(cells.items()) if v not in (None, "")]
         if isinstance(student_input.get("marks"), list):
-            return [f"Marks: {len(student_input.get('marks') or [])}"]
+            n = len(student_input.get("marks") or [])
+            return [f"{n} slope mark{'s' if n != 1 else ''}"]
         if isinstance(student_input.get("segments"), list):
             return [f"Segments: {len(student_input.get('segments') or [])}"]
         try:
@@ -7386,6 +7454,14 @@ def grade_entities_payload(entities, context_entities, student_answers):
             student_lines = _format_student_answer_lines(student_input, validator, archetype)
 
         fully_correct = max_pts > 0 and earned >= max_pts - 1e-9
+        requires_manual = (
+            archetype in ("longAnswer", "canvas") and max_pts > 0
+        )
+        visual_preview = None
+        if archetype == "slopeFieldGraph":
+            visual_preview = _slope_field_visual_preview(validator, student_input)
+        elif archetype == "graphBetweenPoints":
+            visual_preview = _graph_between_points_visual_preview(validator, student_input)
         earned_total += earned
         max_total += max_pts
         items.append({
@@ -7394,12 +7470,15 @@ def grade_entities_payload(entities, context_entities, student_answers):
             "archetype": archetype,
             "label": label,
             "earned": earned,
+            "auto_earned": earned,
             "max": max_pts,
             "detail": detail,
             "fully_correct": fully_correct,
+            "requires_manual_grading": requires_manual,
             "student_answer": "\n".join(student_lines),
             "student_answer_lines": student_lines,
             "expected_answers": expected_answers if not fully_correct else [],
+            "visual_preview": visual_preview,
         })
 
     return {

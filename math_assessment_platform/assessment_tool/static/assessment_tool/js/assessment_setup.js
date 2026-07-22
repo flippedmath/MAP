@@ -104,6 +104,66 @@ document.addEventListener("DOMContentLoaded", function() {
         });
     }
 
+    function attachCqdNameListeners(inputElement) {
+        if (!inputElement || inputElement.dataset.cqdNameBound === '1') return;
+        inputElement.dataset.cqdNameBound = '1';
+
+        const row = inputElement.closest('.cqd-item-row');
+        const cqdId = row?.getAttribute('data-cqd-id') || row?.getAttribute('data-id');
+        if (!cqdId) return;
+
+        inputElement.addEventListener('click', (e) => e.stopPropagation());
+        inputElement.addEventListener('mousedown', (e) => e.stopPropagation());
+
+        const saveCqdName = async () => {
+            const cleanValue = normalizeStringSpaces(inputElement.value);
+            const originalValue = inputElement.getAttribute('data-previous') || '';
+
+            if (!cleanValue) {
+                inputElement.value = originalValue;
+                return;
+            }
+            if (cleanValue === originalValue) return;
+
+            const renameUrl = window.AQG_CONFIG?.renameCqdUrl || '/update-cqd-name-ajax/';
+            try {
+                const response = await fetch(renameUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken')
+                    },
+                    body: JSON.stringify({
+                        cqd_id: parseInt(cqdId, 10),
+                        name: cleanValue
+                    })
+                });
+                const data = await response.json();
+                if (response.ok && data.success) {
+                    const saved = data.name || cleanValue;
+                    inputElement.setAttribute('data-previous', saved);
+                    inputElement.value = saved;
+                    refreshCqdCardLabel(cqdId, saved, data.count);
+                } else {
+                    alert(data.error || 'Failed updating problem set name.');
+                    inputElement.value = originalValue;
+                }
+            } catch (err) {
+                console.error('Problem set rename error:', err);
+                alert('Communication error while renaming the problem set.');
+                inputElement.value = originalValue;
+            }
+        };
+
+        inputElement.addEventListener('blur', saveCqdName);
+        inputElement.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                inputElement.blur();
+            }
+        });
+    }
+
     // -------------------------------------------------------------
     // Helper: Attach Inline Problem Title Rename (Blur/Enter) Listeners
     // -------------------------------------------------------------
@@ -228,6 +288,9 @@ document.addEventListener("DOMContentLoaded", function() {
     // -------------------------------------------------------------
     document.querySelectorAll('.aqg-title-input').forEach(input => {
         attachInputListeners(input);
+    });
+    document.querySelectorAll('.cqd-name-input').forEach(input => {
+        attachCqdNameListeners(input);
     });
 
     document.querySelectorAll('.problem-title-input').forEach(input => {
@@ -592,6 +655,8 @@ document.addEventListener("DOMContentLoaded", function() {
 
                         // Inject pre-rendered server layout snippet structure fluidly
                         listWrapper.insertAdjacentHTML('beforeend', data.html);
+                        const newCqdRow = listWrapper.lastElementChild;
+                        attachCqdNameListeners(newCqdRow?.querySelector('.cqd-name-input'));
 
                     } else {
                         alert(`Failed to add problem group collection: ${data.error}`);
@@ -941,7 +1006,13 @@ document.addEventListener("DOMContentLoaded", function() {
         sectionCard.querySelectorAll('.cqd-item-row').forEach((row) => {
             const cqdId = row.getAttribute('data-cqd-id') || row.getAttribute('data-id');
             if (!cqdId || String(cqdId) === String(excludeCqdId)) return;
-            const name = (row.querySelector('.cqd-display-identity')?.textContent || `Problem Set ${cqdId}`).trim();
+            const nameInput = row.querySelector('.cqd-name-input');
+            const name = (
+                nameInput?.value
+                || nameInput?.getAttribute('data-previous')
+                || row.querySelector('.cqd-display-identity')?.textContent
+                || `Problem Set ${cqdId}`
+            ).trim();
             sets.push({ id: cqdId, name });
         });
         return sets;
@@ -1042,23 +1113,45 @@ document.addEventListener("DOMContentLoaded", function() {
         }
     }
 
-    function refreshCqdCardLabel(cqdId, displayName) {
+    function setCqdPoolCountDisplay(card, poolCount) {
+        if (!card || poolCount == null || Number.isNaN(Number(poolCount))) return;
+        const count = Math.max(0, parseInt(poolCount, 10) || 0);
+        const numberEl = card.querySelector('.cqd-pool-count-number');
+        const labelEl = card.querySelector('.cqd-pool-count-label');
+        if (numberEl) numberEl.textContent = String(count);
+        if (labelEl) labelEl.textContent = count === 1 ? 'problem' : 'problems';
+    }
+
+    function refreshCqdCardLabel(cqdId, displayName, poolCount) {
         const card = canvasList?.querySelector(`.cqd-item-row[data-cqd-id="${cqdId}"], .cqd-item-row[data-id="${cqdId}"]`);
         if (!card) return;
-        const label = card.querySelector('.cqd-display-identity');
-        if (label && displayName) {
-            label.textContent = displayName;
-        } else if (label && !displayName) {
-            // Soft refresh: bump count text from current overlay list length when available
-            const count = cqdOverlayList
-                ? cqdOverlayList.querySelectorAll('.problem-item-row[data-problem-id]').length
-                : null;
-            if (count !== null && String(cqdProblemsOverlay?.getAttribute('data-cqd-id')) === String(cqdId)) {
-                label.textContent = `Problem Set Count = ${count}`;
+
+        const nameInput = card.querySelector('.cqd-name-input');
+        const legacyLabel = card.querySelector('.cqd-display-identity');
+        if (displayName) {
+            if (nameInput) {
+                nameInput.value = displayName;
+                nameInput.setAttribute('data-previous', displayName);
+            } else if (legacyLabel) {
+                legacyLabel.textContent = displayName;
             }
         }
-        if (cqdOverlayTitle && String(cqdProblemsOverlay?.getAttribute('data-cqd-id')) === String(cqdId) && displayName) {
-            cqdOverlayTitle.textContent = displayName;
+
+        let resolvedCount = poolCount;
+        if (resolvedCount == null
+            && String(cqdProblemsOverlay?.getAttribute('data-cqd-id')) === String(cqdId)
+            && cqdOverlayList) {
+            resolvedCount = cqdOverlayList.querySelectorAll('.problem-item-row[data-problem-id]').length;
+        }
+        setCqdPoolCountDisplay(card, resolvedCount);
+
+        if (cqdOverlayTitle && String(cqdProblemsOverlay?.getAttribute('data-cqd-id')) === String(cqdId)) {
+            const title = displayName
+                || nameInput?.value
+                || nameInput?.getAttribute('data-previous')
+                || legacyLabel?.textContent
+                || 'Problem Set';
+            cqdOverlayTitle.textContent = title;
         }
     }
 
@@ -1122,7 +1215,7 @@ document.addEventListener("DOMContentLoaded", function() {
             if (cqdOverlayTitle) {
                 cqdOverlayTitle.textContent = data.display_name || 'Problem Set';
             }
-            refreshCqdCardLabel(cqdId, data.display_name);
+            refreshCqdCardLabel(cqdId, data.display_name, data.count);
 
             cqdOverlayList.innerHTML = data.html || '';
             if (!data.html) {
@@ -1337,10 +1430,10 @@ document.addEventListener("DOMContentLoaded", function() {
                     }
 
                     if (data.cqd_display_name) {
-                        refreshCqdCardLabel(targetCqdId, data.cqd_display_name);
+                        refreshCqdCardLabel(targetCqdId, data.cqd_display_name, data.cqd_count);
                     }
                     if (data.old_cqd_id && data.old_cqd_display_name) {
-                        refreshCqdCardLabel(data.old_cqd_id, data.old_cqd_display_name);
+                        refreshCqdCardLabel(data.old_cqd_id, data.old_cqd_display_name, data.old_cqd_count);
                     } else if (inOverlay && openCqdId && String(openCqdId) !== String(targetCqdId)) {
                         refreshCqdCardLabel(openCqdId);
                     }
@@ -1412,7 +1505,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     }
 
                     if (cqdId && data.cqd_display_name) {
-                        refreshCqdCardLabel(cqdId, data.cqd_display_name);
+                        refreshCqdCardLabel(cqdId, data.cqd_display_name, data.cqd_count);
                     } else if (cqdId) {
                         refreshCqdCardLabel(cqdId);
                     }
