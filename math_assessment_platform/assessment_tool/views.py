@@ -1,22 +1,42 @@
-from django.shortcuts import render, redirect
+from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.views.generic import TemplateView
 from django.contrib.auth.mixins import LoginRequiredMixin
-from .models import Course, UsersInCourse, UserProfile
+from .models import Course, UsersInCourse, UserProfile, ParentUserCourse
 from .models import (
     BranchGroup, Assessment, Problem, 
     CustomQuestionDistribution, AssessmentQuestionGroup, 
     CustomQuestionDistribution, CqdPair,
     QuestionBlock, EntitySegment,
-    EntityType, EntityUserInput, Notification
+    EntityType, EntityUserInput, Notification,
+    FinalGradeCalculation, StudentCourseEnrollment,
 )
+from .dashboard import dashboard_courses_for_user, user_display_name
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
 import json
 from django.http import JsonResponse
 
 from django.db import transaction
-from .forms import TeacherRegistrationForm
-from .models import EmailAuthentication
+from .forms import TeacherRegistrationForm, CourseInviteForm, StudentRegistrationForm
+from .models import EmailAuthentication, UserCourseActivation
+from .course_enrollment import kick_student_from_course
+from .course_invites import (
+    INVITE_SESSION_KEY,
+    claim_invite_for_new_user,
+    complete_course_invite_if_pending,
+    create_course_invite,
+    enroll_user_from_invite,
+    get_invite_by_code,
+    handle_already_enrolled_invite_access,
+    invite_status_label,
+    is_unclaimed_email_invite,
+    redeem_block_reason,
+    user_already_enrolled_in_course,
+    user_can_manage_course,
+    user_matches_invite,
+    void_course_invite,
+)
 import secrets
 import random
 from django.utils import timezone
@@ -24,8 +44,6 @@ from datetime import timedelta
 from django.contrib import messages
 from django.db import IntegrityError
 from django.views.decorators.http import require_POST, require_http_methods
-from django.shortcuts import get_object_or_404
-
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
 from django.db.models import Case, Value, When, IntegerField
@@ -65,25 +83,60 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
 
     def get_context_data(self, **kwargs):
+        from .notifications import (
+            reason_label_for,
+            unread_notifications_for_user,
+            utc_isoformat,
+        )
+
         context = super().get_context_data(**kwargs)
         user = self.request.user
 
-        # Tailor data based on the User Roles defined in your Requirements Doc
+        context['dashboard_courses'] = dashboard_courses_for_user(user)
+
         if user.user_type == 'Student':
-            # Requirements Doc Page 1: Students see assigned courses
-            context['courses'] = Course.objects.filter(
-                usersincourse__user=user
-            )
             context['ongoing_test'] = user.ongoing_assessment
-            
-        elif user.user_type == 'Teacher':
-            # Requirements Doc Page 1: Teachers manage classes
-            context['managed_courses'] = Course.objects.filter(
-                usersincourse__user=user,
-                usersincourse__user_access='Teacher' # Based on your 'user_access' field
-            )
+
+        unread_rows = []
+        for note in unread_notifications_for_user(user, include_content=False):
+            unread_rows.append({
+                "id": note.pk,
+                "title": note.title,
+                "reason": note.reason,
+                "reason_label": reason_label_for(note.reason),
+                "creation_date": note.creation_date,
+                "creation_date_utc": (
+                    utc_isoformat(note.creation_date) if note.creation_date else None
+                ),
+            })
+        context['unread_notifications'] = unread_rows
 
         return context
+
+
+@login_required
+def parent_grade_summary_view(request, student_id, course_id):
+    """Placeholder grade summary for parents linked via parent_user_course."""
+    if request.user.user_type != 'Parent':
+        messages.error(request, "Only parent accounts can view grade summaries.")
+        return redirect('dashboard')
+
+    link = ParentUserCourse.objects.filter(
+        parent=request.user,
+        student_id=student_id,
+        course_id=course_id,
+    ).select_related('student', 'course').first()
+    if link is None:
+        messages.error(request, "Grade summary not found for this student and course.")
+        return redirect('dashboard')
+
+    from .dashboard import user_display_name
+
+    return render(request, 'assessment_tool/grade_summary_placeholder.html', {
+        'student': link.student,
+        'student_name': user_display_name(link.student),
+        'course': link.course,
+    })
 
 
 def register_teacher(request):
@@ -192,6 +245,13 @@ def verify_email(request):
                 user.save()
                 EmailAuthentication.objects.filter(u_id=user).delete()
                 messages.success(request, "Account activated successfully!")
+                invite_code = request.session.pop(INVITE_SESSION_KEY, None)
+                enrolled, invite_msg = complete_course_invite_if_pending(user, invite_code)
+                if invite_msg:
+                    if enrolled:
+                        messages.success(request, invite_msg)
+                    else:
+                        messages.warning(request, invite_msg)
                 return redirect('dashboard')
             elif is_expired:
                 messages.error(request, "This code has expired. Please resend a new one.")
@@ -228,6 +288,9 @@ def database_viewer(request):
     model_map = {
         'user_profile': UserProfile,
         'email_authentication': EmailAuthentication,
+        'user_course_activation': UserCourseActivation,
+        'student_course_enrollment': StudentCourseEnrollment,
+        'final_grade_calculation': FinalGradeCalculation,
         'course': Course,
         'branch_group': BranchGroup,
         'users_in_course': UsersInCourse,
@@ -964,6 +1027,9 @@ def login_view(request):
             user = form.get_user()
             login(request, user)
             messages.success(request, f"Welcome back, {user.username}!")
+            invite_code = request.session.get(INVITE_SESSION_KEY)
+            if invite_code:
+                return redirect('course_invite_redeem', code=invite_code)
             return redirect('dashboard')
         else:
             messages.error(request, "Invalid username or password. Please try again.")
@@ -1018,6 +1084,340 @@ def course_detail_view(request, course_id):
         'active_tab': 'introduction', 
     }
     return render(request, 'assessment_tool/course_intro.html', context)
+
+
+@login_required
+def course_management_view(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    if not user_can_manage_course(request.user, course):
+        messages.error(request, "You do not have permission to manage this course.")
+        return redirect('dashboard')
+
+    invite_form = CourseInviteForm()
+
+    if request.method == 'POST':
+        action = request.POST.get('action') or ''
+        if action == 'create_invite':
+            invite_form = CourseInviteForm(request.POST)
+            if invite_form.is_valid():
+                try:
+                    invite = create_course_invite(
+                        course=course,
+                        created_by=request.user,
+                        recipient_raw=invite_form.cleaned_data['recipient'],
+                    )
+                    redeem_url = request.build_absolute_uri(
+                        reverse('course_invite_redeem', kwargs={'code': invite.code})
+                    )
+                    if invite.target_user_id:
+                        messages.success(
+                            request,
+                            "Invitation created. The student was notified and must open "
+                            f"the invite link to accept before they are enrolled. Link: {redeem_url}",
+                        )
+                    else:
+                        messages.success(
+                            request,
+                            f"Invitation created. Share this link with the student: {redeem_url}",
+                        )
+                    return redirect('course_management', course_id=course.id)
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+                except IntegrityError:
+                    messages.error(
+                        request,
+                        "Could not create invitation (duplicate pending invite or database conflict).",
+                    )
+        elif action == 'void_invite':
+            invite_id = request.POST.get('invite_id')
+            invite = get_object_or_404(
+                UserCourseActivation,
+                pk=invite_id,
+                course=course,
+            )
+            try:
+                void_course_invite(invite)
+                messages.success(request, "Invitation voided and removed.")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'kick_student':
+            student_id = request.POST.get('student_id')
+            student = get_object_or_404(
+                UserProfile,
+                pk=student_id,
+                user_type='Student',
+            )
+            try:
+                summary = kick_student_from_course(
+                    course=course,
+                    student=student,
+                    removed_by=request.user,
+                )
+                msg = (
+                    f"{student.username} was removed from the course. "
+                    "Their live progress for this enrollment was deleted."
+                )
+                if summary.get("grade_rows"):
+                    msg += (
+                        f" {summary['grade_rows']} grade record(s) were kept on the "
+                        "transcript for this enrollment period."
+                    )
+                if summary.get("credit_reimbursement_pending"):
+                    msg += (
+                        " Credit reimbursement for removals within one week of enrollment "
+                        "will apply when the credit system is available."
+                    )
+                messages.success(request, msg)
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+
+    enrolled_slots = (
+        UsersInCourse.objects.filter(
+            course=course,
+            user__isnull=False,
+            user__user_type='Student',
+        )
+        .select_related('user')
+        .order_by(
+            'user__user_last_name',
+            'user__user_first_name',
+            'user__username',
+        )
+    )
+    enrolled_students = []
+    for slot in enrolled_slots:
+        student = slot.user
+        enrolled_students.append({
+            'user_id': student.user_id,
+            'display_name': user_display_name(student),
+            'username': student.username,
+            'email': student.user_email or '',
+            'user_access': slot.user_access or '',
+            'enrolled_at': slot.creation_date,
+        })
+
+    invites = (
+        UserCourseActivation.objects.filter(
+            course=course,
+            status=UserCourseActivation.STATUS_PENDING,
+        )
+        .select_related('target_user', 'created_by', 'slot')
+        .order_by('-creation_date', '-pk')
+    )
+    invite_rows = []
+    for inv in invites:
+        target = inv.target_user
+        if target:
+            recipient = target.username
+            if target.user_email:
+                recipient = f"{target.username} ({target.user_email})"
+        else:
+            recipient = inv.temp_email or inv.invited_username or '—'
+        invite_kind = 'username' if inv.invited_username else 'email'
+        status = inv.status
+        invite_rows.append({
+            'invite': inv,
+            'recipient': recipient,
+            'kind': invite_kind,
+            'status': status,
+            'status_label': invite_status_label(status),
+            'awaiting_student': status == UserCourseActivation.STATUS_PENDING,
+            'redeem_url': request.build_absolute_uri(
+                reverse('course_invite_redeem', kwargs={'code': inv.code})
+            ),
+            'can_void': status == UserCourseActivation.STATUS_PENDING,
+        })
+
+    return render(request, 'assessment_tool/course_management.html', {
+        'course': course,
+        'user_type': request.user.user_type,
+        'active_tab': 'management',
+        'invite_form': invite_form,
+        'enrolled_students': enrolled_students,
+        'invite_rows': invite_rows,
+        'highlight_invite_id': request.GET.get('invite'),
+    })
+
+
+def course_invite_redeem_view(request, code):
+    invite = get_invite_by_code(code)
+    block = redeem_block_reason(invite)
+    if block:
+        return render(request, 'assessment_tool/invite_redeem.html', {
+            'error': block,
+            'invite': invite,
+        })
+
+    # Unclaimed email invite: let visitor choose signup vs existing-account login
+    if is_unclaimed_email_invite(invite) and not request.user.is_authenticated:
+        request.session[INVITE_SESSION_KEY] = code
+        return render(request, 'assessment_tool/invite_redeem.html', {
+            'invite': invite,
+            'mode': 'choose',
+            'course': invite.course,
+            'invited_email': invite.temp_email,
+        })
+
+    # Claimed by a new user who still needs to verify, or existing / alternate accept path
+    if request.user.is_authenticated:
+        if request.user.user_type != 'Student':
+            return render(request, 'assessment_tool/invite_redeem.html', {
+                'error': (
+                    f"Your account is registered as {request.user.user_type}, not as a Student, "
+                    "so it cannot be enrolled in a course with a student invitation. "
+                    "Log out and use a Student account, or ask your teacher to invite you "
+                    "as a co-Teacher ('Help' article has details, coming soon) if that applies."
+                ),
+                'invite': invite,
+                'mode': 'non_student',
+            })
+
+        if user_already_enrolled_in_course(invite.course, request.user):
+            msg = handle_already_enrolled_invite_access(invite, request.user)
+            request.session.pop(INVITE_SESSION_KEY, None)
+            return render(request, 'assessment_tool/invite_redeem.html', {
+                'invite': invite,
+                'mode': 'already_enrolled',
+                'course': invite.course,
+                'message': msg,
+            })
+
+        matches = user_matches_invite(request.user, invite)
+        alternate_ok = is_unclaimed_email_invite(invite) and not matches
+        if not matches and not alternate_ok:
+            messages.error(
+                request,
+                "This invitation is for a different account. Log out and use the correct account.",
+            )
+            return render(request, 'assessment_tool/invite_redeem.html', {
+                'error': 'Invitation does not match the signed-in account.',
+                'invite': invite,
+            })
+
+        if request.user.unactivated_account:
+            request.session[INVITE_SESSION_KEY] = code
+            messages.info(request, "Verify your email before joining the course.")
+            return redirect('verify_email')
+
+        if request.method == 'POST' and request.POST.get('action') == 'accept':
+            enrolled, msg = enroll_user_from_invite(invite, request.user)
+            request.session.pop(INVITE_SESSION_KEY, None)
+            if enrolled:
+                messages.success(request, msg)
+                return redirect('dashboard')
+            # Already enrolled (or other soft failure) — show on invite page when relevant
+            if user_already_enrolled_in_course(invite.course, request.user):
+                return render(request, 'assessment_tool/invite_redeem.html', {
+                    'invite': invite,
+                    'mode': 'already_enrolled',
+                    'course': invite.course,
+                    'message': msg,
+                })
+            messages.warning(request, msg)
+            return redirect('dashboard')
+
+        different_email = bool(
+            alternate_ok
+            or (
+                invite.temp_email
+                and request.user.user_email
+                and invite.temp_email.lower() != request.user.user_email.lower()
+            )
+        )
+        return render(request, 'assessment_tool/invite_redeem.html', {
+            'invite': invite,
+            'mode': 'accept_alternate' if different_email else 'accept',
+            'course': invite.course,
+            'invited_email': invite.temp_email,
+            'account_email': request.user.user_email,
+            'account_username': request.user.username,
+        })
+
+    # Logged out: claimed / existing-user invite → login first
+    request.session[INVITE_SESSION_KEY] = code
+    messages.info(request, "Log in to accept this course invitation.")
+    return redirect('login')
+
+
+def course_invite_signup_view(request, code):
+    invite = get_invite_by_code(code)
+    block = redeem_block_reason(invite)
+    if block:
+        return render(request, 'assessment_tool/invite_redeem.html', {
+            'error': block,
+            'invite': invite,
+        })
+
+    if invite.target_user_id:
+        # Already claimed — send them to redeem/accept/verify
+        return redirect('course_invite_redeem', code=code)
+
+    if not invite.temp_email:
+        return render(request, 'assessment_tool/invite_redeem.html', {
+            'error': 'This invitation cannot be used for new account signup.',
+            'invite': invite,
+        })
+
+    # If email now belongs to an existing user, switch to redeem/accept
+    if UserProfile.objects.filter(user_email__iexact=invite.temp_email).exists():
+        return redirect('course_invite_redeem', code=code)
+
+    if request.user.is_authenticated:
+        # Existing signed-in student can accept an unclaimed email invite instead
+        if request.user.user_type == 'Student' and is_unclaimed_email_invite(invite):
+            return redirect('course_invite_redeem', code=code)
+        messages.info(request, "Log out before creating a new student account from an invitation.")
+        return redirect('dashboard')
+
+    request.session[INVITE_SESSION_KEY] = code
+
+    if request.method == 'POST':
+        form = StudentRegistrationForm(request.POST, locked_email=invite.temp_email)
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    user = UserProfile.objects.create_student_user(
+                        username=form.cleaned_data['username'],
+                        user_email=form.cleaned_data['email'],
+                        password=form.cleaned_data['password'],
+                        user_first_name=form.cleaned_data['first_name'],
+                        user_last_name=form.cleaned_data['last_name'],
+                        gender=form.cleaned_data['gender'],
+                        user_display_name=form.cleaned_data.get('display_name'),
+                        unactivated_account=True,
+                    )
+                    EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                    claim_invite_for_new_user(invite, user)
+                    request.session[INVITE_SESSION_KEY] = code
+                    # TODO: send verification email when SMTP is wired.
+                    messages.success(
+                        request,
+                        "Account created. Log in, then enter the email verification code "
+                        "(look it up in the database for now).",
+                    )
+                    return redirect('login')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            except IntegrityError as e:
+                err_msg = str(e)
+                if 'user_email' in err_msg:
+                    messages.error(request, "That email is already registered.")
+                elif 'username' in err_msg:
+                    messages.error(request, "That username is already taken.")
+                else:
+                    messages.error(request, "A database error occurred. Please try again.")
+    else:
+        form = StudentRegistrationForm(locked_email=invite.temp_email)
+
+    return render(request, 'assessment_tool/student_register.html', {
+        'form': form,
+        'invite': invite,
+        'course': invite.course,
+        'locked_email': invite.temp_email,
+        'invite_code': code,
+    })
 
 
 @login_required

@@ -1,8 +1,10 @@
 from django.urls import path
 from django.contrib.auth import views as auth_views
+from django.views.generic import RedirectView
 from . import views
 
 urlpatterns = [
+    path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
     path('verify/', views.verify_email, name='verify_email'),
     path('dashboard/', views.HomeDashboardView.as_view(), name='dashboard'),
     # path('login/', auth_views.LoginView.as_view(
@@ -14,6 +16,11 @@ urlpatterns = [
     path('notifications/', views.notifications_view, name='notifications'),
     path('notifications/<int:notification_id>/', views.notification_detail_view, name='notification_detail'),
     path('notifications/<int:notification_id>/delete/', views.notification_delete_view, name='notification_delete'),
+    path(
+        'parent/grade-summary/<int:student_id>/<int:course_id>/',
+        views.parent_grade_summary_view,
+        name='grade_summary',
+    ),
     path('register/', views.register_teacher, name='register'),
     path('db-viewer/', views.database_viewer, name='db_viewer'),
     path('courses/', views.course_list_view, name='course_list'),
@@ -29,6 +36,9 @@ urlpatterns = [
     path('delete-item/<str:item_type>/<int:item_id>/', views.delete_item, name='delete_item_with_args'),
     path('trash/restore/', views.restore_trash_item_view, name='restore_trash_item'),
     path('courses/<int:course_id>/', views.course_detail_view, name='course_detail'),
+    path('course/<int:course_id>/management/', views.course_management_view, name='course_management'),
+    path('invite/<str:code>/', views.course_invite_redeem_view, name='course_invite_redeem'),
+    path('invite/<str:code>/signup/', views.course_invite_signup_view, name='course_invite_signup'),
     path('course/<int:course_id>/assessments/', views.assessment_view, name='assessment_view'),
     path('course/<int:course_id>/assessments/create/', views.create_assessment_ajax, name='create_assessment_ajax'),
     path('course/<int:course_id>/assessments/update-status/', views.update_assessment_status_ajax, name='update_assessment_status_ajax'),

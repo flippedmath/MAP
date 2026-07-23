@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="display: flex; justify-content: center; padding: 20px;">
+    <div class="card" style="width: 100%; max-width: 520px;">
+        <h2 style="text-align: center; margin-top: 0;">Course invitation</h2>
+
+        {% if error %}
+            <div style="background: #fee2e2; color: #991b1b; padding: 14px; border-radius: 8px; border: 1px solid #fecaca;">
+                {{ error }}
+            </div>
+            <p style="text-align: center; margin-top: 20px;">
+                <a href="{% url 'dashboard' %}">Go to dashboard</a>
+                &nbsp;·&nbsp;
+                <a href="{% url 'logout' %}">Log out</a>
+            </p>
+
+        {% elif mode == 'already_enrolled' %}
+            <div style="background: #eff6ff; color: #1e40af; padding: 14px; border-radius: 8px; border: 1px solid #bfdbfe;">
+                {{ message }}
+            </div>
+            <p style="text-align: center; margin-top: 20px;">
+                <a href="{% url 'course_detail' course.id %}" class="btn" style="display: inline-block; padding: 10px 16px;">Open course</a>
+            </p>
+
+        {% elif mode == 'choose' %}
+            <p>
+                You were invited to join <strong>{{ course.name }}</strong>
+                {% if invited_email %} using <strong>{{ invited_email }}</strong>{% endif %}.
+            </p>
+            <p style="color: #64748b;">Create a new student account, or sign in if you already have one.</p>
+
+            <a href="{% url 'course_invite_signup' invite.code %}"
+               class="btn"
+               style="display: block; text-align: center; width: 100%; padding: 12px; box-sizing: border-box; margin-top: 12px;">
+                Create a new student account
+            </a>
+
+            <a href="{% url 'login' %}"
+               class="btn"
+               style="display: block; text-align: center; width: 100%; padding: 12px; box-sizing: border-box; margin-top: 10px; background: #64748b;">
+                Sign in to an existing student account
+            </a>
+            <p style="font-size: 0.85rem; color: #94a3b8; margin-top: 14px;">
+                If you sign in with an existing account, that account’s email will be used for this course
+                instead of the invitation email.
+            </p>
+
+        {% elif mode == 'accept_alternate' %}
+            <p>You have been invited to join <strong>{{ course.name }}</strong>.</p>
+            <div style="background: #fffbeb; color: #92400e; padding: 14px; border-radius: 8px; border: 1px solid #fcd34d; margin: 16px 0;">
+                <strong>Different account email</strong>
+                <p style="margin: 8px 0 0;">
+                    This invitation was sent to <strong>{{ invited_email }}</strong>.
+                    You are signed in as <strong>{{ account_username }}</strong>
+                    (<strong>{{ account_email }}</strong>).
+                </p>
+                <p style="margin: 8px 0 0;">
+                    If you accept, your current account email
+                    <strong>{{ account_email }}</strong> will be used for the course,
+                    not the invitation email. Your teacher will be notified.
+                </p>
+            </div>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="accept">
+                <button type="submit" class="btn" style="width: 100%; padding: 12px; margin-top: 8px;">
+                    Accept with this account
+                </button>
+            </form>
+            <p style="text-align: center; margin-top: 14px;">
+                <a href="{% url 'logout' %}">Use a different account</a>
+            </p>
+
+        {% elif mode == 'accept' %}
+            <p>You have been invited to join <strong>{{ course.name }}</strong>.</p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="accept">
+                <button type="submit" class="btn" style="width: 100%; padding: 12px; margin-top: 12px;">
+                    Accept invitation
+                </button>
+            </form>
+        {% else %}
+            <p style="color: #64748b;">Loading invitation…</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

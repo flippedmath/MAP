@@ -348,6 +348,14 @@ class Course(models.Model):
     name = models.CharField(max_length=255)
     branch_location = models.OneToOneField(BranchGroup, models.CASCADE, db_column='branch_location', related_name='course', db_comment='Every course, in any form, will create branch directories for all problems. course(id)->assessment(id)->assessment_question_group(id)->problem(id)')
     creation_date = models.DateTimeField(blank=True, null=True)
+    close_date = models.DateTimeField(
+        blank=True,
+        null=True,
+        db_comment=(
+            "Scheduled/actual course close time. Intended to be maintained as "
+            "12 months after the most recent student enrollment change."
+        ),
+    )
     version = models.CharField(max_length=100, blank=True, null=True, unique=True)
     introduction = models.TextField(blank=True, null=True)
 
@@ -582,18 +590,61 @@ class EntityUserInput(models.Model):
         db_table_comment = 'The json will identify the difference between a student answer to the question, a calculated answer, or just an entity calculation that sets up the problem'
 
 
+class StudentCourseEnrollment(models.Model):
+    """One enrollment stint for a student in a course; survives kick/finish for grade history."""
+
+    STATUS_ACTIVE = 'active'
+    STATUS_ENDED = 'ended'
+
+    END_REASON_KICKED = 'kicked'
+    END_REASON_COMPLETED = 'completed'
+    END_REASON_COURSE_CLOSED = 'course_closed'
+
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING)
+    course = models.ForeignKey(Course, models.DO_NOTHING)
+    status = models.CharField(max_length=16, default=STATUS_ACTIVE)
+    end_reason = models.CharField(max_length=64, blank=True, null=True)
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField(blank=True, null=True)
+    slot = models.ForeignKey(
+        'UsersInCourse',
+        models.DO_NOTHING,
+        blank=True,
+        null=True,
+        db_comment='Optional link to the current users_in_course seat while status=active',
+    )
+
+    class Meta:
+        managed = False
+        db_table = 'student_course_enrollment'
+        db_table_comment = (
+            'One row per student enrollment stint in a course. Survives kick/finish so grades '
+            'can be scoped to that instance. users_in_course remains the current seat/slot only.'
+        )
+
+
 class FinalGradeCalculation(models.Model):
     course = models.ForeignKey(Course, models.DO_NOTHING)
-    weight = models.IntegerField()
+    weight = models.IntegerField(default=1)
     user = models.ForeignKey('UserProfile', models.DO_NOTHING)
     assessment = models.ForeignKey(Assessment, models.DO_NOTHING, blank=True, null=True, db_comment="Will only be 'null' if the 'delete: set null' activates")
     assessment_grade_points = models.FloatField(blank=True, null=True, db_comment='This identifies the numeric score of a given assessment for the student')
     assessment_grade_max_points = models.FloatField(blank=True, null=True, db_comment='This identifies the maximum possible score of a given assessment for a student')
+    enrollment = models.ForeignKey(
+        StudentCourseEnrollment,
+        models.DO_NOTHING,
+        db_column='enrollment_id',
+        related_name='final_grades',
+        db_comment='Student course enrollment stint this grade belongs to. Separates prior vs re-enrollment history.',
+    )
 
     class Meta:
         managed = False
         db_table = 'final_grade_calculation'
-        db_table_comment = 'I primarily intend this table to be used as a source of obtaining the grades after the course has been closed. The assessment and course can be deleted, but the grades will remain.'
+        db_table_comment = (
+            'Grades scoped to a student_course_enrollment stint (course close, kick, or '
+            'assessment-close zeros). Assessment/course may later be deleted; grades remain.'
+        )
 
 
 class Invoice(models.Model):
@@ -817,11 +868,39 @@ class TicketDiscussion(models.Model):
 
 
 class UserCourseActivation(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_ACCEPTED = 'accepted'
+    STATUS_VOIDED = 'voided'
+
     course = models.ForeignKey(Course, models.DO_NOTHING)
     slot = models.ForeignKey('UsersInCourse', models.DO_NOTHING, db_comment='This represents the Class slot the Teacher made available')
-    temp_email = models.CharField(unique=True, max_length=255, db_comment='CONSTRAINT check_lowercase_email CHECK (LOWER(temp_email) = temp_email)')
-    code = models.CharField(max_length=255, db_comment='This gets generated per user when email is changed originally. User is emailed, and needs to return the code for verification')
-    timeout = models.DateTimeField(db_comment='Perhaps there is no timeout here')
+    temp_email = models.CharField(max_length=255, blank=True, null=True, db_comment='CONSTRAINT check_lowercase_email CHECK (LOWER(temp_email) = temp_email)')
+    code = models.CharField(max_length=255, db_comment='Redeem token for the course invitation link')
+    timeout = models.DateTimeField(db_comment='Invite expiry; redeem rejected after this time')
+    status = models.CharField(
+        max_length=32,
+        default=STATUS_PENDING,
+        db_comment='pending while open; accepted/voided are legacy — successful accept and void now delete the row',
+    )
+    invited_username = models.CharField(max_length=255, blank=True, null=True)
+    target_user = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='target_user_id',
+        related_name='course_invitations_targeted',
+        blank=True,
+        null=True,
+        db_comment='Existing invitee at create time, or claimed new user after signup start',
+    )
+    created_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='created_by_id',
+        related_name='course_invitations_created',
+        blank=True,
+        null=True,
+    )
+    creation_date = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         managed = False

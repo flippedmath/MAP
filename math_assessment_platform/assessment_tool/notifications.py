@@ -19,6 +19,9 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 
 REASON_COMPLETE_PROBLEM_RENDER_FAILURE = "complete_problem_render_failure"
+REASON_COURSE_INVITATION = "course_invitation"
+REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT = "course_invitation_different_account"
+REASON_COURSE_INVITATION_ALREADY_ENROLLED = "course_invitation_already_enrolled"
 
 
 def _as_utc(value=None):
@@ -128,6 +131,26 @@ def user_has_unread_notifications(user) -> bool:
     return Notification.objects.filter(
         receiver=user,
     ).filter(_attention_worthy_filter()).exists()
+
+
+def unread_notifications_for_user(user, *, limit=20, include_content=False):
+    """Attention-worthy unread notifications for ``user``, newest first.
+
+    Does not mark notifications as read.
+    """
+    Notification = _notification_model()
+    if user is None or not getattr(user, "is_authenticated", False):
+        return Notification.objects.none()
+    qs = (
+        Notification.objects.filter(receiver=user)
+        .filter(_attention_worthy_filter())
+        .order_by("-creation_date", "-pk")
+    )
+    if not include_content:
+        qs = qs.defer("content")
+    if limit is not None:
+        qs = qs[:limit]
+    return qs
 
 
 def mark_user_notifications_read(user) -> int:
@@ -249,6 +272,9 @@ def _clean_error_text(text):
 def _humanize_reason(reason):
     labels = {
         REASON_COMPLETE_PROBLEM_RENDER_FAILURE: "Problem render failure",
+        REASON_COURSE_INVITATION: "Course invitation",
+        REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT: "Invitation accepted with different account",
+        REASON_COURSE_INVITATION_ALREADY_ENROLLED: "Invite used by already-enrolled student",
     }
     if not reason:
         return None
@@ -452,6 +478,82 @@ def build_notification_detail(note):
                 ),
                 "unique_errors": unique_errors,
                 "attempt_rows": attempt_rows,
+            }
+        )
+        return base
+
+    if reason == REASON_COURSE_INVITATION and isinstance(parsed, dict):
+        invite_path = parsed.get("invite_path") or ""
+        if not invite_path and parsed.get("invite_code"):
+            from django.urls import reverse
+
+            invite_path = reverse(
+                "course_invite_redeem",
+                kwargs={"code": parsed.get("invite_code")},
+            )
+        base.update(
+            {
+                "detail_kind": REASON_COURSE_INVITATION,
+                "course_name": parsed.get("course_name") or "",
+                "invite_path": invite_path,
+                "invite_message": parsed.get("message")
+                or (
+                    "You have been invited to a course. Open the invitation link "
+                    "and accept to activate your access."
+                ),
+            }
+        )
+        return base
+
+    if reason == REASON_COURSE_INVITATION_ALREADY_ENROLLED and isinstance(parsed, dict):
+        from django.urls import reverse
+
+        management_path = parsed.get("course_management_path") or ""
+        if not management_path and parsed.get("course_id") and parsed.get("invite_id"):
+            management_path = (
+                reverse("course_management", kwargs={"course_id": parsed["course_id"]})
+                + f"?invite={parsed['invite_id']}"
+            )
+        elif not management_path and parsed.get("course_id"):
+            management_path = reverse(
+                "course_management", kwargs={"course_id": parsed["course_id"]}
+            )
+        base.update(
+            {
+                "detail_kind": REASON_COURSE_INVITATION_ALREADY_ENROLLED,
+                "course_name": parsed.get("course_name") or "",
+                "invite_message": parsed.get("message") or "",
+                "invitation_sent_to_email": parsed.get("invitation_sent_to_email"),
+                "invitation_sent_to_username": parsed.get("invitation_sent_to_username"),
+                "accessor_username": parsed.get("accessor_username"),
+                "accessor_display_name": parsed.get("accessor_display_name"),
+                "accessor_email": parsed.get("accessor_email"),
+                "course_management_path": management_path,
+            }
+        )
+        return base
+
+    if reason == REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT and isinstance(parsed, dict):
+        from django.urls import reverse
+
+        invite_path = parsed.get("invite_path") or ""
+        if not invite_path and parsed.get("invite_code"):
+            invite_path = reverse(
+                "course_invite_redeem",
+                kwargs={"code": parsed.get("invite_code")},
+            )
+        base.update(
+            {
+                "detail_kind": REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT,
+                "course_name": parsed.get("course_name") or "",
+                "invite_message": parsed.get("message") or "",
+                "invite_code": parsed.get("invite_code") or "",
+                "invite_path": invite_path,
+                "invitation_sent_to_email": parsed.get("invitation_sent_to_email"),
+                "invitation_sent_to_username": parsed.get("invitation_sent_to_username"),
+                "accepted_username": parsed.get("accepted_username"),
+                "accepted_display_name": parsed.get("accepted_display_name"),
+                "accepted_email": parsed.get("accepted_email"),
             }
         )
         return base

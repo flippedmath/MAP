@@ -539,3 +539,147 @@ button:hover { background-color: #1d4ed8; }
     cursor: pointer;
     color: #475569;
 }
+
+/* Yellow for warning */
+.alert-warning {
+    background-color: #fef3c7;
+    color: #92400e;
+    border-color: #fde68a;
+}
+
+/* Dashboard: My Courses + unread notifications */
+.dashboard-courses-card,
+.dashboard-notifications-card {
+    grid-column: 1 / -1;
+}
+
+.dashboard-course-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 0.75rem;
+}
+
+.dashboard-course-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px 20px;
+    padding: 1rem 0;
+    border-top: 1px solid #e2e8f0;
+}
+
+.dashboard-course-row:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+.dashboard-course-main {
+    flex: 1 1 240px;
+    min-width: 0;
+}
+
+.dashboard-course-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.35rem;
+}
+
+.dashboard-course-name a {
+    color: var(--text-color);
+    text-decoration: none;
+}
+
+.dashboard-course-name a:hover {
+    color: var(--primary-color);
+    text-decoration: underline;
+}
+
+.dashboard-course-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 1rem;
+    color: #64748b;
+    font-size: 0.92rem;
+}
+
+.dashboard-course-status {
+    font-weight: 600;
+    color: #334155;
+}
+
+.dashboard-course-row--closed .dashboard-course-status {
+    color: #9a3412;
+}
+
+.dashboard-course-actions {
+    flex: 0 0 auto;
+}
+
+.dashboard-course-actions .btn {
+    display: inline-block;
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 8px 14px;
+}
+
+.dashboard-empty {
+    color: #64748b;
+    margin: 0.5rem 0 0;
+}
+
+.dashboard-notification-list {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+}
+
+.dashboard-notification-item {
+    border-top: 1px solid #e2e8f0;
+}
+
+.dashboard-notification-item:first-child {
+    border-top: none;
+}
+
+.dashboard-notification-link {
+    display: block;
+    padding: 0.85rem 0;
+    color: inherit;
+    text-decoration: none;
+}
+
+.dashboard-notification-link:hover .dashboard-notification-title {
+    color: var(--primary-color);
+    text-decoration: underline;
+}
+
+.dashboard-notification-title {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.dashboard-notification-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.85rem;
+    color: #64748b;
+    font-size: 0.88rem;
+}
+
+.dashboard-notification-reason {
+    background: #f1f5f9;
+    border-radius: 4px;
+    padding: 1px 8px;
+}
+
+.dashboard-notification-footer {
+    margin: 0.75rem 0 0;
+    font-size: 0.92rem;
+}
+
+.dashboard-notification-footer a {
+    color: var(--primary-color);
+}

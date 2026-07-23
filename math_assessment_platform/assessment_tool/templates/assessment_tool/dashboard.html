@@ -8,38 +8,117 @@
 </div>
 
 <div class="dashboard-grid">
-    {% if user.user_type == "Student" %}
-        {% for course in courses %}
-            <div class="card">
-                <h3>{{ course.name }}</h3>
-                <p>Status: Active</p>
-                <button class="btn">View Assessments</button>
+    <div class="card dashboard-courses-card">
+        <h2>My Courses</h2>
+        {% if dashboard_courses %}
+            <div class="dashboard-course-list">
+                {% for row in dashboard_courses %}
+                    <div class="dashboard-course-row{% if row.is_closed %} dashboard-course-row--closed{% endif %}">
+                        <div class="dashboard-course-main">
+                            <div class="dashboard-course-name">
+                                {% if row.has_course_link %}
+                                    <a href="{% url 'course_detail' row.course_id %}">{{ row.name }}</a>
+                                {% else %}
+                                    <span>{{ row.name }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="dashboard-course-meta">
+                                <span class="dashboard-course-status">{{ row.status_label }}</span>
+                                <span class="dashboard-course-teachers">Teachers: {{ row.teachers_display }}</span>
+                                {% if row.is_parent and row.child_name %}
+                                    <span class="dashboard-course-child">Student: {{ row.child_name }}</span>
+                                {% endif %}
+                                {% if row.show_student_count %}
+                                    <span class="dashboard-course-students">
+                                        Students enrolled: {{ row.student_count }}
+                                    </span>
+                                {% endif %}
+                                {% if row.show_enrollment_span %}
+                                    <span class="dashboard-course-span">
+                                        Enrolled:
+                                        {% if row.enrolled_at_utc %}
+                                            <time class="local-datetime" datetime="{{ row.enrolled_at_utc }}">{{ row.enrolled_at_utc }}</time>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                        –
+                                        {% if row.close_date_utc %}
+                                            <time class="local-datetime" datetime="{{ row.close_date_utc }}">{{ row.close_date_utc }}</time>
+                                        {% else %}
+                                            —
+                                        {% endif %}
+                                    </span>
+                                {% elif row.is_parent and row.enrolled_at_utc %}
+                                    <span class="dashboard-course-enrolled">
+                                        Enrolled:
+                                        <time class="local-datetime" datetime="{{ row.enrolled_at_utc }}">{{ row.enrolled_at_utc }}</time>
+                                    </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="dashboard-course-actions">
+                            {% if row.has_course_link %}
+                                <a href="{% url 'course_detail' row.course_id %}" class="btn">Open course</a>
+                            {% elif row.is_parent and row.child_id %}
+                                <a
+                                    href="{% url 'grade_summary' row.child_id row.course_id %}"
+                                    class="btn"
+                                >Grade summary</a>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
             </div>
-        {% empty %}
-            <div class="card">
-                <p>No courses assigned yet.</p>
-            </div>
-        {% endfor %}
-
-        {% if ongoing_test %}
-            <div class="alert alert-warning">
-                You have an assessment in progress. <a href="#">Resume Test</a>
-            </div>
+        {% else %}
+            <p class="dashboard-empty">No courses assigned yet.</p>
         {% endif %}
+    </div>
 
-    {% elif user.user_type == "Teacher" %}
+    {% if unread_notifications %}
+    <div class="card dashboard-notifications-card">
+        <h2>Unread notifications</h2>
+        <ul class="dashboard-notification-list">
+            {% for note in unread_notifications %}
+                <li class="dashboard-notification-item">
+                    <a href="{% url 'notification_detail' note.id %}" class="dashboard-notification-link">
+                        <span class="dashboard-notification-title">{{ note.title }}</span>
+                        <span class="dashboard-notification-meta">
+                            {% if note.creation_date_utc %}
+                                <time class="local-datetime" datetime="{{ note.creation_date_utc }}">{{ note.creation_date_utc }}</time>
+                            {% endif %}
+                            {% if note.reason_label %}
+                                <span class="dashboard-notification-reason">{{ note.reason_label }}</span>
+                            {% elif note.reason %}
+                                <span class="dashboard-notification-reason">{{ note.reason }}</span>
+                            {% endif %}
+                        </span>
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+        <p class="dashboard-notification-footer">
+            <a href="{% url 'notifications' %}">View all notifications</a>
+        </p>
+    </div>
+    {% endif %}
+
+    {% if user.user_type == "Student" and ongoing_test %}
+        <div class="alert alert-warning">
+            You have an assessment in progress. <a href="#">Resume Test</a>
+        </div>
+    {% endif %}
+
+    {% if user.user_type == "Teacher" %}
         <div class="card">
             <h2>Classroom Management</h2>
             <a href="{% url 'admin:index' %}" class="btn">Access Question Bank</a>
-            </div>
-
+        </div>
     {% elif user.user_type == "IT_Support" %}
         <div class="card">
             <h2>System Administration</h2>
             <p>Logged in as IT Support. You have full access to the database via Admin.</p>
         </div>
     {% endif %}
-
-    </div>
+</div>
 
 {% endblock %}

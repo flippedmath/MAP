@@ -25,7 +25,8 @@
                 <span class="nav-label">Assessments</span>
             </a>
             
-            <a href="#" class="nav-item {% if active_tab == 'management' %}active{% endif %} disabled-placeholder">
+            {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
+            <a href="{% url 'course_management' course.id %}" class="nav-item {% if active_tab == 'management' %}active{% endif %}">
                 <span class="nav-icon">📊</span>
                 <span class="nav-label">Course Management</span>
             </a>
@@ -33,6 +34,7 @@
                 <span class="nav-icon">⚙️</span>
                 <span class="nav-label">Course Settings</span>
             </a>
+            {% endif %}
         </nav>
     </aside>
 

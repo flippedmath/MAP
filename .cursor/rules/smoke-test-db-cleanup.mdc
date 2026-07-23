@@ -1,0 +1,20 @@
+---
+description: Smoke-test DB leftovers must be disclosed and cleanup offered
+alwaysApply: true
+---
+
+# Smoke-test database data
+
+When verifying features against the real Postgres database (smoke tests, ad-hoc `manage.py` / shell scripts, invite/auth flows, etc.):
+
+1. **Prefer cleanup** of rows you inserted or mutated for the test (users, notifications, invites, enrollments, temp emails, etc.) before ending the task.
+2. If any such content is **left behind**, you must:
+   - Tell the user clearly that leftover smoke-test data remains
+   - Explain **why** it was not cleaned up (e.g. left for inspection, cleanup failed, ambiguous which rows were pre-existing)
+   - **Ask** whether they want you to clean it up
+3. Do not silently leave test rows. Do not assume the user will notice them in the DB viewer.
+
+## Examples
+
+- Created `invite_test_*@example.com` users and notifications to verify course invites → either delete them when done, or disclose and ask before leaving them.
+- Linked a real teacher/student for a one-off enroll test → restore prior state or ask before leaving the enrollment/notification.
