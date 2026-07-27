@@ -1,0 +1,31 @@
+---
+description: Deploy checklist for scheduled server jobs; keep local cron in sync
+alwaysApply: true
+---
+
+# Scheduled jobs & deployment checklist
+
+## When adding any automatic/daily script
+1. Implement it as a server-side job (management command + shell wrapper under `math_assessment_platform/scripts/`), **not** on the web request path.
+2. **Update this rule’s registry** (below) in the same change: purpose, schedule, script path, how to install on the server, and the local crontab line if one exists.
+3. Prefer documenting the cron line in the management command docstring and/or the shell script header.
+
+## When deploying / moving off local onto a server
+Prompt the developer and complete:
+
+1. **Install each registry job on the server** (cron, systemd timer, or host scheduler) with paths/venv for that machine.
+2. **Idempotent install — never duplicate:** installing or redeploying must not add a second copy of the same job.
+   - Prefer a unique marker comment on each cron line (e.g. `# MAP:purge_trashed_notifications`).
+   - Before adding: list crontab, remove any existing lines that match that marker (or the same script path), then write the desired line once.
+   - Safe pattern: `(crontab -l 2>/dev/null | grep -v 'MAP:purge_trashed_notifications' || true; echo '15 3 * * * /server/path/scripts/purge_trashed_notifications.sh # MAP:purge_trashed_notifications') | crontab -`
+   - For systemd timers: install/enable the unit so a second deploy only refreshes the same unit, not a new one.
+3. **Ask whether to disable matching jobs on this Mac** so they no longer run locally (e.g. remove or comment the crontab lines listed below). Do not silently leave local automation running after cutover unless the user says to keep it.
+4. Confirm logs (if any) are writable on the server and not committed.
+
+## Registry of scheduled jobs
+
+| Job | Schedule | Entry point | Marker / local crontab |
+|-----|----------|-------------|------------------------|
+| Purge notification trash older than 30 days | Daily 03:15 local | `math_assessment_platform/scripts/purge_trashed_notifications.sh` → `manage.py purge_trashed_notifications` | Marker `MAP:purge_trashed_notifications`. Local: `15 3 * * * .../scripts/purge_trashed_notifications.sh` |
+
+Log (local): `math_assessment_platform/logs/purge_trashed_notifications.log` (gitignored).

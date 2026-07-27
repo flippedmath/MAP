@@ -32,14 +32,18 @@
                 method="post"
                 action="{% url 'notification_delete' note.id %}"
                 class="notification-delete-form"
-                onsubmit="return confirm('Delete this notification?');"
             >
                 {% csrf_token %}
-                <button type="submit" class="notification-delete-btn" title="Delete notification">
+                <button type="submit" class="notification-delete-btn" title="Move notification to trash">
                     Delete
                 </button>
             </form>
         </div>
+        {% if note.is_read %}
+            <span class="notification-status-tag notification-status-tag--read">read</span>
+        {% else %}
+            <span class="notification-status-tag notification-status-tag--unread">unread</span>
+        {% endif %}
     </article>
     {% endfor %}
 </div>
@@ -47,5 +51,99 @@
 <div class="card notifications-empty">
     <p>No notifications yet.</p>
 </div>
+{% endif %}
+
+{% if has_trashed_notifications %}
+<div class="notification-trash-controls">
+    <button type="button" class="btn" id="notification-trash-toggle" aria-expanded="false" aria-controls="notification-trash-section">
+        Open Trash
+    </button>
+    <form
+        method="post"
+        action="{% url 'notifications' %}"
+        id="notification-empty-trash-form"
+        class="notification-empty-trash-form"
+        hidden
+        onsubmit="return confirm('Permanently remove all trashed notifications? This cannot be undone.');"
+    >
+        {% csrf_token %}
+        <input type="hidden" name="action" value="empty_trash">
+        <button type="submit" class="btn notification-empty-trash-btn">Empty Trash</button>
+    </form>
+</div>
+
+<section id="notification-trash-section" class="notification-trash-section" hidden>
+    <div class="card">
+        <h2 style="margin-top: 0;">Trash</h2>
+        <p class="notification-trash-note">
+            All notifications marked as deleted will be automatically removed after 30 days.
+        </p>
+    </div>
+    {% if trashed_notifications %}
+    <div class="notifications-list notifications-list--trash">
+        {% for note in trashed_notifications %}
+        <article class="notification-item notification-item--list notification-item--trashed">
+            <div class="notification-list-row">
+                <div class="notification-list-link notification-list-link--static">
+                    <div class="notification-item-header">
+                        <h2 class="notification-item-title">{{ note.title }}</h2>
+                        <div class="notification-item-meta">
+                            {% if note.deleted_at_utc %}
+                                Deleted:
+                                <time class="local-datetime" datetime="{{ note.deleted_at_utc }}">{{ note.deleted_at_utc }}</time>
+                            {% elif note.creation_date_utc %}
+                                <time class="local-datetime" datetime="{{ note.creation_date_utc }}">{{ note.creation_date_utc }}</time>
+                            {% else %}
+                                Unknown date
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% if note.reason_label %}
+                        <span class="notification-item-reason">{{ note.reason_label }}</span>
+                    {% elif note.reason %}
+                        <span class="notification-item-reason">{{ note.reason }}</span>
+                    {% endif %}
+                    <p class="notification-trash-hint">Restore this notification to open and read it.</p>
+                </div>
+                <form
+                    method="post"
+                    action="{% url 'notification_restore' note.id %}"
+                    class="notification-restore-form"
+                >
+                    {% csrf_token %}
+                    <button type="submit" class="notification-restore-btn" title="Restore notification">
+                        Restore
+                    </button>
+                </form>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+
+<script>
+(function () {
+    var toggle = document.getElementById('notification-trash-toggle');
+    var section = document.getElementById('notification-trash-section');
+    var emptyForm = document.getElementById('notification-empty-trash-form');
+    if (!toggle || !section) return;
+
+    toggle.addEventListener('click', function () {
+        var open = section.hasAttribute('hidden');
+        if (open) {
+            section.removeAttribute('hidden');
+            if (emptyForm) emptyForm.removeAttribute('hidden');
+            toggle.textContent = 'Hide Trash';
+            toggle.setAttribute('aria-expanded', 'true');
+        } else {
+            section.setAttribute('hidden', '');
+            if (emptyForm) emptyForm.setAttribute('hidden', '');
+            toggle.textContent = 'Open Trash';
+            toggle.setAttribute('aria-expanded', 'false');
+        }
+    });
+})();
+</script>
 {% endif %}
 {% endblock %}

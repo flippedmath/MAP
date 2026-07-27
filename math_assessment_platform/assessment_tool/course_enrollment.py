@@ -244,15 +244,22 @@ def enrollment_within_credit_reimbursement_window(enrollment: StudentCourseEnrol
     return timezone.now() - started <= CREDIT_REIMBURSEMENT_WINDOW
 
 
+def discard_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
+    """Delete all final_grade_calculation rows for this enrollment stint."""
+    deleted, _ = FinalGradeCalculation.objects.filter(enrollment=enrollment).delete()
+    return deleted
+
+
 @transaction.atomic
 def kick_student_from_course(*, course, student, removed_by=None) -> dict:
     """
     Remove a student from the course roster.
 
-    - Snapshots existing/submitted grades onto final_grade_calculation for the stint
-    - Ends the enrollment instance (history preserved for re-enroll separation)
-    - Deletes live progress and the users_in_course seat
-    - Placeholder for credit reimbursement when removed within one week
+    - Within one week of enrollment: discard transcript grades for this stint
+      (credit reimbursement placeholder) and do not keep a grade history
+    - After one week: snapshot/keep final_grade_calculation rows for the stint
+    - Always ends the enrollment instance, deletes live progress, and removes
+      the users_in_course seat
 
     Returns a summary dict for UI messaging.
     """
@@ -272,15 +279,22 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
         StudentCourseEnrollment.objects.select_for_update().get(pk=enrollment.pk)
     )
 
-    grades_snapshotted = snapshot_enrollment_grades(enrollment)
-    grade_rows = FinalGradeCalculation.objects.filter(enrollment=enrollment).count()
+    within_week = enrollment_within_credit_reimbursement_window(enrollment)
+    grades_snapshotted = 0
+    grades_discarded = 0
+    grade_rows = 0
+
+    if within_week:
+        # Early removal: no transcript for this stint.
+        grades_discarded = discard_enrollment_grades(enrollment)
+        # TODO(credits): When the credit system is implemented, reimburse the Teacher
+        # for course-seat credits (student removed within one week of enrollment).
+        _ = removed_by
+    else:
+        grades_snapshotted = snapshot_enrollment_grades(enrollment)
+        grade_rows = FinalGradeCalculation.objects.filter(enrollment=enrollment).count()
 
     _delete_student_course_progress(course, student)
-
-    reimbursable = enrollment_within_credit_reimbursement_window(enrollment)
-    # TODO(credits): When the credit system is implemented, reimburse the Teacher
-    # if reimbursable is True (student removed within one week of enrollment).
-    _ = (reimbursable, removed_by)
 
     enrollment.status = StudentCourseEnrollment.STATUS_ENDED
     enrollment.end_reason = StudentCourseEnrollment.END_REASON_KICKED
@@ -292,6 +306,16 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
 
     slot_id = slot.pk
     UsersInCourse.objects.filter(pk=slot_id).delete()
+
+    if within_week:
+        student_grade_msg = (
+            "Recorded grades for this enrollment period were not kept on a transcript "
+            "because you were enrolled for less than one week."
+        )
+    else:
+        student_grade_msg = (
+            "Any recorded grades for this enrollment period were saved to your transcript."
+        )
 
     try:
         from .notifications import create_notification
@@ -305,7 +329,7 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
                 "message": (
                     f"You have been removed from {course.name}. "
                     "Your live course progress for this enrollment was deleted. "
-                    "Any recorded grades for this enrollment period were saved to your transcript."
+                    f"{student_grade_msg}"
                 ),
             },
             reason="course_student_removed",
@@ -322,5 +346,7 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
         "enrollment_id": enrollment.pk,
         "grade_rows": grade_rows,
         "grades_snapshotted": grades_snapshotted,
-        "credit_reimbursement_pending": reimbursable,
+        "grades_discarded": grades_discarded,
+        "credit_reimbursement_pending": within_week,
+        "transcript_kept": not within_week,
     }

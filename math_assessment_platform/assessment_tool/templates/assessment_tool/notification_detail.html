@@ -24,7 +24,6 @@
             method="post"
             action="{% url 'notification_delete' notification.id %}"
             class="notification-delete-form"
-            onsubmit="return confirm('Delete this notification?');"
         >
             {% csrf_token %}
             <button type="submit" class="notification-delete-btn">Delete</button>

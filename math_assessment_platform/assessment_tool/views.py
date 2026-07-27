@@ -20,7 +20,12 @@ from django.http import JsonResponse
 from django.db import transaction
 from .forms import TeacherRegistrationForm, CourseInviteForm, StudentRegistrationForm
 from .models import EmailAuthentication, UserCourseActivation
-from .course_enrollment import kick_student_from_course
+from .course_enrollment import (
+    enrollment_within_credit_reimbursement_window,
+    ensure_active_enrollment,
+    get_active_enrollment,
+    kick_student_from_course,
+)
 from .course_invites import (
     INVITE_SESSION_KEY,
     claim_invite_for_new_user,
@@ -321,13 +326,25 @@ def database_viewer(request):
 @login_required
 def notifications_view(request):
     from .notifications import (
-        mark_user_notifications_read,
+        empty_notification_trash_for_user,
         notifications_for_user,
         reason_label_for,
+        trashed_notifications_for_user,
+        user_has_trashed_notifications,
         utc_isoformat,
     )
 
-    mark_user_notifications_read(request.user)
+    if request.method == "POST" and request.POST.get("action") == "empty_trash":
+        removed = empty_notification_trash_for_user(request.user)
+        if removed:
+            messages.success(
+                request,
+                f"Emptied trash ({removed} notification{'s' if removed != 1 else ''} permanently removed).",
+            )
+        else:
+            messages.info(request, "Trash was already empty.")
+        return redirect("notifications")
+
     rows = []
     for note in notifications_for_user(request.user, include_content=False):
         rows.append({
@@ -341,25 +358,52 @@ def notifications_view(request):
             ),
             "is_read": note.is_read,
         })
+
+    trash_rows = []
+    for note in trashed_notifications_for_user(request.user, include_content=False):
+        trash_rows.append({
+            "id": note.pk,
+            "title": note.title,
+            "reason": note.reason,
+            "reason_label": reason_label_for(note.reason),
+            "creation_date": note.creation_date,
+            "creation_date_utc": (
+                utc_isoformat(note.creation_date) if note.creation_date else None
+            ),
+            "deleted_at": note.deleted_at,
+            "deleted_at_utc": (
+                utc_isoformat(note.deleted_at) if note.deleted_at else None
+            ),
+            "is_read": note.is_read,
+        })
+
     return render(request, "assessment_tool/notifications.html", {
         "notifications": rows,
-        "has_unread_notifications": False,
+        "trashed_notifications": trash_rows,
+        "has_trashed_notifications": user_has_trashed_notifications(request.user),
     })
 
 
 @login_required
 def notification_detail_view(request, notification_id):
-    from .notifications import build_notification_detail, get_notification_for_user
+    from .notifications import (
+        build_notification_detail,
+        get_notification_for_user,
+        mark_notification_read,
+    )
 
-    note = get_notification_for_user(request.user, notification_id)
+    note = get_notification_for_user(
+        request.user, notification_id, include_trashed=False
+    )
     if note is None:
         from django.http import Http404
         raise Http404("Notification not found")
 
+    mark_notification_read(request.user, notification_id)
+    note.refresh_from_db()
     detail = build_notification_detail(note)
     return render(request, "assessment_tool/notification_detail.html", {
         "notification": detail,
-        "has_unread_notifications": False,
     })
 
 
@@ -370,9 +414,22 @@ def notification_delete_view(request, notification_id):
 
     deleted = delete_notification_for_user(request.user, notification_id)
     if deleted:
-        messages.success(request, "Notification deleted.")
+        messages.success(request, "Notification moved to trash.")
     else:
         messages.error(request, "Notification not found.")
+    return redirect("notifications")
+
+
+@login_required
+@require_POST
+def notification_restore_view(request, notification_id):
+    from .notifications import restore_notification_for_user
+
+    restored = restore_notification_for_user(request.user, notification_id)
+    if restored:
+        messages.success(request, "Notification restored.")
+    else:
+        messages.error(request, "Trashed notification not found.")
     return redirect("notifications")
 
 
@@ -1158,15 +1215,21 @@ def course_management_view(request, course_id):
                     f"{student.username} was removed from the course. "
                     "Their live progress for this enrollment was deleted."
                 )
-                if summary.get("grade_rows"):
+                if summary.get("credit_reimbursement_pending"):
+                    msg += (
+                        " Recorded grades for this enrollment period were not kept "
+                        "on a transcript because the student was enrolled for less than one week. "
+                        "Credit reimbursement for removals within one week of enrollment "
+                        "will apply when the credit system is available."
+                    )
+                elif summary.get("grade_rows"):
                     msg += (
                         f" {summary['grade_rows']} grade record(s) were kept on the "
                         "transcript for this enrollment period."
                     )
-                if summary.get("credit_reimbursement_pending"):
+                else:
                     msg += (
-                        " Credit reimbursement for removals within one week of enrollment "
-                        "will apply when the credit system is available."
+                        " No grade transcript was recorded for this enrollment period."
                     )
                 messages.success(request, msg)
             except ValueError as exc:
@@ -1189,13 +1252,20 @@ def course_management_view(request, course_id):
     enrolled_students = []
     for slot in enrolled_slots:
         student = slot.user
+        enrollment = get_active_enrollment(course, student)
+        if enrollment is None:
+            enrollment = ensure_active_enrollment(
+                course=course, user=student, slot=slot
+            )
+        within_week = enrollment_within_credit_reimbursement_window(enrollment)
         enrolled_students.append({
             'user_id': student.user_id,
             'display_name': user_display_name(student),
             'username': student.username,
             'email': student.user_email or '',
             'user_access': slot.user_access or '',
-            'enrolled_at': slot.creation_date,
+            'enrolled_at': enrollment.started_at or slot.creation_date,
+            'within_reimbursement_window': within_week,
         })
 
     invites = (

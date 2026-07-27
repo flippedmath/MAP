@@ -16,6 +16,7 @@ urlpatterns = [
     path('notifications/', views.notifications_view, name='notifications'),
     path('notifications/<int:notification_id>/', views.notification_detail_view, name='notification_detail'),
     path('notifications/<int:notification_id>/delete/', views.notification_delete_view, name='notification_delete'),
+    path('notifications/<int:notification_id>/restore/', views.notification_restore_view, name='notification_restore'),
     path(
         'parent/grade-summary/<int:student_id>/<int:course_id>/',
         views.parent_grade_summary_view,

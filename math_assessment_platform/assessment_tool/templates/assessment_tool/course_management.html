@@ -39,7 +39,8 @@
                                             class="btn kick-student-open-btn"
                                             style="background: #b91c1c; padding: 4px 10px; font-size: 0.8rem;"
                                             data-student-id="{{ row.user_id }}"
-                                            data-student-label="{{ row.display_name }} ({{ row.username }})">
+                                            data-student-label="{{ row.display_name }} ({{ row.username }})"
+                                            data-within-week="{% if row.within_reimbursement_window %}1{% else %}0{% endif %}">
                                         Remove
                                     </button>
                                 </td>
@@ -167,10 +168,9 @@
         </p>
         <p style="color: #991b1b; line-height: 1.5;">
             All live progress in this course for this student will be deleted.
-            Recorded grades for this enrollment period are kept on a separate transcript;
-            a future re-enrollment starts a new grade history.
         </p>
-        <p style="color: #64748b; font-size: 0.9rem; line-height: 1.5;">
+        <p id="kick-transcript-note" style="color: #334155; line-height: 1.5;"></p>
+        <p id="kick-credit-note" style="color: #64748b; font-size: 0.9rem; line-height: 1.5; display: none;">
             If you remove the student within one week of enrollment, course-seat credits
             will be reimbursed when the credit system is available.
         </p>
@@ -262,18 +262,37 @@
     var idInput = document.getElementById('kick-student-id');
     var labelEl = document.getElementById('kick-student-label');
     var cancelBtn = document.getElementById('kick-student-cancel');
+    var transcriptNote = document.getElementById('kick-transcript-note');
+    var creditNote = document.getElementById('kick-credit-note');
+    var kickWithinWeek = false;
 
     function closeKickOverlay() {
         if (!overlay) return;
         overlay.hidden = true;
         overlay.setAttribute('aria-hidden', 'true');
         if (idInput) idInput.value = '';
+        kickWithinWeek = false;
     }
 
-    function openKickOverlay(studentId, studentLabel) {
+    function openKickOverlay(studentId, studentLabel, withinWeek) {
         if (!overlay || !idInput || !labelEl) return;
         idInput.value = studentId || '';
         labelEl.textContent = studentLabel || 'this student';
+        kickWithinWeek = !!withinWeek;
+        if (transcriptNote) {
+            if (kickWithinWeek) {
+                transcriptNote.textContent =
+                    'Recorded grades for this enrollment period are NOT kept on a separate transcript ' +
+                    'because the student has been enrolled for less than one week.';
+            } else {
+                transcriptNote.textContent =
+                    'Recorded grades for this enrollment period are kept on a separate transcript; ' +
+                    'a future re-enrollment starts a new grade history.';
+            }
+        }
+        if (creditNote) {
+            creditNote.style.display = kickWithinWeek ? 'block' : 'none';
+        }
         overlay.hidden = false;
         overlay.setAttribute('aria-hidden', 'false');
     }
@@ -282,7 +301,8 @@
         btn.addEventListener('click', function () {
             openKickOverlay(
                 btn.getAttribute('data-student-id'),
-                btn.getAttribute('data-student-label')
+                btn.getAttribute('data-student-label'),
+                btn.getAttribute('data-within-week') === '1'
             );
         });
     });
@@ -304,11 +324,14 @@
     if (form) {
         form.addEventListener('submit', function (evt) {
             var label = (labelEl && labelEl.textContent) || 'this student';
+            var gradeLine = kickWithinWeek
+                ? 'Recorded grades for this enrollment period will NOT be kept on a transcript (enrolled less than one week).'
+                : 'Recorded grades for this enrollment stay on the transcript only.';
             var ok = window.confirm(
                 'Final confirmation: permanently remove ' + label +
                 ' from this course?\n\n' +
                 'All live progress for this student in the course will be deleted. ' +
-                'Recorded grades for this enrollment stay on the transcript only.'
+                gradeLine
             );
             if (!ok) {
                 evt.preventDefault();

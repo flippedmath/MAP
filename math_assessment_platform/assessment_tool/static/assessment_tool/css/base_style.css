@@ -252,6 +252,36 @@ button:hover { background-color: #1d4ed8; }
     color: #991b1b;
 }
 
+.notification-restore-form {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.notification-restore-btn {
+    background: transparent;
+    color: #166534;
+    border: 1px solid #86efac;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.notification-restore-btn:hover {
+    background: #f0fdf4;
+    color: #14532d;
+}
+
+.notification-list-link--static {
+    cursor: default;
+}
+
+.notification-trash-hint {
+    margin: 0.5rem 0 0;
+    color: #64748b;
+    font-size: 0.85rem;
+}
+
 .notification-detail-actions {
     display: flex;
     justify-content: flex-end;
@@ -267,6 +297,8 @@ button:hover { background-color: #1d4ed8; }
 
 .notification-item--list {
     margin: 0;
+    position: relative;
+    padding-bottom: 1.75rem;
     transition: border-color 0.15s, background 0.15s;
 }
 
@@ -659,6 +691,69 @@ button:hover { background-color: #1d4ed8; }
     display: block;
     font-weight: 600;
     margin-bottom: 0.25rem;
+}
+
+.notification-status-tag {
+    position: absolute;
+    right: 1rem;
+    bottom: 0.65rem;
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+}
+
+.notification-status-tag--read {
+    color: #166534;
+    background: #dcfce7;
+    border: 1px solid #86efac;
+}
+
+.notification-status-tag--unread {
+    color: #991b1b;
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+}
+
+.notification-status-tag--trashed {
+    position: static;
+    color: #64748b;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+}
+
+.notification-trash-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin-top: 1.25rem;
+}
+
+.notification-empty-trash-form {
+    margin: 0;
+}
+
+.notification-empty-trash-btn {
+    background: #b91c1c;
+}
+
+.notification-trash-section {
+    margin-top: 1rem;
+}
+
+.notification-trash-note {
+    color: #64748b;
+    margin: 0;
+    font-size: 0.92rem;
+}
+
+.notification-item--trashed {
+    opacity: 0.92;
+    background: #f8fafc;
 }
 
 .dashboard-notification-meta {

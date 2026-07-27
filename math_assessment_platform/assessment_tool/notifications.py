@@ -10,7 +10,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 from django.apps import apps
 from django.db.models import Q
@@ -22,6 +22,8 @@ REASON_COMPLETE_PROBLEM_RENDER_FAILURE = "complete_problem_render_failure"
 REASON_COURSE_INVITATION = "course_invitation"
 REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT = "course_invitation_different_account"
 REASON_COURSE_INVITATION_ALREADY_ENROLLED = "course_invitation_already_enrolled"
+
+NOTIFICATION_TRASH_RETENTION = timedelta(days=30)
 
 
 def _as_utc(value=None):
@@ -111,6 +113,11 @@ def _notification_model():
     return apps.get_model("assessment_tool", "Notification")
 
 
+def _active_filter():
+    """Notifications that are not in the trash."""
+    return Q(deleted_at__isnull=True)
+
+
 def _sent_filter(now=None):
     """Notifications that have already been scheduled to send."""
     now = now or timezone.now()
@@ -118,10 +125,10 @@ def _sent_filter(now=None):
 
 
 def _attention_worthy_filter(now=None):
-    """Unread notifications that should currently draw attention."""
+    """Unread active notifications that should currently draw attention."""
     now = now or timezone.now()
     not_expired = Q(expr_date__isnull=True) | Q(expr_date__gt=now)
-    return _sent_filter(now) & not_expired & Q(is_read=False)
+    return _sent_filter(now) & not_expired & _active_filter() & Q(is_read=False)
 
 
 def user_has_unread_notifications(user) -> bool:
@@ -164,7 +171,7 @@ def mark_user_notifications_read(user) -> int:
 
 
 def notifications_for_user(user, *, include_content=False):
-    """Historic notifications for the user, newest first (excludes not-yet-sent).
+    """Active (non-trashed) historic notifications for the user, newest first.
 
     By default defers ``content`` so the list page does not load large payloads.
     """
@@ -175,6 +182,7 @@ def notifications_for_user(user, *, include_content=False):
     qs = (
         Notification.objects.filter(receiver=user)
         .filter(_sent_filter())
+        .filter(_active_filter())
         .order_by("-creation_date", "-pk")
     )
     if not include_content:
@@ -182,25 +190,117 @@ def notifications_for_user(user, *, include_content=False):
     return qs
 
 
-def get_notification_for_user(user, notification_id):
-    """Return one sent notification belonging to ``user``, or None."""
+def trashed_notifications_for_user(user, *, include_content=False):
+    """Trashed notifications for ``user``, most recently deleted first."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        Notification = _notification_model()
+        return Notification.objects.none()
+    Notification = _notification_model()
+    qs = (
+        Notification.objects.filter(receiver=user)
+        .filter(deleted_at__isnull=False)
+        .order_by("-deleted_at", "-pk")
+    )
+    if not include_content:
+        qs = qs.defer("content")
+    return qs
+
+
+def user_has_trashed_notifications(user) -> bool:
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    Notification = _notification_model()
+    return Notification.objects.filter(
+        receiver=user,
+        deleted_at__isnull=False,
+    ).exists()
+
+
+def get_notification_for_user(user, notification_id, *, include_trashed=False):
+    """Return one sent notification belonging to ``user``, or None.
+
+    By default excludes trashed rows. Trashed notifications must be restored
+    before they can be opened/read.
+    """
     if user is None or not getattr(user, "is_authenticated", False):
         return None
     Notification = _notification_model()
-    return (
-        Notification.objects.filter(receiver=user, pk=notification_id)
-        .filter(_sent_filter())
-        .first()
+    qs = Notification.objects.filter(receiver=user, pk=notification_id).filter(
+        _sent_filter()
     )
+    if not include_trashed:
+        qs = qs.filter(_active_filter())
+    return qs.first()
+
+
+def mark_notification_read(user, notification_id) -> bool:
+    """Mark one active notification as read for ``user``. Returns True if updated."""
+    note = get_notification_for_user(user, notification_id, include_trashed=False)
+    if note is None or note.is_read:
+        return False
+    note.is_read = True
+    note.save(update_fields=["is_read"])
+    return True
 
 
 def delete_notification_for_user(user, notification_id) -> bool:
-    """Delete one notification owned by ``user``. Returns True if a row was removed."""
-    note = get_notification_for_user(user, notification_id)
+    """Move one active notification into trash. Returns True if updated."""
+    note = get_notification_for_user(user, notification_id, include_trashed=False)
     if note is None:
         return False
-    note.delete()
+    note.deleted_at = timezone.now()
+    note.save(update_fields=["deleted_at"])
     return True
+
+
+def restore_notification_for_user(user, notification_id) -> bool:
+    """Restore one trashed notification to the active list. Returns True if updated."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    Notification = _notification_model()
+    note = (
+        Notification.objects.filter(
+            receiver=user,
+            pk=notification_id,
+            deleted_at__isnull=False,
+        )
+        .filter(_sent_filter())
+        .first()
+    )
+    if note is None:
+        return False
+    note.deleted_at = None
+    note.save(update_fields=["deleted_at"])
+    return True
+
+
+def empty_notification_trash_for_user(user) -> int:
+    """Permanently delete all trashed notifications for ``user``. Returns count."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return 0
+    Notification = _notification_model()
+    deleted, _ = Notification.objects.filter(
+        receiver=user,
+        deleted_at__isnull=False,
+    ).delete()
+    return deleted
+
+
+def purge_expired_trashed_notifications(*, older_than=None) -> int:
+    """
+    Permanently delete trashed notifications older than the retention window
+    (default 30 days) for all users. Returns number of rows removed.
+
+    Intended to be invoked only by the scheduled management command
+    ``purge_trashed_notifications`` (e.g. daily cron), not from request handlers.
+    """
+    cutoff = timezone.now() - (older_than or NOTIFICATION_TRASH_RETENTION)
+    Notification = _notification_model()
+    deleted, _ = Notification.objects.filter(
+        deleted_at__isnull=False,
+        deleted_at__lte=cutoff,
+    ).delete()
+    return deleted
 
 
 def parse_notification_content(content):
@@ -415,6 +515,13 @@ def build_notification_detail(note):
         "send_on": note.send_on,
         "expr_date": note.expr_date,
         "is_read": note.is_read,
+        "is_trashed": getattr(note, "deleted_at", None) is not None,
+        "deleted_at": getattr(note, "deleted_at", None),
+        "deleted_at_utc": (
+            _utc_isoformat(note.deleted_at)
+            if getattr(note, "deleted_at", None)
+            else None
+        ),
         "detail_kind": "generic",
         "content_display": display_text,
         "parsed": parsed,
