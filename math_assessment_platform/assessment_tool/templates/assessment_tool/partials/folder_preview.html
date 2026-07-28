@@ -1,0 +1,17 @@
+<div class="preview-content" style="padding: 20px; text-align: center;">
+    <div class="preview-icon-large">
+        <i class="fas fa-folder icon-folder" style="font-size: 4rem;"></i>
+    </div>
+    <h3 style="margin-top: 20px;">{{ branch.name }}</h3>
+    <hr style="border: 0; border-top: 1px solid #d1d1d6; margin: 20px 0;">
+    <div class="preview-metadata" style="text-align: left; font-size: 0.9rem; color: #3a3a3c;">
+        <p><strong>Type:</strong> {{ branch.folder_type }}</p>
+        <p><strong>Owner:</strong> {{ branch.owner.username }}</p>
+        {% if origin_path %}
+            <p><strong>Trashed from:</strong> {{ origin_path }}</p>
+        {% endif %}
+        {% if trashed_at %}
+            <p><strong>Trashed at:</strong> {{ trashed_at }}</p>
+        {% endif %}
+    </div>
+</div>

@@ -6,17 +6,8 @@
 {% endblock %}
 
 {% block content %}
-<div class="finder-container" id="finder-explorer">
-    <!-- Initial Column -->
-    <div class="finder-column" id="col-root" data-level="0">
-        <div class="item" data-id="{{ root_folder.id }}" data-type="folder" onclick="loadFolder('{{ root_folder.id }}', 1)">
-            <i class="fas fa-home icon-folder"></i> 
-            <span>{{ root_folder.name }}</span>
-            <i class="fas fa-chevron-right arrow"></i>
-        </div>
-    </div>
-    
-    <!-- Dynamic columns will appear here -->
+<div class="finder-container" id="finder-explorer" tabindex="0" aria-label="File explorer">
+    {# User root ({username}_root) is opened by default and never shown as its own column. #}
     <div id="dynamic-columns" style="display: flex;"></div>
 </div>
 
@@ -24,8 +15,103 @@
 
 <script>
 
-// Add a level parameter to your initial call in explorer.html: 
-// onclick="loadFolder('{{ root_folder.id }}', 0)"
+// Leftmost visible column is the root's children (level 1). Level 0 root is hidden.
+const EXPLORER_MIN_LEVEL = 1;
+const EXPLORER_ROOT_FOLDER_ID = "{{ root_folder.id }}";
+
+// Keyboard focus: which column receives Up/Down. Left moves focus back without clearing children.
+let kbFocusLevel = EXPLORER_MIN_LEVEL;
+
+function getExplorerColumn(level) {
+    return document.querySelector(`#dynamic-columns .finder-column[data-level="${level}"]`);
+}
+
+function getColumnItems(column) {
+    if (!column) return [];
+    return [...column.querySelectorAll(':scope > .item')];
+}
+
+function itemKey(el) {
+    return el.getAttribute('data-branch-id') || el.getAttribute('data-id');
+}
+
+function clearColumnsFrom(level) {
+    document.querySelectorAll('#dynamic-columns .finder-column').forEach((col) => {
+        if (parseInt(col.dataset.level, 10) >= level) col.remove();
+    });
+}
+
+function updateColumnFocusUI() {
+    document.querySelectorAll('.finder-column.keyboard-focus').forEach((col) => {
+        col.classList.remove('keyboard-focus');
+    });
+    const col = getExplorerColumn(kbFocusLevel);
+    if (col) {
+        col.classList.add('keyboard-focus');
+        const selected = col.querySelector(':scope > .item.selected');
+        if (selected) {
+            selected.scrollIntoView({ block: 'nearest' });
+        }
+    }
+}
+
+function highlightExplorerItem(element, { dismissIfLeavingOpened = false } = {}) {
+    if (!element) return;
+    const column = element.closest('.finder-column');
+    if (!column) return;
+    const level = parseInt(column.dataset.level, 10);
+    const prev = column.querySelector(':scope > .item.selected');
+    selectItem(element);
+    kbFocusLevel = level;
+
+    if (dismissIfLeavingOpened) {
+        const openedId = column.dataset.openedId;
+        const nextId = itemKey(element);
+        // Leaving the opened item (or selecting something else) dismisses child columns.
+        if (openedId && String(openedId) !== String(nextId)) {
+            clearColumnsFrom(level + 1);
+        } else if (!openedId && prev && prev !== element) {
+            clearColumnsFrom(level + 1);
+        }
+    }
+    updateColumnFocusUI();
+}
+
+async function openExplorerItem(element) {
+    if (!element) return;
+    const column = element.closest('.finder-column');
+    if (!column) return;
+    const level = parseInt(column.dataset.level, 10);
+    const type = element.getAttribute('data-type') || 'folder';
+    const id = element.getAttribute('data-id');
+    const key = itemKey(element);
+
+    selectItem(element);
+    column.dataset.openedId = key;
+    kbFocusLevel = level;
+    updateColumnFocusUI();
+
+    if (type === 'problem') {
+        await loadPreview(id, 'problem', level + 1);
+        // Preview columns have no navigable .item rows — keep keyboard focus on the problem.
+        kbFocusLevel = level;
+        updateColumnFocusUI();
+        return;
+    }
+
+    await loadFolder(id, level + 1);
+    const childCol = getExplorerColumn(level + 1);
+    const first = getColumnItems(childCol)[0];
+    if (first) {
+        kbFocusLevel = level + 1;
+        // Highlight only — do not open grandchildren until Right/click.
+        selectItem(first);
+    } else {
+        // Empty folder (or only non-item chrome): keep focus on the opened parent item.
+        kbFocusLevel = level;
+    }
+    updateColumnFocusUI();
+}
 
 async function loadFolder(folderId, level) {
     const container = document.getElementById('dynamic-columns');
@@ -53,6 +139,7 @@ async function loadFolder(folderId, level) {
         const newCol = document.createElement('div');
         newCol.className = 'finder-column';
         newCol.dataset.level = level;
+        newCol.dataset.folderId = folderId;
         newCol.innerHTML = html;
         // Extract the path from the hidden div we added to column.html
         const pathMeta = newCol.querySelector('.column-path-meta');
@@ -61,20 +148,28 @@ async function loadFolder(folderId, level) {
         }
         container.appendChild(newCol);
 
+        // Mark parent column's opened item when known
+        const parentCol = getExplorerColumn(level - 1);
+        if (parentCol) {
+            parentCol.dataset.openedId = String(folderId);
+        }
+
         // --- 4. DYNAMIC PERMISSION CHECK ---
         const username = "{{ request.user.username }}";
         const rootPath = `/Users/${username}_root/`;
         const firstItem = newCol.querySelector('.item');
         
         let isProtected = false;
-        if (folderId === '{{ root_folder.id }}') {
+        if (folderId === EXPLORER_ROOT_FOLDER_ID) {
             isProtected = true;
         } else if (firstItem) {
             const location = firstItem.getAttribute('data-location') || "";
+            // Workspace intentionally allows "New Folder".
             if (location.startsWith(`${rootPath}Courses/`) || 
-                location.startsWith(`${rootPath}Standalone Assessments/`) ||
-                location.startsWith(`${rootPath}Shared for Collaboration/`) ||
+                location.startsWith(`${rootPath}Collaboration/`) ||
+                location.startsWith(`${rootPath}Student Provided Assessments/`) ||
                 location.startsWith(`${rootPath}Student Generated Assessments by Course/`) ||
+                location.startsWith(`${rootPath}Public Library/`) ||
                 location.startsWith(`${rootPath}Public/`) ||
                 location.startsWith(`${rootPath}Trash/`)) {
                 isProtected = true;
@@ -139,6 +234,107 @@ async function loadPreview(itemId, type, level) {
     } catch (e) { console.error("Error:", e); }
 }
 
+function moveExplorerHighlight(delta) {
+    // If focus landed on a column with no navigable items (empty / preview), step back.
+    while (kbFocusLevel > EXPLORER_MIN_LEVEL) {
+        const col = getExplorerColumn(kbFocusLevel);
+        if (getColumnItems(col).length) break;
+        kbFocusLevel -= 1;
+    }
+    const col = getExplorerColumn(kbFocusLevel);
+    const items = getColumnItems(col);
+    if (!items.length) return;
+
+    let idx = items.findIndex((el) => el.classList.contains('selected'));
+    if (idx < 0) idx = 0;
+    else idx = Math.max(0, Math.min(items.length - 1, idx + delta));
+
+    highlightExplorerItem(items[idx], { dismissIfLeavingOpened: true });
+}
+
+function focusExplorerParentColumn() {
+    if (kbFocusLevel <= EXPLORER_MIN_LEVEL) return;
+    kbFocusLevel -= 1;
+    while (kbFocusLevel > EXPLORER_MIN_LEVEL && !getColumnItems(getExplorerColumn(kbFocusLevel)).length) {
+        kbFocusLevel -= 1;
+    }
+    const col = getExplorerColumn(kbFocusLevel);
+    if (!col) return;
+    // Prefer the item that still owns the visible child columns.
+    const openedId = col.dataset.openedId;
+    const items = getColumnItems(col);
+    let target = items.find((el) => String(itemKey(el)) === String(openedId));
+    if (!target) target = col.querySelector(':scope > .item.selected') || items[0];
+    if (target) selectItem(target);
+    // Intentionally do NOT clear child columns here — they stay until Up/Down changes selection.
+    updateColumnFocusUI();
+}
+
+function handleExplorerKeydown(e) {
+    const overlay = document.getElementById('map-overlay');
+    if (overlay && overlay.style.display === 'flex') return;
+    const dialog = document.getElementById('map-dialog-overlay');
+    if (dialog && dialog.style.display === 'flex') return;
+    if (document.getElementById('context-menu')?.style.display === 'block') return;
+
+    const tag = (e.target && e.target.tagName) || '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || e.target?.isContentEditable) return;
+
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(e.key)) return;
+
+    const explorer = document.getElementById('finder-explorer');
+    if (!explorer) return;
+
+    const active = document.activeElement;
+    // Allow keys when focus is in the explorer (including New Folder / Manage Groups),
+    // or on the page body after closing overlays. Don't steal keys from nav/links outside.
+    const inExplorer = active === explorer || (active && explorer.contains(active));
+    const onPageChrome =
+        !active ||
+        active === document.body ||
+        active === document.documentElement;
+    if (!inExplorer && !onPageChrome) return;
+
+    e.preventDefault();
+    explorer.focus({ preventScroll: true });
+
+    if (e.key === 'ArrowUp') moveExplorerHighlight(-1);
+    else if (e.key === 'ArrowDown') moveExplorerHighlight(1);
+    else if (e.key === 'ArrowLeft') focusExplorerParentColumn();
+    else if (e.key === 'ArrowRight' || e.key === 'Enter') {
+        const col = getExplorerColumn(kbFocusLevel);
+        const item = col?.querySelector(':scope > .item.selected') || getColumnItems(col)[0];
+        if (item) openExplorerItem(item);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const explorer = document.getElementById('finder-explorer');
+    if (!explorer) return;
+    explorer.addEventListener('mousedown', (e) => {
+        if (e.target.closest('button')) return;
+        explorer.focus({ preventScroll: true });
+        // Clicking a column (not necessarily opening) moves keyboard focus to that column.
+        const col = e.target.closest('.finder-column');
+        if (col && col.dataset.level != null) {
+            kbFocusLevel = parseInt(col.dataset.level, 10);
+            updateColumnFocusUI();
+        }
+    });
+    document.addEventListener('keydown', handleExplorerKeydown);
+
+    // Open the user root immediately so Courses / Workspace / … appear as the first column.
+    (async () => {
+        await loadFolder(EXPLORER_ROOT_FOLDER_ID, EXPLORER_MIN_LEVEL);
+        kbFocusLevel = EXPLORER_MIN_LEVEL;
+        const col = getExplorerColumn(EXPLORER_MIN_LEVEL);
+        const first = getColumnItems(col)[0];
+        if (first) selectItem(first);
+        updateColumnFocusUI();
+        explorer.focus({ preventScroll: true });
+    })();
+});
+
 async function createNewFolder(parentId, level) {
     // 1. Get the column we are currently looking at
     const currentColumn = document.querySelector(`.finder-column[data-level="${level}"]`);
@@ -149,15 +345,16 @@ async function createNewFolder(parentId, level) {
     const username = "{{ request.user.username }}";
     const rootPath = `/Users/${username}_root/`;
     const protectedPaths = [`${rootPath}Courses/`, 
-                            `${rootPath}Standalone Assessments/`,
-                            `${rootPath}Shared for Collaboration/`,
+                            `${rootPath}Collaboration/`,
+                            `${rootPath}Student Provided Assessments/`,
                             `${rootPath}Student Generated Assessments by Course/`,
+                            `${rootPath}Public Library/`,
                             `${rootPath}Public/`,
                             `${rootPath}Trash/`];
 
     // 2. Block if inside protected root or it is the root itself
     if (fullPath === rootPath || protectedPaths.some(p => fullPath.startsWith(p))) {
-        alert("Adding sub-folders is not permitted here.");
+        await mapAlert({ title: 'Not allowed', message: 'Adding sub-folders is not permitted here.' });
         return;
     }
 
@@ -184,7 +381,7 @@ async function createNewFolder(parentId, level) {
             // Replace your "else { alert('Error...'); }" with this:
             const errorData = await response.json();
             console.error("Server says:", errorData);
-            alert("Error: " + (errorData.error || "Unknown server error"));
+            await mapAlert({ title: 'Error', message: 'Error: ' + (errorData.error || 'Unknown server error') });
             // alert("Error creating folder.");
         }
     } catch (error) {
@@ -205,7 +402,6 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
     const menu = document.getElementById('context-menu');
     const renameOption = document.getElementById('menu-rename');
     const deleteOption = document.getElementById('menu-delete');
-    const openLinkOption = document.getElementById('menu-open-link');
     const restoreOption = document.getElementById('menu-restore');
     
     currentItem = { id, type, name, owner, location, hasItems, linkedId };
@@ -213,81 +409,143 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
 
     const rootPath = `/Users/`;
     const coursesFolder = `${rootPath}${username}_root/Courses/`;
-    const assessmentsFolder = `${rootPath}${username}_root/Standalone Assessments/`;
-    const problemsFolder = `${rootPath}${username}_root/Standalone Problems/`;
-    const sharedForCollab = `${rootPath}${username}_root/Shared for Collaboration/`;
-    const studentGeneratedAssessByCourse = `${rootPath}${username}_root/Student Generated Assessments by Course/`;
-    const publicFolder = `${rootPath}${username}_root/Public/`;
+    const workspaceFolder = `${rootPath}${username}_root/Workspace/`;
+    const sharedForCollab = `${rootPath}${username}_root/Collaboration/`;
+    const studentGeneratedAssessByCourse = `${rootPath}${username}_root/Student Provided Assessments/`;
+    const publicFolder = `${rootPath}${username}_root/Public Library/`;
     const trashFolder = `${rootPath}${username}_root/Trash/`;
 
+    // Legacy names still treated as core if migrate hasn't run yet.
+    const legacyAssessmentsFolder = `${rootPath}${username}_root/Standalone Assessments/`;
+    const legacyProblemsFolder = `${rootPath}${username}_root/Standalone Problems/`;
+    const legacySharedFolder = `${rootPath}${username}_root/Shared for Collaboration/`;
+    const legacyStudentFolder = `${rootPath}${username}_root/Student Generated Assessments by Course/`;
+    const legacyPublicFolder = `${rootPath}${username}_root/Public/`;
+
     const isSystemFolder = name_and_path.startsWith(`${coursesFolder}`);
-    const isCoreFolder = [rootPath, coursesFolder, assessmentsFolder, problemsFolder, sharedForCollab, studentGeneratedAssessByCourse, publicFolder, trashFolder].includes(name_and_path);
+    const isCoreFolder = [
+        rootPath,
+        coursesFolder,
+        workspaceFolder,
+        sharedForCollab,
+        studentGeneratedAssessByCourse,
+        publicFolder,
+        trashFolder,
+        legacyAssessmentsFolder,
+        legacyProblemsFolder,
+        legacySharedFolder,
+        legacyStudentFolder,
+        legacyPublicFolder,
+    ].includes(name_and_path);
 
     // Check if the file path sits squarely inside the Trash directory
-    const itemTrashed = [trashFolder].includes(location); // matches exact path
+    const itemTrashed = location === trashFolder || location === `${trashFolder}`; // parent is Trash root
     const isInTrash = location.startsWith(`${trashFolder}`);
-    
-    if (isInTrash && itemTrashed) {
-        // If it's in the trash, show Restore, keep Delete active (for hard-purging), hide Rename
+    const isTrashRootChild = isInTrash && (
+        location === trashFolder ||
+        name_and_path.replace(/[^/]+\/$/, '') === trashFolder
+    );
+    // location is parent path; if parent is Trash folder path, this item is a trash root
+    const isTopLevelTrashItem = isInTrash && location === trashFolder;
+
+    const copyOption = document.getElementById('menu-copy-workspace');
+    const shareOption = document.getElementById('menu-share');
+    const moveOption = document.getElementById('menu-move');
+    const viewOption = document.getElementById('menu-view-mode');
+    const editOption = document.getElementById('menu-edit-mode');
+    const gotoCourseOption = document.getElementById('menu-goto-course');
+    const leaveOption = document.getElementById('menu-leave');
+    const unshareOption = document.getElementById('menu-unshare');
+
+    [copyOption, shareOption, moveOption, viewOption, editOption, gotoCourseOption, leaveOption, unshareOption].forEach(el => {
+        if (el) el.style.display = 'none';
+    });
+
+    if (isInTrash && isTopLevelTrashItem) {
         restoreOption.style.display = 'block';
+        restoreOption.className = '';
         renameOption.style.display = 'none';
-        deleteOption.className = ""; // Enabled for absolute purge
+        deleteOption.className = '';
+        deleteOption.innerHTML = 'Delete Permanently';
     } else if (isInTrash) {
-        // If the trashed item is a sub-item inside of the trash, then disable 'delete' and 'restore' options
-        restoreOption.style.display = 'block';
+        restoreOption.style.display = 'none';
         renameOption.style.display = 'none';
-        deleteOption.className = canDelete ? "" : "disabled";
+        deleteOption.className = 'disabled';
+        deleteOption.innerHTML = 'Delete';
     } else {
-        // Normal behavior if outside trash
         restoreOption.style.display = 'none';
         renameOption.style.display = 'block';
-        
+        deleteOption.innerHTML = 'Delete';
+
         let canRename = !isSystemFolder && !isCoreFolder;
-        let canDelete = !isSystemFolder && !isCoreFolder && !hasItems;
+        // Workspace allows delete even with children (soft-trash)
+        const inWorkspace = location.startsWith(workspaceFolder) || name_and_path.startsWith(workspaceFolder);
+        const targetEl = e.target.closest('.item');
+        const isShared = targetEl && targetEl.getAttribute('data-shared') === 'true';
+        let canDelete = !isSystemFolder && !isCoreFolder && (inWorkspace || !hasItems) && !isShared;
         if (type === 'question_selection') canRename = false;
 
-        renameOption.className = canRename ? "" : "disabled";
-        deleteOption.className = canDelete ? "" : "disabled";
-    }
-
-    
-    if (openLinkOption && !isInTrash) {
-        if (linkedId && linkedId !== '') {
-            let label = "";
-            let url = "";
-
-            // Determine URL and Label based on folder_type
-            switch(type) {
-                case 'course':
-                    label = `<i class="fas fa-graduation-cap"></i> View Course`;
-                    url = `/courses/${linkedId}/`;
-                    break;
-                case 'assessment':
-                    label = `<i class="fas fa-file-signature"></i> Edit Assessment`;
-                    url = `/assessments/${linkedId}/edit/`;
-                    break;
-                case 'cqd':
-                    label = `<i class="fas fa-random"></i> View Distribution`;
-                    url = `/distributions/${linkedId}/`;
-                    break;
-                case 'aqg':
-                    label = `<i class="fas fa-list-ol"></i> View Question Group`;
-                    url = `/question-groups/${linkedId}/`;
-                    break;
-            }
-
-            if (label) {
-                openLinkOption.innerHTML = label;
-                openLinkOption.style.display = 'block';
-                openLinkOption.onclick = () => window.location.href = url;
-            } else {
-                openLinkOption.style.display = 'none';
-            }
+        renameOption.className = canRename ? '' : 'disabled';
+        deleteOption.className = canDelete ? '' : 'disabled';
+        if (isShared) {
+            deleteOption.title = 'Unshare this item before deleting it';
+            deleteOption.innerHTML = 'Delete (unshare first)';
         } else {
-            openLinkOption.style.display = 'none';
+            deleteOption.title = '';
+            deleteOption.innerHTML = 'Delete';
+        }
+
+        const userType = "{{ request.user.user_type }}";
+        const isStaffUser = userType === 'Teacher' || userType === 'IT_Support';
+        const inCourses = location.startsWith(coursesFolder);
+        const inCollab = location.startsWith(sharedForCollab);
+        const contentTypes = ['course', 'assessment', 'aqg', 'cqd', 'problem', 'folder'];
+
+        // Collaboration is a virtual listing — item paths still live under Workspace.
+        const inCollabListing = !!(
+            targetEl &&
+            (targetEl.classList.contains('item-collab-owned') ||
+                targetEl.classList.contains('item-collab-foreign'))
+        );
+        const isCollabOwnedShare = !!(targetEl && targetEl.classList.contains('item-collab-owned'));
+
+        if (isStaffUser && contentTypes.includes(type) && (inWorkspace || inCourses || inCollab || inCollabListing)) {
+            if (['course', 'assessment', 'aqg', 'cqd', 'problem'].includes(type) && copyOption) {
+                copyOption.style.display = 'block';
+            }
+        }
+        if (isStaffUser && inWorkspace && !isCoreFolder && shareOption) {
+            shareOption.style.display = 'block';
+        }
+        if (isStaffUser && inWorkspace && !isCoreFolder && moveOption) {
+            moveOption.style.display = 'block';
+        }
+
+        // Leave: non-owner collaborators on a Collaboration listing entry.
+        if (isStaffUser && targetEl && targetEl.classList.contains('item-collab-foreign') && leaveOption) {
+            leaveOption.style.display = 'block';
+        }
+        // Unshare: only the owner's shared roots as they appear under Collaboration.
+        if (isStaffUser && isCollabOwnedShare && unshareOption) {
+            unshareOption.style.display = 'block';
+        }
+
+        const perm = (targetEl && targetEl.getAttribute('data-perm')) || '';
+        const canEditContent = perm === 'owner' || perm === 'edit';
+        const canViewContent = canEditContent || perm === 'read_only';
+
+        // Courses folder: view-only open + normal Go to course (edit via normal course access)
+        if (type === 'course' && inCourses && linkedId) {
+            if (viewOption) viewOption.style.display = 'block';
+            if (gotoCourseOption) gotoCourseOption.style.display = 'block';
+        }
+
+        if (['course', 'assessment', 'problem'].includes(type) && (inWorkspace || inCollab || inCollabListing)) {
+            if (canViewContent && viewOption) viewOption.style.display = 'block';
+            if (canEditContent && editOption) editOption.style.display = 'block';
         }
     }
-    
+
     menu.style.display = 'block';
     menu.style.left = e.pageX + 'px';
     menu.style.top = e.pageY + 'px';
@@ -300,7 +558,25 @@ document.addEventListener('click', () => {
 
 async function handleDelete() {
     if (document.getElementById('menu-delete').classList.contains('disabled')) return;
-    if (!confirm(`Are you sure you want to delete "${currentItem.name}"? This will permanently delete the item.`)) return;
+    const targetEl = document.querySelector(`[data-branch-id="${currentItem.id}"]`)
+        || document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
+    if (targetEl && targetEl.getAttribute('data-shared') === 'true') {
+        await mapAlert({
+            title: 'Still shared',
+            message: 'This item is still shared. Unshare it (remove all collaborators) before deleting.',
+        });
+        return;
+    }
+    const inTrash = (currentItem.location || '').includes('/Trash/');
+    const msg = inTrash
+        ? `Permanently delete "${currentItem.name}"? This cannot be undone.`
+        : `Move "${currentItem.name}" to Trash? You can restore it within 30 days.`;
+    if (!(await mapConfirm({
+        title: inTrash ? 'Delete permanently' : 'Move to Trash',
+        message: msg,
+        confirmLabel: inTrash ? 'Delete' : 'Move to Trash',
+        danger: true,
+    }))) return;
 
     const element = document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
     if (!element) return;
@@ -325,10 +601,10 @@ async function handleDelete() {
             // REFRESH ONLY THIS COLUMN
             loadFolder(parentId, level);
         } else {
-            alert(`Delete failed: ${data.error}`);
+            await mapAlert({ title: 'Delete failed', message: `Delete failed: ${data.error}` });
         }
     } catch (err) {
-        alert("A network error occurred.");
+        await mapAlert({ title: 'Network error', message: 'A network error occurred.' });
     }
 }
 
@@ -340,7 +616,11 @@ async function handleRestore() {
     const parentId = element.getAttribute('data-parent-id');
     const level = parseInt(element.closest('.finder-column').dataset.level);
 
-    if (!confirm(`Do you want to restore "${currentItem.name}" to its original location?`)) return;
+    if (!(await mapConfirm({
+        title: 'Restore item',
+        message: `Do you want to restore "${currentItem.name}" to its original location?`,
+        confirmLabel: 'Restore',
+    }))) return;
 
     try {
         const response = await fetch('/trash/restore/', {
@@ -358,10 +638,10 @@ async function handleRestore() {
             // Refresh this specific dynamic column so the item cleanly disappears into production
             loadFolder(parentId, level);
         } else {
-            alert(`Restore execution failed: ${data.error}`);
+            await mapAlert({ title: 'Restore failed', message: `Restore execution failed: ${data.error}` });
         }
     } catch (err) {
-        alert("A network background error occurred.");
+        await mapAlert({ title: 'Network error', message: 'A network background error occurred.' });
     }
 }
 
@@ -394,26 +674,56 @@ async function handleRename() {
             // REFRESH ONLY THIS COLUMN
             loadFolder(parentId, level);
         } else {
-            alert(`Rename failed: ${data.error}`);
+            await mapAlert({ title: 'Rename failed', message: `Rename failed: ${data.error}` });
         }
     } catch (err) {
-        alert("A network error occurred.");
+        await mapAlert({ title: 'Network error', message: 'A network error occurred.' });
     }
 }
 </script>
 
 <div id="context-menu" class="custom-context-menu" style="display:none; position: fixed; z-index: 10000;">
     <ul>
-        <li id="menu-open-link" style="display:none; border-bottom: 1px solid #eee; font-weight: 600; color: #007aff;">
-            </li>
-
+        <li id="menu-view-mode" onclick="handleOpenMode('view')" style="display:none; font-weight: 600; color: #007aff;"><i class="fas fa-eye"></i> Open in View Mode</li>
+        <li id="menu-edit-mode" onclick="handleOpenMode('edit')" style="display:none; font-weight: 600; color: #007aff; border-bottom: 1px solid #eee;"><i class="fas fa-edit"></i> Open in Edit Mode</li>
+        <li id="menu-goto-course" onclick="handleGoToCourse()" style="display:none; font-weight: 600; color: #007aff; border-bottom: 1px solid #eee;"><i class="fas fa-external-link-alt"></i> Go to Course</li>
+        <li id="menu-copy-workspace" onclick="handleCopyToWorkspace()" style="display:none;"><i class="fas fa-copy"></i> Copy to Workspace</li>
+        <li id="menu-share" onclick="openShareOverlay()" style="display:none;"><i class="fas fa-share-alt"></i> Share</li>
+        <li id="menu-move" onclick="openMoveOverlay()" style="display:none;"><i class="fas fa-folder-open"></i> Move to…</li>
+        <li id="menu-leave" onclick="handleLeaveShare()" style="display:none;"><i class="fas fa-sign-out-alt"></i> Leave</li>
+        <li id="menu-unshare" onclick="handleUnshare()" style="display:none;"><i class="fas fa-unlink"></i> Unshare</li>
         <li id="menu-restore" onclick="handleRestore()" style="display:none; font-weight: 600; color: #28a745;">
             <i class="fas fa-undo"></i> Restore Item
         </li>
-
         <li id="menu-rename" onclick="handleRename()">Rename</li>
         <li id="menu-delete" onclick="handleDelete()">Delete</li>
     </ul>
 </div>
 
+<div id="map-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:20000; align-items:center; justify-content:center;">
+  <div id="map-overlay-panel" style="background:#fff; border-radius:10px; max-width:520px; width:92%; padding:20px; box-shadow:0 10px 40px rgba(0,0,0,.2);" role="dialog" aria-modal="true">
+    <h3 id="map-overlay-title" style="margin-top:0;"></h3>
+    <div id="map-overlay-body" style="margin:12px 0; color:#333;"></div>
+    <div id="map-overlay-actions" style="display:flex; gap:8px; justify-content:flex-end;"></div>
+  </div>
+</div>
+
+<div id="map-dialog-overlay" role="alertdialog" aria-modal="true" aria-labelledby="map-dialog-title" aria-describedby="map-dialog-message">
+  <div id="map-dialog-panel">
+    <h3 id="map-dialog-title"></h3>
+    <p id="map-dialog-message"></p>
+    <div id="map-dialog-actions"></div>
+  </div>
+</div>
+
+<script>
+window.MAP_EXPLORER = {
+  username: "{{ request.user.username }}",
+  userType: "{{ request.user.user_type }}",
+  userId: {{ request.user.user_id }},
+  rootFolderId: {{ root_folder.id }},
+  rootFolderName: "{{ root_folder.name|escapejs }}"
+};
+</script>
+<script src="{% static 'assessment_tool/js/explorer_collab.js' %}"></script>
 {% endblock %}

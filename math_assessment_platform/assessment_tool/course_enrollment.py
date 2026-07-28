@@ -23,6 +23,10 @@ from .models import (
     StudentCourseEnrollment,
     UsersInCourse,
 )
+from .folder_roots import (
+    WORKSPACE_COURSE_MANAGEMENT_MESSAGE,
+    course_is_under_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +269,8 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
     """
     if getattr(student, "user_type", None) != "Student":
         raise ValueError("Only student accounts can be removed from the course roster this way.")
+    if course_is_under_workspace(course):
+        raise ValueError(WORKSPACE_COURSE_MANAGEMENT_MESSAGE)
 
     slot = (
         UsersInCourse.objects.select_for_update()

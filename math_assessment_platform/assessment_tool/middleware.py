@@ -2,6 +2,9 @@ from django.contrib.auth import logout
 from django.shortcuts import redirect
 from django.contrib import messages
 
+from .view_mode import VIEW_ONLY_MESSAGE, should_block_content_mutation, view_only_json_response
+
+
 class OneSessionPerUserMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
@@ -38,4 +41,31 @@ class OneSessionPerUserMiddleware:
                 # 3. Redirect
                 return redirect('login')
 
+        return self.get_response(request)
+
+
+class ContentViewOnlyMiddleware:
+    """Block course/assessment/problem/CQD/AQG saves while explorer view-only is set."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if should_block_content_mutation(request):
+            wants_json = (
+                "application/json" in (request.headers.get("Accept") or "")
+                or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+                or (request.content_type or "").startswith("application/json")
+                or request.path.startswith("/api/")
+                or "/api/" in request.path
+                or request.path.endswith("-ajax/")
+                or "ajax" in request.path
+            )
+            if wants_json:
+                return view_only_json_response()
+            messages.error(request, VIEW_ONLY_MESSAGE)
+            referer = request.META.get("HTTP_REFERER")
+            if referer:
+                return redirect(referer)
+            return redirect("dashboard")
         return self.get_response(request)

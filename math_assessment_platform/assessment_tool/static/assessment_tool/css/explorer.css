@@ -8,6 +8,12 @@
     overflow-x: auto;              /* Allows columns to scroll horizontally if you traverse deep */
     overflow-y: hidden;            /* Prevents the entire outer frame from scrolling downwards */
 }
+.finder-container:focus {
+    outline: none;
+}
+.finder-container:focus-visible {
+    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.35);
+}
 #dynamic-columns {
     display: flex;
     height: 100%;                  /* Forces internal columns to match the container restriction */
@@ -30,6 +36,170 @@
     /* 3. Optional layout safety properties */
     flex-direction: column;
     box-sizing: border-box;        /* Ensures padding doesn't distort height calculations */
+}
+.finder-column.keyboard-focus {
+    box-shadow: inset 0 0 0 2px rgba(0, 122, 255, 0.35);
+    background: #fafbfd;
+}
+
+/* Modern selects used in Share / Manage Groups overlays */
+.map-select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    display: inline-block;
+    width: 100%;
+    box-sizing: border-box;
+    background-color: #ffffff;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%2364748b' d='M1.41 0L6 4.58 10.59 0 12 1.41l-6 6-6-6z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 9px 36px 9px 12px;
+    font-size: 0.9rem;
+    line-height: 1.3;
+    color: #0f172a;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    cursor: pointer;
+}
+.map-select-sm {
+    width: auto;
+    min-width: 110px;
+    max-width: 220px;
+    padding: 6px 30px 6px 10px;
+    font-size: 0.85rem;
+    border-radius: 7px;
+    background-position: right 10px center;
+}
+.map-select:hover {
+    border-color: #94a3b8;
+}
+.map-select:focus {
+    outline: none;
+    border-color: #007aff;
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.18);
+}
+.map-select:disabled {
+    background-color: #f1f5f9;
+    color: #94a3b8;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+
+#map-dialog-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 21000;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+#map-dialog-panel {
+    background: #fff;
+    border-radius: 12px;
+    max-width: 440px;
+    width: 100%;
+    padding: 22px 22px 18px;
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+}
+#map-dialog-title {
+    margin: 0 0 8px;
+    font-size: 1.15rem;
+    color: #0f172a;
+}
+#map-dialog-message {
+    margin: 0;
+    color: #475569;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+#map-dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 18px;
+}
+.map-dialog-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.map-dialog-btn-secondary {
+    background: #e2e8f0;
+    color: #334155;
+}
+.map-dialog-btn-primary {
+    background: #007aff;
+    color: #fff;
+}
+.map-dialog-btn-danger {
+    background: #dc2626;
+    color: #fff;
+}
+
+.map-overlay-actions-hint {
+    flex: 1 1 180px;
+    font-size: 0.78rem;
+    color: #64748b;
+    line-height: 1.35;
+    margin-right: 8px;
+}
+
+.share-info-tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    color: #64748b;
+    cursor: help;
+}
+.share-info-tip .fa-info-circle {
+    font-size: 0.95rem;
+}
+.share-info-tip:hover,
+.share-info-tip:focus {
+    color: #007aff;
+    outline: none;
+}
+.share-info-tip-bubble {
+    display: none;
+    position: absolute;
+    right: 0;
+    left: auto;
+    top: calc(100% + 8px);
+    z-index: 5;
+    width: min(280px, 70vw);
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #0f172a;
+    color: #f8fafc;
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1.45;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.28);
+    white-space: normal;
+}
+.share-info-tip-bubble::before {
+    content: '';
+    position: absolute;
+    right: 6px;
+    left: auto;
+    top: -6px;
+    border: 6px solid transparent;
+    border-bottom-color: #0f172a;
+    border-top-width: 0;
+}
+.share-info-tip:hover .share-info-tip-bubble,
+.share-info-tip:focus .share-info-tip-bubble {
+    display: block;
 }
 /* Optional: Clean up scrollbar aesthetics on WebKit browsers (Chrome, Safari, Edge) */
 .finder-column::-webkit-scrollbar {
@@ -60,10 +230,38 @@
     font-size: 0.7rem;
     color: #c7c7cc;
 }
+.shared-badge {
+    margin-left: 6px;
+    font-size: 0.75rem;
+    color: #007aff;
+    flex-shrink: 0;
+}
+.item.item-shared .shared-badge {
+    opacity: 0.95;
+}
+.item.selected .shared-badge {
+    color: white !important;
+}
+/* Collaboration root: owned shares vs items shared with you */
+.item.item-collab-owned {
+    background-color: #e8f2ff;
+}
+.item.item-collab-foreign {
+    background-color: #f1f5f9;
+}
+.item.item-collab-owned:hover:not(.selected) {
+    background-color: #d9e9ff;
+}
+.item.item-collab-foreign:hover:not(.selected) {
+    background-color: #e2e8f0;
+}
 .item {
     padding: 8px 12px;
     cursor: pointer;
     transition: background 0.1s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 /* The Highlight State */

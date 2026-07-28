@@ -1,6 +1,7 @@
 """Template context processors for assessment_tool."""
 
 from .notifications import user_has_unread_notifications
+from .view_mode import is_content_view_only
 
 
 def notifications(request):
@@ -12,3 +13,7 @@ def notifications(request):
         except Exception:
             has_unread = False
     return {"has_unread_notifications": has_unread}
+
+
+def content_view_only(request):
+    return {"content_view_only": is_content_view_only(request)}

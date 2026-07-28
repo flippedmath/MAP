@@ -13,7 +13,11 @@
         <div class="assessments-pane-header">
         <div class="header-title-block">
             <h2 style="display: inline-flex; align-items: center; gap: 10px;">
+                {% if disable_assessment_back or not course %}
+                <span style="color: #cbd5e1; font-size: 1.5rem; cursor: not-allowed;" title="No parent course to return to" aria-disabled="true"><i class="fas fa-arrow-left"></i></span>
+                {% else %}
                 <a href="{% url 'assessment_view' course.id %}" style="text-decoration: none; color: #64748b; font-size: 1.5rem;"><i class="fas fa-arrow-left"></i></a>
+                {% endif %}
                 Setup: {{ assessment.name }}
             </h2>
             <p class="subtitle">Organize question groupings and build structural assessment sections.</p>

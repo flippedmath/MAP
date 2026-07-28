@@ -1,6 +1,13 @@
 from django.contrib.auth.signals import user_logged_in
 from django.db.models.signals import pre_save, post_delete, post_save
 from django.dispatch import receiver
+
+from .folder_roots import (
+    protected_subtree_prefixes,
+    default_top_level_folders_for_user,
+    user_root_path,
+)
+from .collaboration import enroll_user_in_public_if_eligible
 from .models import BranchGroup, UserProfile, Course, Problem
 
 
@@ -22,23 +29,15 @@ def sync_name_to_order(sender, instance, **kwargs):
 
     # 1. Logic for protection
     username = instance.owner.username
-    root_path = f"/Users/{username}_root/"
+    root_path = user_root_path(username)
     
     # Try to calculate path, fallback to empty if it's a brand new unsaved object
     try:
         current_path = instance.get_parent_path() + instance.name + "/"
-    except:
+    except Exception:
         current_path = ""
 
-    protected_roots = [
-        root_path,
-        f"{root_path}Courses/",
-        f"{root_path}Standalone Assessments/",
-        f"{root_path}Shared for Collaboration/",
-        f"{root_path}Student Generated Assessments by Course/",
-        f"{root_path}Public/"
-        f"{root_path}Trash/",
-    ]
+    protected_roots = [root_path] + protected_subtree_prefixes(username)
 
     is_protected = any(current_path.startswith(p) for p in protected_roots) if current_path else False
 
@@ -56,22 +55,23 @@ def create_user_folder_structure(sender, instance, created, **kwargs):
             owner=instance,
             parent=None,
             folder_type="folder",
-            order=f"{instance.username}_root", # default order to the name, it will cause it to sort alphabetically
+            order=f"{instance.username}_root",
         )
 
-        # 2. Define the default sub-folders
-        # NOTE: This should not be changed in order to conform with proper path naming restrictions
-        default_folders = ['Courses', 'Standalone Assessments', 'Standalone Problems', 'Shared for Collaboration', 'Student Generated Assessments by Course', 'Public', 'Trash']
-
-        # 3. Create each sub-folder nested under the root
-        for folder_name in default_folders:
+        # 2. Default sub-folders (student-only folder included when user_type is Student)
+        for folder_name in default_top_level_folders_for_user(instance):
             BranchGroup.objects.create(
                 name=folder_name,
                 owner=instance,
                 parent=root,
                 folder_type="folder",
-                order=folder_name, # default order to the name, it will cause it to sort alphabetically
+                order=folder_name,
             )
+
+    # Teachers / IT Support: public membership; IT also joins non-deletable admins.
+    if getattr(instance, "user_type", None) in ("Teacher", "IT_Support"):
+        enroll_user_in_public_if_eligible(instance)
+
 
 @receiver(post_delete, sender=Course)
 def delete_course_image(sender, instance, **kwargs):

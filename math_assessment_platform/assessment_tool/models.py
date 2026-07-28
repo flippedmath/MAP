@@ -285,6 +285,16 @@ class BranchGroup(models.Model):
     # Tracking fields for the Restore Engine
     previous_parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='historical_children')
     previous_status = models.CharField(max_length=50, null=True, blank=True)
+    trashed_at = models.DateTimeField(blank=True, null=True, db_comment='Set when moved to Trash; cleared on restore. Used for 30-day purge.')
+    share_group = models.ForeignKey(
+        'PermissionGroup',
+        models.DO_NOTHING,
+        db_column='share_group_id',
+        blank=True,
+        null=True,
+        related_name='share_roots',
+        db_comment='When set, this branch is a share root linked to a permission_group.',
+    )
 
     def get_parent_path(self):
         """Returns the path of the folder containing this item."""
@@ -726,11 +736,61 @@ class ParentUserCourse(models.Model):
 
 class PermissionGroup(models.Model):
     name = models.CharField(max_length=255)
+    owner = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='owner_id',
+        blank=True,
+        null=True,
+        related_name='owned_permission_groups',
+        db_comment='Optional user owner. Prefer owner_pg for system groups like public.',
+    )
+    owner_pg = models.ForeignKey(
+        'self',
+        models.DO_NOTHING,
+        db_column='owner_pg_id',
+        blank=True,
+        null=True,
+        related_name='owned_as_group',
+        db_comment='When set, this group is owned by another permission_group (e.g. public → admins).',
+    )
+    system_protected = models.BooleanField(
+        default=False,
+        db_comment='System groups (admins, public) cannot be deleted even when empty.',
+    )
 
     class Meta:
         managed = False
         db_table = 'permission_group'
         db_table_comment = 'Simply creates virtual groups that a set of permissions can apply to. For instance, to mass enable certain folder access by adding a user to the permission group.'
+
+
+class PermissionGroupSubgroup(models.Model):
+    """Nesting of permission groups. Postgres PK is (parent_pg_id, child_pg_id)."""
+
+    parent = models.ForeignKey(
+        PermissionGroup,
+        models.DO_NOTHING,
+        db_column='parent_pg_id',
+        primary_key=True,
+        related_name='child_subgroup_links',
+    )
+    child = models.ForeignKey(
+        PermissionGroup,
+        models.DO_NOTHING,
+        db_column='child_pg_id',
+        related_name='parent_subgroup_links',
+    )
+    permissions = models.CharField(
+        max_length=32,
+        db_comment='Inherited branch access cap through this edge: edit | read_only.',
+    )
+
+    class Meta:
+        managed = False
+        db_table = 'permission_group_subgroup'
+        unique_together = (('parent', 'child'),)
+        db_table_comment = 'Child group nested under parent; used for transitive share ACL.'
 
 
 class Problem(models.Model):
@@ -914,21 +974,53 @@ class UserCourseActivation(models.Model):
 
 
 class UserPermissionGroup(models.Model):
-    user = models.OneToOneField(PermissionGroup, models.DO_NOTHING, primary_key=True)  # The composite primary key (user_id, pg_id) found, that is not supported. The first column is selected.
-    pg_id = models.IntegerField()
+    """Membership of a user in a named PermissionGroup.
+
+    Postgres PK is (user_id, pg_id). Django 4.2 has no composite PK, so
+    ``user`` is marked primary_key for ORM convenience; always filter by both
+    columns when updating a specific membership.
+    """
+
+    PERM_OWNER = 'owner'
+    PERM_EDIT = 'edit'
+    PERM_READ_ONLY = 'read_only'
+
+    user = models.ForeignKey(
+        UserProfile,
+        models.DO_NOTHING,
+        db_column='user_id',
+        primary_key=True,
+        related_name='permission_group_memberships',
+    )
+    permission_group = models.ForeignKey(
+        PermissionGroup,
+        models.DO_NOTHING,
+        db_column='pg_id',
+        related_name='memberships',
+    )
+    permissions = models.CharField(
+        max_length=32,
+        db_comment='Membership role: owner | edit | read_only.',
+    )
 
     class Meta:
         managed = False
         db_table = 'user_permission_group'
-        unique_together = (('user', 'pg_id'),)
-        db_table_comment = 'Pairs users with groups. It will show they have respective permissions the given group has.'
+        unique_together = (('user', 'permission_group'),)
+        db_table_comment = 'Pairs users with groups and their role within that group.'
 
 
 class UsersGroup(models.Model):
-    branch = models.ForeignKey(BranchGroup, models.DO_NOTHING)
+    """Branch ACL rows. Postgres has no surrogate id — use raw SQL helpers in collaboration.py."""
+
+    PERM_OWNER = 'owner'
+    PERM_EDIT = 'edit'
+    PERM_READ_ONLY = 'read_only'
+
+    branch = models.ForeignKey(BranchGroup, models.DO_NOTHING, db_column='branch_id', primary_key=True)
     user = models.ForeignKey(UserProfile, models.DO_NOTHING, blank=True, null=True, db_comment='This or permission_group need to be specified')
     permission_group = models.ForeignKey(PermissionGroup, models.DO_NOTHING, db_column='permission_group', blank=True, null=True, db_comment='This or user_id need to be specified')
-    permissions = models.TextField()  # This field type is a guess.
+    permissions = models.CharField(max_length=32, db_comment='Branch ACL: owner | edit | read_only.')
     creation_date = models.DateTimeField(blank=True, null=True)
 
     class Meta:
@@ -936,6 +1028,7 @@ class UsersGroup(models.Model):
         db_table = 'users_group'
         unique_together = (('branch', 'user'),)
         db_table_comment = "This is essentially the same thing as a permission list per 'branch_group' folder"
+
 
 
 class UsersInCourse(models.Model):

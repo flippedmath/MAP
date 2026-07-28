@@ -88,6 +88,7 @@
                         <tr style="text-align: left; border-bottom: 2px solid #e2e8f0;">
                             <th style="padding: 8px;">Recipient</th>
                             <th style="padding: 8px;">Type</th>
+                            <th style="padding: 8px;">Account</th>
                             <th style="padding: 8px;">Enrollment status</th>
                             <th style="padding: 8px;">Created</th>
                             <th style="padding: 8px;">Expires</th>
@@ -102,6 +103,13 @@
                                 style="border-bottom: 1px solid #f1f5f9;{% if row.awaiting_student and highlight_invite_id != row.invite.id|stringformat:'s' %} background: #fffbeb;{% endif %}">
                                 <td style="padding: 8px;">{{ row.recipient }}</td>
                                 <td style="padding: 8px;">{{ row.kind }}</td>
+                                <td style="padding: 8px;">
+                                    {% if row.account_exists %}
+                                        <span style="font-weight: 600; color: #047857;">Registered user</span>
+                                    {% else %}
+                                        <span style="font-weight: 600; color: #b45309;">No account yet</span>
+                                    {% endif %}
+                                </td>
                                 <td style="padding: 8px;">
                                     <span {% if row.awaiting_student %}style="font-weight: 600; color: #b45309;"{% elif row.status == 'accepted' %}style="color: #047857;"{% elif row.status == 'voided' %}style="color: #64748b;"{% endif %}>
                                         {{ row.status_label }}

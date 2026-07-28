@@ -51,6 +51,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'assessment_tool.middleware.OneSessionPerUserMiddleware', # must come after 'AuthenticationMiddleware' and 'MessageMiddleware'
+    'assessment_tool.middleware.ContentViewOnlyMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -68,6 +69,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'assessment_tool.context_processors.notifications',
+                'assessment_tool.context_processors.content_view_only',
             ],
         },
     },

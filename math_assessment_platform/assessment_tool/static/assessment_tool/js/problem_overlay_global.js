@@ -2762,16 +2762,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (inputsContainer) inputsContainer.addEventListener('click', handleSidebarComponentActions);
 
 
-    // 🎯 4. GLOBAL EDIT TRIGGER CONTROLLER HANDLER: Fetch Data on demand from database
-    document.body.addEventListener('click', async function(e) {
-        const editBtn = e.target.closest('.btn-edit-problem-details');
-        if (!editBtn) return;
+    // 🎯 4. GLOBAL EDIT TRIGGER: open existing problem workspace overlay
+    async function openProblemWorkspaceOverlay(problemId, options = {}) {
+        if (!problemId || !workspaceOverlay) return;
+        const mode = (options.mode || (options.readOnly ? 'view' : 'edit')).toLowerCase();
 
-        e.preventDefault();
-        const itemRow = editBtn.closest('[data-id], .problem-item-row');
-        if (!itemRow) return;
-
-        const problemId = itemRow.getAttribute('data-id');
         workspaceOverlay.setAttribute('data-current-problem-id', problemId);
         workspaceOverlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
@@ -2783,7 +2778,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             // 🚀 Fetch real-time row options and saved elements compiled for this specific problem instance
-            const response = await fetch(`/problem/${problemId}/workspace/`);
+            const response = await fetch(`/problem/${problemId}/workspace/?mode=${encodeURIComponent(mode)}`);
             const data = await response.json();
 
             if (!data.success) {
@@ -3124,6 +3119,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 saveStatusSpan.innerHTML = `<i class="fas fa-exclamation-triangle" style="color:#ef4444;"></i> Loading Failed`;
             }
         }
+    }
+
+    window.openProblemOverlay = openProblemWorkspaceOverlay;
+
+    document.body.addEventListener('click', async function(e) {
+        const editBtn = e.target.closest('.btn-edit-problem-details');
+        if (!editBtn) return;
+
+        e.preventDefault();
+        const itemRow = editBtn.closest('[data-id], .problem-item-row');
+        if (!itemRow) return;
+
+        const problemId = itemRow.getAttribute('data-id');
+        await openProblemWorkspaceOverlay(problemId, { mode: 'edit' });
     });
 
     if (closeOverlayBtn) {

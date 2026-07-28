@@ -26,6 +26,8 @@ from .course_enrollment import (
     get_active_enrollment,
     kick_student_from_course,
 )
+from .collaboration import can_edit_branch, can_read_branch
+from .view_mode import apply_explorer_mode_from_request
 from .course_invites import (
     INVITE_SESSION_KEY,
     claim_invite_for_new_user,
@@ -38,6 +40,7 @@ from .course_invites import (
     is_unclaimed_email_invite,
     redeem_block_reason,
     user_already_enrolled_in_course,
+    user_can_access_course_management,
     user_can_manage_course,
     user_matches_invite,
     void_course_invite,
@@ -651,6 +654,11 @@ def course_list_view(request):
 @login_required
 @user_passes_test(lambda u: u.user_type in ['Teacher', 'IT_Support'], login_url='/dashboard/')
 def file_explorer(request):
+    # Returning to the explorer exits content view-only mode.
+    from .view_mode import SESSION_KEY
+    if request.session.get(SESSION_KEY):
+        request.session[SESSION_KEY] = False
+
     # Get the root folder for the user
     root_folder = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
     
@@ -663,6 +671,7 @@ def file_explorer(request):
     # We pass the root folder initially; Javascript will handle loading sub-columns
     return render(request, 'assessment_tool/explorer.html', {
         'root_folder': root_folder,
+        'load_problem_workspace': True,
     })
 
 # AJAX view to get contents of a specific folder
@@ -670,51 +679,113 @@ def file_explorer(request):
 from django.db.models import Count
 
 def get_folder_contents(request, group_id):
-    group = get_object_or_404(BranchGroup, id=group_id, owner=request.user)
-
-    # 1. Update query to select/prefetch 'problem' alongside other types
-    # Problems now live inside this single unified query as unique BranchGroup leaves!
-    folders_qs = BranchGroup.objects.filter(parent=group)\
-        .select_related('parent__parent')\
-        .prefetch_related('course', 'assessment', 'cqd', 'aqg', 'problem')\
-        .order_by('order')
-
-    # 2. This old lookup can be completely removed or set to empty since 
-    # problems are no longer orphans floating inside a directory container row.
-    problems_qs = Problem.objects.none() 
-
-    # 3. Check if items exist (now safely driven by folders_qs)
-    has_items = folders_qs.exists()
-
-    # 4. Package contents
-    contents = {
-        'folders': folders_qs,
-        'problems': problems_qs, # Kept as empty queryset for backwards compatibility with column.html until Part 2
-        'has_items': has_items,
-    }
-
-    # Logic to determine if this folder allows creating a child folder
-    username = request.user.username
-    current_path = group.get_parent_path() + group.name + "/"
-    root_sys = f"/Users/{username}_root/"
-    
-    # Is this folder one of the protected system paths?
-    is_protected = (
-        current_path == root_sys or 
-        current_path.startswith(f"{root_sys}Courses/") or 
-        current_path.startswith(f"{root_sys}Standalone Assessments/") or
-        current_path.startswith(f"{root_sys}Shared for Collaboration/") or
-        current_path.startswith(f"{root_sys}Student Generated Assessments by Course/") or
-        current_path.startswith(f"{root_sys}Public/") or 
-        current_path.startswith(f"{root_sys}Trash/")
+    from .folder_roots import (
+        FOLDER_STUDENT_PROVIDED,
+        FOLDER_COLLABORATION,
+        FOLDER_PUBLIC_LIBRARY,
+        FOLDER_TRASH,
+        FOLDER_WORKSPACE,
+        protected_subtree_prefixes,
+        user_root_path,
+    )
+    from .collaboration import (
+        can_read_branch,
+        collaboration_share_roots_for_user,
+        effective_permission,
+        public_library_roots_for_user,
+        shared_branch_id_set,
     )
 
+    group = get_object_or_404(BranchGroup, id=group_id)
+    username = request.user.username
+    current_path = group.get_parent_path() + group.name + "/"
+    root_sys = user_root_path(username)
+
+    owns = group.owner_id == request.user.user_id
+    if not owns and not can_read_branch(request.user, group):
+        return JsonResponse({'error': 'Permission denied.'}, status=403)
+
+    folders_list = []
+    trash_folder = None
+    show_manage_groups = False
+
+    if owns and group.parent_id is not None and group.name == FOLDER_COLLABORATION:
+        folders_list = collaboration_share_roots_for_user(request.user)
+        show_manage_groups = request.user.user_type in ('Teacher', 'IT_Support')
+    elif owns and group.parent_id is not None and group.name == FOLDER_PUBLIC_LIBRARY:
+        folders_list = public_library_roots_for_user(request.user)
+    else:
+        folders_qs = (
+            BranchGroup.objects.filter(parent=group)
+            .select_related('parent__parent', 'owner')
+            .prefetch_related('course', 'assessment', 'cqd', 'aqg', 'problem')
+            .order_by('order')
+        )
+        if group.parent_id is None and getattr(request.user, 'user_type', None) != 'Student':
+            folders_qs = folders_qs.exclude(
+                name__in=[
+                    FOLDER_STUDENT_PROVIDED,
+                    'Student Generated Assessments by Course',
+                ]
+            )
+        if group.parent_id is None:
+            others = []
+            for f in folders_qs:
+                if f.name == FOLDER_TRASH:
+                    trash_folder = f
+                else:
+                    others.append(f)
+            folders_list = others
+        else:
+            folders_list = list(folders_qs)
+
+    # Mark shared items under Workspace for UI indicator + delete gating.
+    under_workspace = (
+        f"/{username}_root/{FOLDER_WORKSPACE}/" in current_path
+        or (owns and group.name == FOLDER_WORKSPACE)
+    )
+    under_collaboration = owns and group.name == FOLDER_COLLABORATION
+    if under_workspace and folders_list:
+        shared_ids = shared_branch_id_set([f.id for f in folders_list])
+        for f in folders_list:
+            f.is_shared = f.id in shared_ids
+            f.collab_list_owned = None
+    else:
+        for f in folders_list:
+            f.is_shared = False
+            if under_collaboration:
+                f.collab_list_owned = f.owner_id == request.user.user_id
+            else:
+                f.collab_list_owned = None
+
+    for f in folders_list:
+        if f.owner_id == request.user.user_id:
+            f.viewer_perm = 'owner'
+        else:
+            f.viewer_perm = effective_permission(request.user, f) or ''
+
+    problems_qs = Problem.objects.none()
+    has_items = bool(folders_list) or bool(trash_folder)
+
+    is_protected = (
+        current_path == root_sys
+        or any(current_path.startswith(p) for p in protected_subtree_prefixes(username))
+    )
+    if owns and group.name in (FOLDER_COLLABORATION, FOLDER_PUBLIC_LIBRARY, FOLDER_TRASH):
+        is_protected = True
+
     return render(request, 'assessment_tool/partials/column.html', {
-        'contents': contents,
+        'contents': {
+            'folders': folders_list,
+            'problems': problems_qs,
+            'has_items': has_items,
+            'trash_folder': trash_folder,
+        },
         'parent_id': group.id,
         'level': int(request.GET.get('level', 1)),
         'is_protected': is_protected,
         'current_path': current_path,
+        'show_manage_groups': show_manage_groups,
     })
 
 
@@ -765,14 +836,13 @@ def create_folder(request):
     username = request.user.username
     parent_full_path = parent_folder.get_parent_path() + parent_folder.name + "/"
     
-    root = f"/Users/{username}_root/"
-    # Block creation inside Courses or Standalone Assessments
-    if parent_full_path.startswith(f"{root}Courses/") or \
-       parent_full_path.startswith(f"{root}Standalone Assessments/") or \
-       parent_full_path.startswith(f"{root}Shared for Collaboration/") or \
-       parent_full_path.startswith(f"{root}Student Generated Assessments by Course/") or \
-       parent_full_path.startswith(f"{root}Public/") or \
-       parent_full_path.startswith(f"{root}Trash/"):
+    from .folder_roots import protected_subtree_prefixes, user_root_path
+    root = user_root_path(username)
+    # Block creation inside Courses / Collaboration / Student Provided / Public Library / Trash.
+    # Workspace intentionally allows sub-folders.
+    if parent_full_path == root or any(
+        parent_full_path.startswith(p) for p in protected_subtree_prefixes(username)
+    ):
         return JsonResponse({
             'error': 'This directory is managed by the system. Sub-folders cannot be added here.'
         }, status=403)
@@ -866,34 +936,48 @@ def delete_item(request, item_type=None, item_id=None):
 
     # 3. System Protection Check
     username = request.user.username
-    root = f"/Users/{username}_root/"
-    protected = [f"{root}Courses/", 
-                 f"{root}Standalone Assessments/", 
-                 f"{root}Standalone Problems/",
-                 f"{root}Shared for Collaboration/",
-                 f"{root}Student Generated Assessments by Course/",
-                 f"{root}Public/",
-                 f"{root}Trash/"]
+    from .folder_roots import core_top_level_paths
+    protected = core_top_level_paths(username)
 
     if item_full_path in protected:
         return JsonResponse({'error': 'System folders cannot be deleted.'}, status=403)
 
-    # 4. Empty Check for Folders
-    if item_type == 'folder':
-        has_content = (
-            BranchGroup.objects.filter(parent=obj).exists() or
-            Course.objects.filter(branch_location=obj).exists() or
-            Assessment.objects.filter(branch_location=obj).exists() or
-            AssessmentQuestionGroup.objects.filter(branch_location=obj).exists() or
-            CustomQuestionDistribution.objects.filter(assigned_folder=obj).exists()
-        )
-        if has_content:
-            return JsonResponse({'error': 'Folder is not empty.'}, status=400)
+    # 4–5. Soft-delete to Trash unless already in Trash (then hard-delete).
+    # Non-empty Workspace trees are allowed (entire subtree moves with the root).
+    from .folder_roots import FOLDER_TRASH, FOLDER_WORKSPACE
+    trash_prefix = f"/Users/{username}_root/{FOLDER_TRASH}/"
+    workspace_prefix = f"/Users/{username}_root/{FOLDER_WORKSPACE}/"
+    already_in_trash = item_full_path.startswith(trash_prefix) or (
+        obj.parent and obj.parent.name == FOLDER_TRASH
+    )
 
-    # 5. Execute
+    if not already_in_trash:
+        from .collaboration import share_root_has_non_owner_collaborators
+        if share_root_has_non_owner_collaborators(obj):
+            return JsonResponse({
+                'error': (
+                    'This item is still shared. Unshare it (remove all collaborators) '
+                    'before moving it to Trash.'
+                ),
+                'code': 'shared_blocked',
+            }, status=400)
+        # Soft-delete: move selected root into Trash (children stay attached).
+        with transaction.atomic():
+            # Resolve branch node for problem deletes
+            branch_node = obj
+            if item_type == 'problem':
+                branch_node = obj
+            send_to_trash(branch_node, request.user)
+        return JsonResponse({'status': 'success', 'action': 'trashed'})
+
+    # Hard-delete from Trash (selected trash root only; nested items cannot be deleted alone).
+    if obj.parent is None or obj.parent.name != FOLDER_TRASH:
+        return JsonResponse({
+            'error': 'Only top-level Trash items can be permanently deleted. Restore the parent or empty from the trash root.'
+        }, status=400)
+
     with transaction.atomic():
         if item_type == 'problem':
-            # Clear cqd_pair rows first — they use DO_NOTHING and block Postgres deletes.
             problem_item = (
                 Problem.objects.select_related('cqd', 'branch_location')
                 .filter(id=item_id)
@@ -913,7 +997,7 @@ def delete_item(request, item_type=None, item_id=None):
         else:
             return JsonResponse({'error': f'Unsupported purge routing requested for type: {item_type}.'}, status=403)
 
-    return JsonResponse({'status': 'success'})
+    return JsonResponse({'status': 'success', 'action': 'purged'})
 
 
 def rename_item(request):
@@ -984,20 +1068,13 @@ def rename_item(request):
             return JsonResponse({'error': error}, status=400)
 
         username = request.user.username
-        protected_roots = [
-            f"/Users/{username}_root/Courses/",
-            f"/Users/{username}_root/Standalone Assessments/",
-            f"/Users/{username}_root/Standalone Problems/",
-            f"/Users/{username}_root/Shared for Collaboration/",
-            f"/Users/{username}_root/Student Generated Assessments by Course/",
-            f"/Users/{username}_root/Public/",
-            f"/Users/{username}_root/Trash/",
-        ]
+        from .folder_roots import core_top_level_paths, user_root_path
+        protected_roots = core_top_level_paths(username)
 
         if item_full_path in protected_roots:
             return JsonResponse({'error': 'Cannot rename system folders.'}, status=403)
 
-        if item_full_path.startswith(f"/Users/{username}_root/Courses/") and not request.resolver_match.view_name == 'course_list':
+        if item_full_path.startswith(f"{user_root_path(username)}Courses/") and not request.resolver_match.view_name == 'course_list':
             if request.user.user_type != 'IT_Support' and item_type == 'folder' and obj.name in ['Courses', 'Trash']:
                 return JsonResponse({'error': 'Cannot rename Course items here.'}, status=403)
 
@@ -1052,12 +1129,17 @@ def restore_trash_item_view(request):
     try:
         data = json.loads(request.body)
         folder_id = data.get('folder_id')
-        
+
         folder = get_object_or_404(BranchGroup, id=folder_id, owner=request.user)
-        
-        # Fire our polymorphic handler function from utils
+
+        # Only trash-root children can be restored (not nested descendants).
+        if not folder.parent or folder.parent.name != 'Trash':
+            return JsonResponse({
+                'error': 'Only items at the top of Trash can be restored. Restore the parent folder instead.'
+            }, status=400)
+
         restore_item_from_trash(request, folder)
-        
+
         return JsonResponse({'status': 'success'})
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=400)
@@ -1103,8 +1185,17 @@ def login_view(request):
 
 @login_required
 def course_detail_view(request, course_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(
+        Course.objects.select_related('branch_location'),
+        id=course_id,
+    )
     user_type = request.user.user_type # Pulling from your established profile engine
+    if not _user_can_access_course_page(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect('dashboard')
+
+    allow_edit = _user_can_mutate_course_content(request.user, course)
+    apply_explorer_mode_from_request(request, allow_edit=allow_edit)
 
     # 1. Unpack html markup string safely out of the course JSON field
     intro_html_content = ""
@@ -1118,7 +1209,7 @@ def course_detail_view(request, course_id):
 
     # 2. Process Rich Text Form Updates
     if request.method == 'POST' and 'introduction_payload' in request.POST:
-        if user_type not in ['Teacher', 'IT_Support']:
+        if user_type not in ['Teacher', 'IT_Support'] or not allow_edit:
             messages.error(request, "Unauthorized operation framework.")
             return redirect('course_detail', course_id=course.id)
             
@@ -1145,10 +1236,17 @@ def course_detail_view(request, course_id):
 
 @login_required
 def course_management_view(request, course_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(
+        Course.objects.select_related('branch_location'),
+        id=course_id,
+    )
     if not user_can_manage_course(request.user, course):
         messages.error(request, "You do not have permission to manage this course.")
         return redirect('dashboard')
+    if not user_can_access_course_management(request.user, course):
+        from .folder_roots import WORKSPACE_COURSE_MANAGEMENT_MESSAGE
+        messages.error(request, WORKSPACE_COURSE_MANAGEMENT_MESSAGE)
+        return redirect('course_detail', course_id=course.id)
 
     invite_form = CourseInviteForm()
 
@@ -1268,7 +1366,7 @@ def course_management_view(request, course_id):
             'within_reimbursement_window': within_week,
         })
 
-    invites = (
+    invites = list(
         UserCourseActivation.objects.filter(
             course=course,
             status=UserCourseActivation.STATUS_PENDING,
@@ -1276,6 +1374,21 @@ def course_management_view(request, course_id):
         .select_related('target_user', 'created_by', 'slot')
         .order_by('-creation_date', '-pk')
     )
+    # Live check: unclaimed email invites may match an account created after the invite.
+    emails_to_check = {
+        (inv.temp_email or '').strip().lower()
+        for inv in invites
+        if not inv.target_user_id and inv.temp_email
+    }
+    existing_emails = set()
+    if emails_to_check:
+        existing_emails = {
+            (email or '').strip().lower()
+            for email in UserProfile.objects.filter(
+                user_email__in=emails_to_check
+            ).values_list('user_email', flat=True)
+        }
+
     invite_rows = []
     for inv in invites:
         target = inv.target_user
@@ -1283,8 +1396,16 @@ def course_management_view(request, course_id):
             recipient = target.username
             if target.user_email:
                 recipient = f"{target.username} ({target.user_email})"
+            account_exists = True
         else:
             recipient = inv.temp_email or inv.invited_username or '—'
+            email_key = (inv.temp_email or '').strip().lower()
+            account_exists = bool(email_key and email_key in existing_emails)
+            if not account_exists and inv.invited_username:
+                # Username invites normally set target_user; keep a live fallback.
+                account_exists = UserProfile.objects.filter(
+                    username__iexact=inv.invited_username
+                ).exists()
         invite_kind = 'username' if inv.invited_username else 'email'
         status = inv.status
         invite_rows.append({
@@ -1294,6 +1415,7 @@ def course_management_view(request, course_id):
             'status': status,
             'status_label': invite_status_label(status),
             'awaiting_student': status == UserCourseActivation.STATUS_PENDING,
+            'account_exists': account_exists,
             'redeem_url': request.build_absolute_uri(
                 reverse('course_invite_redeem', kwargs={'code': inv.code})
             ),
@@ -1764,47 +1886,120 @@ def reorder_assessment_ajax(request, course_id):
         return JsonResponse({'success': False, 'error': str(e)}, status=400)
 
 
-@login_required
-def assessment_setup_view(request, course_id, assessment_id):
-    # 🎯 SCOPED PERMISSION CHECK: Verify username matching across the usersincourse set
-    is_teacher = Course.objects.filter(
-        id=course_id,
-        usersincourse__user=request.user,
-        usersincourse__user__user_type='Teacher'
-    ).exists()
-    
+def _user_can_open_assessment_setup(user, course, assessment) -> bool:
+    user_type = getattr(user, 'user_type', 'Student')
+    if user.is_staff or user_type == 'IT_Support':
+        return True
+    if course is not None and Course.objects.filter(
+        id=course.id,
+        usersincourse__user=user,
+        usersincourse__user__user_type='Teacher',
+    ).exists():
+        return True
+    branch = getattr(assessment, 'branch_location', None)
+    if branch is not None and can_read_branch(user, branch):
+        return True
+    return False
+
+
+def _user_can_mutate_assessment_setup(user, course, assessment) -> bool:
+    user_type = getattr(user, 'user_type', 'Student')
+    if user.is_staff or user_type == 'IT_Support':
+        return True
+    branch = getattr(assessment, 'branch_location', None)
+    if branch is not None and can_edit_branch(user, branch):
+        return True
+    if course is not None and Course.objects.filter(
+        id=course.id,
+        usersincourse__user=user,
+        usersincourse__user__user_type='Teacher',
+    ).exists():
+        return True
+    return False
+
+
+def _user_can_access_course_page(user, course) -> bool:
+    user_type = getattr(user, 'user_type', 'Student')
+    if user.is_staff or user_type == 'IT_Support':
+        return True
+    if getattr(course, 'owner_id', None) == getattr(user, 'user_id', None):
+        return True
+    if UsersInCourse.objects.filter(course=course, user=user).exists():
+        return True
+    branch = getattr(course, 'branch_location', None)
+    return branch is not None and can_read_branch(user, branch)
+
+
+def _user_can_mutate_course_content(user, course) -> bool:
+    user_type = getattr(user, 'user_type', 'Student')
+    if user.is_staff or user_type == 'IT_Support':
+        return True
+    branch = getattr(course, 'branch_location', None)
+    if branch is not None and can_edit_branch(user, branch):
+        return True
+    if UsersInCourse.objects.filter(
+        course=course,
+        user=user,
+        user__user_type='Teacher',
+    ).exists():
+        return True
+    return False
+
+
+def _render_assessment_setup(request, course, assessment, *, disable_back_to_course=False):
+    allow_edit = _user_can_mutate_assessment_setup(request.user, course, assessment)
+    apply_explorer_mode_from_request(request, allow_edit=allow_edit)
     user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
-        messages.error(request, "You do not have access to manage this assessment configuration.")
-        return redirect('course_dashboard', course_id=course_id)
-
-    course = get_object_or_404(Course, id=course_id)
-    assessment = get_object_or_404(Assessment.objects.select_related('branch_location'), id=assessment_id, course=course)
-    
-    # Retrieve current question groups in lexicographical order
     aqg_groups = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order')
-
     context = {
         'course': course,
         'assessment': assessment,
         'aqg_groups': aqg_groups,
         'user_type': user_type if user_type == 'IT_Support' else 'Teacher',
         'load_problem_workspace': True,
+        'disable_assessment_back': disable_back_to_course or course is None,
     }
     return render(request, 'assessment_tool/assessment_setup.html', context)
 
 
 @login_required
+def assessment_setup_view(request, course_id, assessment_id):
+    course = get_object_or_404(Course, id=course_id)
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location'),
+        id=assessment_id,
+        course=course,
+    )
+    if not _user_can_open_assessment_setup(request.user, course, assessment):
+        messages.error(request, "You do not have access to manage this assessment configuration.")
+        return redirect('course_detail', course_id=course_id)
+    return _render_assessment_setup(request, course, assessment, disable_back_to_course=False)
+
+
+@login_required
+def assessment_edit_by_id_view(request, assessment_id):
+    """Open assessment setup from explorer (no course navigation context)."""
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location', 'course'),
+        id=assessment_id,
+    )
+    course = assessment.course
+    if not _user_can_open_assessment_setup(request.user, course, assessment):
+        messages.error(request, "You do not have access to this assessment.")
+        return redirect('file_explorer')
+    # Loaded as a standalone assessment entry — back to course is not meaningful.
+    return _render_assessment_setup(request, course, assessment, disable_back_to_course=True)
+
+
+@login_required
 @require_POST
 def create_aqg_ajax(request, course_id, assessment_id):
-    is_teacher = UsersInCourse.objects.filter(
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location'),
+        id=assessment_id,
         course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-    
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
 
     try:
@@ -1814,8 +2009,6 @@ def create_aqg_ajax(request, course_id, assessment_id):
         clean_name = re.sub(r'\s+', ' ', raw_name)
         if not clean_name:
             return JsonResponse({'success': False, 'error': 'Section name cannot be empty.'}, status=400)
-
-        assessment = get_object_or_404(Assessment.objects.select_related('branch_location'), id=assessment_id, course_id=course_id)
         
         last_aqg = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order').last()
         prev_order = last_aqg.order if last_aqg else ""
@@ -2626,8 +2819,9 @@ def start_student_assessment_session(request, assessment_id):
     username = request.user.username
     
     # 1. Ensure the specific student course storage path exists
-    # Target Root: /Users/{username}_root/Student Generated Assessments by Course/{Course_Name}/
-    target_root_path = f"/Users/{username}_root/Student Generated Assessments by Course/{course.name}/"
+    # Target Root: /Users/{username}_root/Student Provided Assessments/{Course_Name}/
+    from .folder_roots import student_provided_assessments_path
+    target_root_path = student_provided_assessments_path(username, course.name)
     
     with transaction.atomic():
         # Get or create the course branch container inside the student's virtual layout hierarchy
@@ -2798,13 +2992,17 @@ def verify_workspace_clearance(user, problem):
     """
     Validates structural user clearance across three conditions:
     - User is 'IT_Support'
-    - User is the owner of the branch group tied to the problem
+    - User has ≥ edit ACL on the problem branch (includes owner)
     - User is a 'Teacher' registered inside the course ancestry track
     """
     if not user.is_authenticated or user.user_type == 'Student':
         return False
         
     if user.user_type == 'IT_Support':
+        return True
+
+    branch = getattr(problem, 'branch_location', None)
+    if branch is not None and can_edit_branch(user, branch):
         return True
         
     if problem.branch_location and problem.branch_location.owner == user:
@@ -2820,6 +3018,16 @@ def verify_workspace_clearance(user, problem):
             return True
             
     return False
+
+
+def verify_workspace_read_clearance(user, problem):
+    """Read access for problem workspace overlay (view or edit ACL)."""
+    if verify_workspace_clearance(user, problem):
+        return True
+    if not user.is_authenticated or user.user_type == 'Student':
+        return False
+    branch = getattr(problem, 'branch_location', None)
+    return branch is not None and can_read_branch(user, branch)
 
 
 
@@ -2905,29 +3113,42 @@ def grade_problem_workspace_preview(request, problem_id):
     })
 
 
-def _user_can_manage_assessment(request, course_id):
-    is_teacher = UsersInCourse.objects.filter(
+def _user_can_manage_assessment(request, course_id, assessment=None):
+    """Course teacher / IT, or ≥ edit ACL on the assessment or course branch."""
+    user = request.user
+    user_type = getattr(user, 'user_type', 'Student')
+    if user_type == 'IT_Support' or user.is_staff:
+        return True
+    if UsersInCourse.objects.filter(
         course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-    user_type = getattr(request.user, 'user_type', 'Student')
-    return bool(is_teacher or user_type == 'IT_Support' or request.user.is_staff)
+        user=user,
+        user__user_type='Teacher',
+    ).exists():
+        return True
+    branch = getattr(assessment, 'branch_location', None) if assessment is not None else None
+    if branch is None:
+        course = (
+            Course.objects.filter(pk=course_id)
+            .select_related('branch_location')
+            .first()
+        )
+        branch = getattr(course, 'branch_location', None) if course else None
+    return bool(branch is not None and can_edit_branch(user, branch))
 
 
 @login_required
 def assessment_practice_test_view(request, course_id, assessment_id):
     """Teacher practice-test page for an assessment (ephemeral, not saved)."""
-    if not _user_can_manage_assessment(request, course_id):
-        messages.error(request, "You do not have access to preview this assessment.")
-        return redirect('course_dashboard', course_id=course_id)
-
     course = get_object_or_404(Course, id=course_id)
     assessment = get_object_or_404(
         Assessment.objects.select_related('branch_location'),
         id=assessment_id,
         course=course,
     )
+    if not _user_can_open_assessment_setup(request.user, course, assessment):
+        messages.error(request, "You do not have access to preview this assessment.")
+        return redirect('course_dashboard', course_id=course_id)
+
     user_type = getattr(request.user, 'user_type', 'Student')
     return render(request, 'assessment_tool/assessment_practice_test.html', {
         'course': course,
@@ -2942,10 +3163,14 @@ def assessment_practice_test_view(request, course_id, assessment_id):
 @require_POST
 def assessment_practice_test_start_ajax(request, course_id, assessment_id):
     """Assemble fully rendered practice-test instances for this assessment."""
-    if not _user_can_manage_assessment(request, course_id):
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location', 'course'),
+        id=assessment_id,
+        course_id=course_id,
+    )
+    if not _user_can_open_assessment_setup(request.user, assessment.course, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized.'}, status=403)
 
-    assessment = get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
     try:
         data = json.loads(request.body) if request.body else {}
     except json.JSONDecodeError:
@@ -2954,7 +3179,13 @@ def assessment_practice_test_start_ajax(request, course_id, assessment_id):
     confirm_drafts = bool(data.get('confirm_drafts'))
     confirm_zero_sets = bool(data.get('confirm_zero_sets'))
 
-    assembled = assemble_practice_test(assessment, actor_user=request.user)
+    from .view_mode import is_content_view_only
+
+    assembled = assemble_practice_test(
+        assessment,
+        actor_user=request.user,
+        allow_status_mutation=not is_content_view_only(request),
+    )
     skipped_drafts = assembled.get('skipped_drafts') or []
     zero_count_sets = assembled.get('zero_count_sets') or []
     omitted_render_failures = assembled.get('omitted_render_failures') or []
@@ -2991,10 +3222,13 @@ def assessment_practice_test_start_ajax(request, course_id, assessment_id):
 @require_POST
 def assessment_practice_test_grade_ajax(request, course_id, assessment_id):
     """Batch-grade an ephemeral practice test in one request."""
-    if not _user_can_manage_assessment(request, course_id):
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location', 'course'),
+        id=assessment_id,
+        course_id=course_id,
+    )
+    if not _user_can_open_assessment_setup(request.user, assessment.course, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized.'}, status=403)
-
-    get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
 
     try:
         payload = json.loads(request.body)
@@ -3433,13 +3667,22 @@ def save_problem_workspace(request, problem_id):
 
 
 
-@user_passes_test(lambda u: u.is_superuser or u.is_staff, login_url='/dashboard/')
 @login_required
+@user_passes_test(
+    lambda u: getattr(u, 'user_type', None) in ('Teacher', 'IT_Support') or u.is_staff,
+    login_url='/dashboard/',
+)
 def problem_workspace_editor(request, problem_id):
     try:
-        problem = Problem.objects.get(pk=problem_id)
+        problem = Problem.objects.select_related('branch_location').get(pk=problem_id)
     except Problem.DoesNotExist:
         return JsonResponse({"success": False, "error": "Problem not found"}, status=404)
+
+    if not verify_workspace_read_clearance(request.user, problem):
+        return JsonResponse({"success": False, "error": "Permission denied."}, status=403)
+
+    allow_edit = verify_workspace_clearance(request.user, problem)
+    apply_explorer_mode_from_request(request, allow_edit=allow_edit)
     
     # 1. Fetch available EntityType options
     all_types = EntityType.objects.all()

@@ -35,6 +35,11 @@
                             <span>Notifications</span>
                             <span class="nav-unread-dot nav-unread-dot--item is-hidden" aria-hidden="true"></span>
                         </a>
+                        {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
+                        <a href="{% url 'file_explorer' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Explorer</span>
+                        </a>
+                        {% endif %}
                         <div class="nav-account-menu-divider" role="separator"></div>
                         <form action="{% url 'logout' %}" method="post" class="nav-account-logout-form">
                             {% csrf_token %}
@@ -88,6 +93,7 @@
     {% if user.is_authenticated %}
         <script src="{% static 'assessment_tool/js/nav_account_menu.js' %}"></script>
         <script src="{% static 'assessment_tool/js/local_datetime.js' %}"></script>
+        <script src="{% static 'assessment_tool/js/view_only_toast.js' %}"></script>
     {% endif %}
 </body>
 </html>

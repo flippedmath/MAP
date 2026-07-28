@@ -20,6 +20,10 @@ from django.utils import timezone
 
 from .models import UserCourseActivation, UserProfile, UsersInCourse
 from .course_enrollment import start_enrollment_for_slot
+from .folder_roots import (
+    WORKSPACE_COURSE_MANAGEMENT_MESSAGE,
+    course_is_under_workspace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,18 @@ def user_can_manage_course(user, course) -> bool:
         user=user,
         user__user_type="Teacher",
     ).exists()
+
+
+def user_can_access_course_management(user, course) -> bool:
+    """
+    Roster / invite UI for courses under Courses (not Workspace drafts).
+
+    Edit mode still allows content edits; management (invite/kick) stays blocked
+    while the course folder is under Workspace.
+    """
+    if not user_can_manage_course(user, course):
+        return False
+    return not course_is_under_workspace(course)
 
 
 def _aware(dt):
@@ -109,6 +125,9 @@ def user_already_enrolled_in_course(course, user) -> bool:
 
 @transaction.atomic
 def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCourseActivation:
+    if course_is_under_workspace(course):
+        raise ValueError(WORKSPACE_COURSE_MANAGEMENT_MESSAGE)
+
     kind, value = normalize_recipient(recipient_raw)
     target_user = None
     temp_email = None
@@ -457,6 +476,9 @@ def enroll_user_from_invite(invite: UserCourseActivation, user: UserProfile) -> 
 
     if getattr(user, "user_type", None) != "Student":
         return False, "Only student accounts can accept course invitations."
+
+    if course_is_under_workspace(invite.course):
+        return False, WORKSPACE_COURSE_MANAGEMENT_MESSAGE
 
     if getattr(user, "unactivated_account", False):
         return False, "Verify your email before joining the course."

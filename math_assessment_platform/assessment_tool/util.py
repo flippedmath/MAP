@@ -178,8 +178,8 @@ def clone_assessment_payload(old_assessment, new_folder, new_owner, context):
     new_asm.pk = None
     new_asm.owner = new_owner
     new_asm.branch_location = new_folder
-    # Link to the course currently being cloned in this tree
-    new_asm.course = context['course']
+    # Link to the course currently being cloned in this tree (may be None for standalone)
+    new_asm.course = context.get('course')
     new_asm.save()
     context['assessment'] = new_asm
     return new_asm
@@ -187,16 +187,23 @@ def clone_assessment_payload(old_assessment, new_folder, new_owner, context):
 def clone_aqg_payload(old_aqg, new_folder, new_owner, context):
     new_aqg = copy.deepcopy(old_aqg)
     new_aqg.pk = None
+    new_aqg.id = None
     new_aqg.branch_location = new_folder
-    new_aqg.assessment = context['assessment']
+    new_aqg.assessment = context.get('assessment')
     new_aqg.save()
+    context['aqg'] = new_aqg
+    # Nested CQDs under this AQG should not keep a stale CQD pointer from a sibling path.
+    context['cqd'] = None
     return new_aqg
 
 def clone_cqd_payload(old_cqd, new_folder, new_owner, context):
     new_cqd = copy.deepcopy(old_cqd)
     new_cqd.pk = None
-    new_cqd.branch_location = new_folder
+    new_cqd.id = None
+    # OneToOne: must point at the newly created branch folder, not the source folder.
+    new_cqd.assigned_folder = new_folder
     new_cqd.save()
+    context['cqd'] = new_cqd
     return new_cqd
 
 def clone_problem_payload(old_prob, new_folder, new_owner, context):
@@ -209,12 +216,23 @@ def clone_problem_payload(old_prob, new_folder, new_owner, context):
     new_prob.id = None
     new_prob.owner = new_owner
     new_prob.branch_location = new_folder
-    
+    # Remap structural FKs onto the clone tree currently being built.
+    if old_prob.aqg_id:
+        new_prob.aqg = context.get('aqg')
+    else:
+        new_prob.aqg = None
+    if old_prob.cqd_id:
+        new_prob.cqd = context.get('cqd')
+    else:
+        new_prob.cqd = None
+
     # Safely handle replication of physical custom math script source files on server storage
     # TODO: placeholder for replicating any sub-tables connected to problem
             
     new_prob.save()
     copy_problem_content(old_prob, new_prob)
+    if new_prob.cqd_id and new_prob.branch_location_id:
+        _ensure_cqd_pair(new_prob.cqd, new_prob, new_prob.branch_location)
     return new_prob
 
 
@@ -628,7 +646,7 @@ def remove_problem_from_cqd(problem):
     return problem, None
 
 
-def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starter_node=False):
+def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starter_node=False, force_name=None):
     if context is None:
         context = {'course': None, 'assessment': None, 'aqg': None, 'cqd': None}
 
@@ -638,17 +656,20 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
     t_name = old_folder.name
     # if it's the first node, change the name, otherwise keep the name the same
     if starter_node:
-        # Duplicate the BranchGroup (Folder)
-        # We need a NEW folder for the NEW course to satisfy the OneToOne constraint
-        t_name = f"{old_folder.name}"
-        # This means the name has a (1) or some other number at the end (#).
-        #  So crop it out since 'get_valid_unique_name' will add a unique combination back in
-        if '(' in t_name:
-            split_name = t_name.split()
-            t_name = " ".join(split_name[:len(split_name) - 1])
-        t_name, error = get_valid_unique_name(BranchGroup, new_parent, t_name)
-        if error:
-            return JsonResponse({'error': error}, status=400)
+        if force_name:
+            t_name = force_name
+        else:
+            # Duplicate the BranchGroup (Folder)
+            # We need a NEW folder for the NEW course to satisfy the OneToOne constraint
+            t_name = f"{old_folder.name}"
+            # This means the name has a (1) or some other number at the end (#).
+            #  So crop it out since 'get_valid_unique_name' will add a unique combination back in
+            if '(' in t_name:
+                split_name = t_name.split()
+                t_name = " ".join(split_name[:len(split_name) - 1])
+            t_name, error = get_valid_unique_name(BranchGroup, new_parent, t_name)
+            if error:
+                return JsonResponse({'error': error}, status=400)
 
     # 1. Clone the Folder (The Container)
     new_folder = BranchGroup.objects.create(
@@ -687,29 +708,45 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
 def send_to_trash(folder, user):
     """
     Quarantines a folder tree into the user's Trash folder.
+    Sets previous_parent / trashed_at on the selected root only.
     """
     with transaction.atomic():
-        # 1. Find the user's Trash folder root
-        # Adjust the filter name to match how you look up your root folders
         BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
         trash_root = BranchGroup.objects.get(
-            name='Trash', 
-            parent__name=f"{user.username}_root"
+            name='Trash',
+            parent__name=f"{user.username}_root",
+            owner=user,
         )
-        
-        # 2. Track history before breaking links
+
         folder.previous_parent = folder.parent
-        if hasattr(folder, 'course'):
+        from django.utils import timezone as dj_tz
+        folder.trashed_at = dj_tz.now()
+
+        if getattr(folder, 'folder_type', None) == 'course' and hasattr(folder, 'course'):
             folder.previous_status = folder.course.status
-            
-            # 3. Mark the payload status as deleted
             course = folder.course
             course.status = 'deleted'
-            course.save()
+            course.save(update_fields=['status'])
 
-        # 4. Move physical directory location to Trash root
         folder.parent = trash_root
         folder.save()
+
+
+def restore_to_previous_parent(folder, user, fallback_name='Workspace'):
+    """Restore a trash-root item to previous_parent (or named fallback under user root)."""
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    target_parent = folder.previous_parent
+    if not target_parent:
+        user_root = BranchGroup.objects.filter(owner=user, parent__isnull=True).first()
+        target_parent = BranchGroup.objects.filter(
+            owner=user, parent=user_root, name=fallback_name
+        ).first() or user_root
+
+    folder.parent = target_parent
+    folder.previous_parent = None
+    folder.trashed_at = None
+    folder.save()
+
 
 def restore_course_payload(request, folder):
     """
@@ -717,83 +754,42 @@ def restore_course_payload(request, folder):
     """
     course = folder.course
     user = request.user
-    
-    # 1. Fallback safety check: If original parent was wiped, find the general Courses/ folder
-    target_parent = folder.previous_parent
-    if not target_parent:
-        BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
-        target_parent = BranchGroup.objects.get(
-            name='Courses', 
-            parent__name=f"{user.username}_root"
-        )
-        
-    # 2. Put folder back in its place
-    folder.parent = target_parent
-    folder.previous_parent = None # Clear history hook
-    folder.save()
-    
-    # 3. Revert Course Status
-    course.status = folder.previous_status or 'developing' # Fallback default
+
+    restore_to_previous_parent(folder, user, fallback_name='Courses')
+
+    course.status = folder.previous_status or 'developing'
     folder.previous_status = None
+    folder.save(update_fields=['previous_status'])
     course.save()
 
-# --- Placeholders for other types ---
-def restore_assessment_payload(request, folder):
-    """
-    Polymorphic sub-handler to restore an assessment folder out of Trash
-    and flip its dashboard status back to 'upcoming'.
-    """
-    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
-    # 1. Trace up to find the logged-in user's top-level root directory node
-    user_root = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
-    
-    if user_root:
-        # 2. Locate the default 'Courses' subfolder provisioned for this user by signals.py
-        courses_folder = BranchGroup.objects.filter(
-            parent=user_root,
-            name='Courses',
-            folder_type='folder'
-        ).first()
-        
-        # 3. Move the assessment's folder back under 'Courses' (or fallback to the user root)
-        folder.parent = courses_folder if courses_folder else user_root
-        folder.save()
 
-    # 4. 🎯 RE-ACTIVATE DASHBOARD ROW (FIXED LOOKUP)
+def restore_assessment_payload(request, folder):
+    """Restore assessment folder out of Trash to previous_parent (fallback Workspace)."""
+    restore_to_previous_parent(folder, request.user, fallback_name='Workspace')
     try:
-        # Query the Assessment directly using the current folder's ID
         Assessment = apps.get_model('assessment_tool', 'Assessment')
         assessment = Assessment.objects.filter(branch_location=folder).first()
-        
-        if assessment:
+        if assessment and getattr(assessment, 'status', None) == 'deleted':
             assessment.status = 'locked'
-            assessment.save()
-        else:
-            raise ValueError(f"No matching Assessment record found tracking folder ID {folder.id}.")
-            
+            assessment.save(update_fields=['status'])
     except Exception as e:
         raise ValueError(f"Failed to synchronize assessment lifecycle status: {str(e)}")
-    
 
-# I am currently not going to implement a 'restore' procedure for 'aqg'.
-# If it is deleted, then just recreate it
+
 def restore_aqg_payload(request, folder):
-    pass
+    restore_to_previous_parent(folder, request.user, fallback_name='Workspace')
 
-# I am currently not going to implement a 'restore' procedure for 'cqd'.
-# If it is deleted, then just recreate it
+
 def restore_cqd_payload(request, folder):
-    pass
+    restore_to_previous_parent(folder, request.user, fallback_name='Workspace')
 
-# I am currently not going to implement a 'restore' procedure for 'folder'.
-# If it is deleted, then just recreate it
+
 def restore_folder_payload(request, folder):
-    pass
+    restore_to_previous_parent(folder, request.user, fallback_name='Workspace')
 
-# I am currently not going to implement a 'restore' procedure for 'problem'.
-# If it is deleted, then just recreate it
+
 def restore_problem_payload(request, folder):
-    pass
+    restore_to_previous_parent(folder, request.user, fallback_name='Workspace')
 
 def restore_item_from_trash(request, folder):
     """
@@ -8101,13 +8097,15 @@ def build_practice_problem_instance_with_retries(
     *,
     actor_user=None,
     max_extra_attempts=5,
+    allow_status_mutation=True,
 ):
     """
     Build a practice instance with up to ``1 + max_extra_attempts`` tries.
 
     On the first failure for a ``complete`` problem: demote to ``draft`` and
-    (after retries finish) notify the owner once. If all attempts fail, omit
-    the problem from the assembled test.
+    (after retries finish) notify the owner once — unless ``allow_status_mutation``
+    is False (e.g. explorer view-only). If all attempts fail, omit the problem
+    from the assembled test.
     """
     from .notifications import notify_owner_complete_problem_render_failure
 
@@ -8157,7 +8155,7 @@ def build_practice_problem_instance_with_retries(
                 "succeeded_on_attempt": attempt,
             }
 
-        if was_complete and not demoted:
+        if allow_status_mutation and was_complete and not demoted:
             problem.problem_status = "draft"
             problem.save(update_fields=["problem_status"])
             demoted = True
@@ -8193,7 +8191,7 @@ def build_practice_problem_instance_with_retries(
     }
 
 
-def assemble_practice_test(assessment, actor_user=None):
+def assemble_practice_test(assessment, actor_user=None, allow_status_mutation=True):
     """
     Walk assessment question groups in order and build ephemeral practice slots.
     Returns dict with problems, warnings (drafts / zero-count sets), skipped_drafts,
@@ -8228,6 +8226,7 @@ def assemble_practice_test(assessment, actor_user=None):
         build_result = build_practice_problem_instance_with_retries(
             problem,
             actor_user=actor_user,
+            allow_status_mutation=allow_status_mutation,
         )
         if not build_result.get("included"):
             omitted_render_failures.append({

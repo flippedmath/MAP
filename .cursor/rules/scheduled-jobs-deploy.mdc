@@ -27,5 +27,6 @@ Prompt the developer and complete:
 | Job | Schedule | Entry point | Marker / local crontab |
 |-----|----------|-------------|------------------------|
 | Purge notification trash older than 30 days | Daily 03:15 local | `math_assessment_platform/scripts/purge_trashed_notifications.sh` → `manage.py purge_trashed_notifications` | Marker `MAP:purge_trashed_notifications`. Local: `15 3 * * * .../scripts/purge_trashed_notifications.sh` |
+| Purge explorer Trash older than 30 days | Daily 03:20 local | `math_assessment_platform/scripts/purge_trashed_branch_groups.sh` → `manage.py purge_trashed_branch_groups` | Marker `MAP:purge_trashed_branch_groups`. Local: `20 3 * * * .../scripts/purge_trashed_branch_groups.sh` |
 
-Log (local): `math_assessment_platform/logs/purge_trashed_notifications.log` (gitignored).
+Log (local): `math_assessment_platform/logs/purge_trashed_notifications.log` and `math_assessment_platform/logs/purge_trashed_branch_groups.log` (gitignored).

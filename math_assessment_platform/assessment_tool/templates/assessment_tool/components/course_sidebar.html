@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
+{% load custom_tags %}
 
 {% block extra_css %}
 <link href="{% static 'assessment_tool/css/course_sidebar.css' %}" rel="stylesheet">
@@ -26,10 +27,13 @@
             </a>
             
             {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
+            {% course_allows_management course as show_course_management %}
+            {% if show_course_management %}
             <a href="{% url 'course_management' course.id %}" class="nav-item {% if active_tab == 'management' %}active{% endif %}">
                 <span class="nav-icon">📊</span>
                 <span class="nav-label">Course Management</span>
             </a>
+            {% endif %}
             <a href="#" class="nav-item {% if active_tab == 'settings' %}active{% endif %} disabled-placeholder">
                 <span class="nav-icon">⚙️</span>
                 <span class="nav-label">Course Settings</span>

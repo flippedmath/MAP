@@ -2,6 +2,7 @@ from django.urls import path
 from django.contrib.auth import views as auth_views
 from django.views.generic import RedirectView
 from . import views
+from . import collaboration_views
 
 urlpatterns = [
     path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
@@ -36,7 +37,29 @@ urlpatterns = [
     path('delete-item/', views.delete_item, name='delete_item'),
     path('delete-item/<str:item_type>/<int:item_id>/', views.delete_item, name='delete_item_with_args'),
     path('trash/restore/', views.restore_trash_item_view, name='restore_trash_item'),
+    path('collaboration/groups/', collaboration_views.manage_groups_data, name='manage_groups_data'),
+    path('collaboration/groups/create/', collaboration_views.manage_group_create, name='manage_group_create'),
+    path('collaboration/groups/cleanup-empty/', collaboration_views.manage_groups_cleanup_empty, name='manage_groups_cleanup_empty'),
+    path('collaboration/groups/<int:pg_id>/', collaboration_views.manage_group_detail, name='manage_group_detail'),
+    path('collaboration/groups/<int:pg_id>/add/', collaboration_views.manage_group_add_member, name='manage_group_add_member'),
+    path('collaboration/groups/<int:pg_id>/remove/', collaboration_views.manage_group_remove_member, name='manage_group_remove_member'),
+    path('collaboration/groups/<int:pg_id>/add-subgroup/', collaboration_views.manage_group_add_subgroup, name='manage_group_add_subgroup'),
+    path('collaboration/groups/<int:pg_id>/remove-subgroup/', collaboration_views.manage_group_remove_subgroup, name='manage_group_remove_subgroup'),
+    path('collaboration/groups/<int:pg_id>/delete/', collaboration_views.manage_group_delete, name='manage_group_delete'),
+    path('collaboration/groups/<int:pg_id>/transfer/', collaboration_views.manage_group_transfer_owner, name='manage_group_transfer_owner'),
+    path('collaboration/users/search/', collaboration_views.collab_user_search, name='collab_user_search'),
+    path('collaboration/share/<int:branch_id>/', collaboration_views.share_item_context, name='share_item_context'),
+    path('collaboration/share/<int:branch_id>/grant/', collaboration_views.share_item_grant, name='share_item_grant'),
+    path('collaboration/share/<int:branch_id>/update-perm/', collaboration_views.share_item_update_perm, name='share_item_update_perm'),
+    path('collaboration/share/<int:branch_id>/revoke/', collaboration_views.share_item_revoke, name='share_item_revoke'),
+    path('collaboration/share/<int:branch_id>/unshare/', collaboration_views.share_item_unshare, name='share_item_unshare'),
+    path('collaboration/share/<int:branch_id>/leave/', collaboration_views.share_item_leave, name='share_item_leave'),
+    path('collaboration/copy-to-workspace/', collaboration_views.copy_to_workspace, name='copy_to_workspace'),
+    path('collaboration/move-item/', collaboration_views.move_item, name='move_item'),
+    path('collaboration/reorder/', collaboration_views.reorder_siblings, name='reorder_siblings'),
+    path('get-branch-preview/<int:branch_id>/', collaboration_views.branch_preview, name='branch_preview'),
     path('courses/<int:course_id>/', views.course_detail_view, name='course_detail'),
+    path('assessments/<int:assessment_id>/edit/', views.assessment_edit_by_id_view, name='assessment_edit_by_id'),
     path('course/<int:course_id>/management/', views.course_management_view, name='course_management'),
     path('invite/<str:code>/', views.course_invite_redeem_view, name='course_invite_redeem'),
     path('invite/<str:code>/signup/', views.course_invite_signup_view, name='course_invite_signup'),

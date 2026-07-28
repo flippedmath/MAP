@@ -2,8 +2,16 @@
 
 <div class="column-path-meta" data-path="{{ current_path }}" style="display:none;"></div>
 
+{% if show_manage_groups %}
+<div style="padding: 8px 10px; border-bottom: 1px solid #e5e5e5;">
+    <button type="button" class="btn-manage-groups" onclick="openManageGroups()"
+            style="width: 100%; text-align: left; background: none; border: none; color: #007aff; cursor: pointer; font-size: 0.9rem;">
+        <i class="fas fa-users"></i> Manage Groups
+    </button>
+</div>
+{% endif %}
+
 {% for group in contents.folders %}
-    {# Pre-determine the linked ID based on type for the context menu #}
     {% if group.folder_type == 'course' %}
         {% define group.course.id as linked_id %}
     {% elif group.folder_type == 'assessment' %}
@@ -12,39 +20,41 @@
         {% define group.cqd.id as linked_id %}
     {% elif group.folder_type == 'aqg' %}
         {% define group.aqg.id as linked_id %}
-    {# 🎯 NEW: Bind the primary key of the OneToOne linked Problem model record #}
     {% elif group.problem %}
         {% define group.problem.id as linked_id %}
     {% else %}
         {% define '' as linked_id %}
     {% endif %}
 
-    {# Every row in 'folders' is a BranchGroup, but we bifurcate behavior if it has a linked problem relation #}
     {% if group.problem %}
-        {# 📄 TERMINAL FILE ROW: This represents an explicit item node rather than an openable container directory #}
-        <div class="item item-file" 
+        <div class="item item-file{% if group.is_shared %} item-shared{% endif %}{% if group.collab_list_owned == True %} item-collab-owned{% elif group.collab_list_owned == False %} item-collab-foreign{% endif %}"
             data-id="{{ group.problem.id }}"
+            data-branch-id="{{ group.id }}"
             data-type="problem"
             data-location="{{ group.get_parent_path }}"
             data-parent-id="{{ parent_id }}"
-            onclick="selectItem(this); loadPreview('{{ group.problem.id }}', 'problem', {{ level|add:1 }})" 
+            data-shared="{% if group.is_shared %}true{% else %}false{% endif %}"
+            data-perm="{{ group.viewer_perm|default:'' }}"
+            draggable="true"
+            onclick="openExplorerItem(this)"
             oncontextmenu="showContextMenu(event, '{{ group.id }}', 'problem', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', false, '{{ linked_id }}')">
-            
             <i class="fas fa-question-circle icon-problem"></i>
             <span>{{ group.name }}</span>
-            {# No chevron right arrow is rendered here because it cannot drill open further columns #}
+            {% if group.is_shared %}<i class="fas fa-share-alt shared-badge" title="Shared"></i>{% endif %}
         </div>
     {% else %}
-        {# 📁 DIRECTORY CONTAINER ROW: Keep your standard folder/course/assessment/aqg/cqd workflow intact #}
-        <div class="item"
-            data-id="{{ group.id }}" 
-            data-type="{{ group.folder_type }}" 
+        <div class="item{% if group.is_shared %} item-shared{% endif %}{% if group.collab_list_owned == True %} item-collab-owned{% elif group.collab_list_owned == False %} item-collab-foreign{% endif %}"
+            data-id="{{ group.id }}"
+            data-branch-id="{{ group.id }}"
+            data-type="{{ group.folder_type }}"
             data-location="{{ group.get_parent_path }}"
             data-parent-id="{{ parent_id }}"
-            onclick="selectItem(this); loadFolder('{{ group.id }}', {{ level|default:1|add:1 }})" 
-            oncontextmenu="showContextMenu(event, '{{ group.id }}', '{{ group.folder_type }}', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', {{ group.branchgroup_set.exists|yesno:'true,false' }}, '{{ linked_id }}')">
-            
-            {# Dynamic Icons based on the Enum #}
+            data-shared="{% if group.is_shared %}true{% else %}false{% endif %}"
+            data-perm="{{ group.viewer_perm|default:'' }}"
+            draggable="true"
+            onclick="openExplorerItem(this)"
+            oncontextmenu="showContextMenu(event, '{{ group.id }}', '{{ group.folder_type }}', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', {{ group.branchgroup_set.exists|yesno:'true,false' }}, '{{ linked_id }}')"
+            {% if group.previous_parent_id %}ondblclick="loadBranchPreview('{{ group.id }}', {{ level|add:1 }})"{% endif %}>
             {% if group.folder_type == 'course' %}
                 <i class="fas fa-graduation-cap icon-course"></i>
             {% elif group.folder_type == 'assessment' %}
@@ -56,17 +66,32 @@
             {% else %}
                 <i class="fas fa-folder icon-folder"></i>
             {% endif %}
-
             <span>{{ group.name }}</span>
+            {% if group.is_shared %}<i class="fas fa-share-alt shared-badge" title="Shared with collaborators"></i>{% endif %}
             <i class="fas fa-chevron-right arrow"></i>
         </div>
     {% endif %}
 {% endfor %}
 
-{# 🎯 REMOVED: Old standalone contents.problems loop is completely gone #}
+{% if contents.trash_folder %}
+    <div class="root-trash-divider" style="border-top: 1px solid #c7c7cc; margin: 8px 10px;"></div>
+    {% with group=contents.trash_folder %}
+        <div class="item"
+            data-id="{{ group.id }}"
+            data-branch-id="{{ group.id }}"
+            data-type="folder"
+            data-location="{{ group.get_parent_path }}"
+            data-parent-id="{{ parent_id }}"
+            onclick="openExplorerItem(this)"
+            oncontextmenu="showContextMenu(event, '{{ group.id }}', 'folder', '{{ group.name|escapejs }}', '{{ group.owner.username }}', '{{ group.get_parent_path }}', {{ group.branchgroup_set.exists|yesno:'true,false' }}, '')">
+            <i class="fas fa-trash icon-folder"></i>
+            <span>{{ group.name }}</span>
+            <i class="fas fa-chevron-right arrow"></i>
+        </div>
+    {% endwith %}
+{% endif %}
 
-{# Empty state check - simplified #}
-{% if not contents.folders %}
+{% if not contents.folders and not contents.trash_folder %}
 <div style="padding: 20px; color: #8e8e93; font-style: italic;">
     Empty Folder
 </div>
@@ -75,7 +100,7 @@
 {% if level > 0 %}
     {% if not is_protected %}
         <div class="add-folder-container" style="margin-top: auto; padding: 10px; border-top: 1px solid #e5e5e5;">
-            <button class="btn-add-folder" onclick="createNewFolder('{{ parent_id }}', {{ level }})" 
+            <button class="btn-add-folder" onclick="createNewFolder('{{ parent_id }}', {{ level }})"
                     style="width: 100%; text-align: left; background: none; border: none; color: #007aff; cursor: pointer; font-size: 0.9rem;">
                 <i class="fas fa-plus-circle"></i> New Folder
             </button>
