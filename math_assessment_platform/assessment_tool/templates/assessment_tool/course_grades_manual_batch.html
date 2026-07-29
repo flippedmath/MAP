@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link href="{% static 'assessment_tool/css/assessment_practice_test.css' %}" rel="stylesheet">
+<style>
+  .manual-batch-page { max-width: 1200px; margin: 1.5rem auto; padding: 0 1.25rem 2.5rem; }
+  .manual-batch-toolbar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .manual-batch-note {
+    margin: 0 0 1rem; padding: 10px 12px; border-radius: 8px;
+    background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; font-size: 0.9rem;
+  }
+  .grade-expected-toggle {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin: 0 0 1rem; font-size: 0.9rem; color: #334155; font-weight: 600;
+    user-select: none; cursor: pointer;
+  }
+  .grade-expected-toggle input { width: 16px; height: 16px; cursor: pointer; }
+  #grade-save-status { font-size: 0.85rem; color: #166534; font-weight: 600; min-height: 1.2em; }
+  .manual-batch-group-title {
+    margin: 1.4rem 0 0.6rem; font-size: 1.05rem; color: #0f172a; font-weight: 700;
+  }
+  .manual-batch-item {
+    display: grid;
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+    margin-bottom: 1rem;
+    padding: 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+  }
+  .manual-batch-student {
+    position: sticky;
+    top: 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    font-size: 0.85rem;
+    color: #334155;
+  }
+  .manual-batch-student dt {
+    margin: 0; font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.03em; color: #64748b;
+  }
+  .manual-batch-student dd {
+    margin: 0 0 8px; font-weight: 600; color: #0f172a; word-break: break-word;
+  }
+  .manual-batch-student dd:last-child { margin-bottom: 0; }
+  .manual-batch-question .practice-problem-card {
+    margin: 0; box-shadow: none; border: none; padding: 0;
+  }
+  .manual-pill {
+    font-size: 0.7rem; font-weight: 700; color: #92400e; background: #fde68a;
+    padding: 2px 6px; border-radius: 999px; text-transform: uppercase;
+  }
+  .grade-field-row {
+    display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+    margin-top: 8px; padding: 10px 12px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0;
+  }
+  .grade-field-row.manual-flag { border-color: #f59e0b; background: #fffbeb; }
+  .grade-field-main { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .grade-field-row label { font-size: 0.85rem; color: #334155; font-weight: 600; }
+  .grade-field-row input[type="number"] {
+    width: 88px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px;
+  }
+  .grade-auto-result { font-size: 0.8rem; color: #64748b; }
+  .grade-expected-block {
+    display: none; margin-top: 2px; padding: 8px 10px; border-radius: 6px;
+    background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; font-size: 0.85rem;
+  }
+  .grade-review-problems.show-expected .grade-expected-block { display: block; }
+  .grade-expected-block .grade-answer-label,
+  .grade-student-block .grade-answer-label {
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.03em; margin-bottom: 4px;
+  }
+  .grade-expected-block .grade-answer-label { color: #047857; }
+  .grade-student-block .grade-answer-label { color: #64748b; }
+  .grade-student-block {
+    margin-top: 2px; padding: 8px 10px; border-radius: 6px;
+    background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; font-size: 0.85rem;
+  }
+  .grade-answer-lines { margin: 0; padding-left: 1.1rem; }
+  .grade-answer-parts { display: flex; flex-direction: column; gap: 8px; }
+  .grade-visual-compare .practice-visual-pair { display: flex; flex-wrap: wrap; gap: 10px; }
+  .grade-visual-compare .practice-visual-pane { flex: 1 1 240px; min-width: 0; }
+  .grade-review-problems.show-expected .grade-visual-compare .grade-expected-block { display: block; }
+  .grade-score-save-note {
+    font-size: 0.78rem; font-weight: 600; color: #166534; opacity: 0;
+    transition: opacity 0.15s ease; margin-left: 4px;
+  }
+  .grade-score-save-note.is-visible { opacity: 1; }
+  .practice-problem-meta {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  .practice-problem-meta .practice-problem-title { margin: 0; flex: 1 1 auto; min-width: 0; }
+  .btn-accept-zero {
+    margin-left: auto; background: #fff; border: 1px solid #f59e0b; color: #92400e;
+    border-radius: 6px; padding: 0.3rem 0.65rem; font-size: 0.78rem; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  .btn-accept-zero:hover { background: #fffbeb; }
+  .btn-accept-zero:disabled { opacity: 0.6; cursor: default; }
+  @media (max-width: 800px) {
+    .manual-batch-item { grid-template-columns: 1fr; }
+    .manual-batch-student { position: static; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="manual-batch-page">
+  <div class="manual-batch-toolbar">
+    <div>
+      <h2 style="display:inline-flex; align-items:center; gap:10px; margin:0;">
+        <a href="{% url 'course_grades_assessment' course.id assessment.id %}" style="color:#64748b;" title="Back">
+          <i class="fas fa-arrow-left"></i>
+        </a>
+        {{ assessment.name }} — Manual grading queue
+      </h2>
+      <p class="subtitle" style="margin:6px 0 0;">
+        Only questions that still need a teacher score. Edits save automatically to that student.
+      </p>
+    </div>
+    <span id="grade-save-status" aria-live="polite"></span>
+  </div>
+
+  <div class="manual-batch-note">
+    Temporary batch review: questions are grouped by question number, then by student.
+  </div>
+
+  <label class="grade-expected-toggle">
+    <input type="checkbox" id="grade-show-expected" />
+    Show expected answers next to auto-scored results
+  </label>
+
+  <div id="grade-review-status" class="practice-status">Loading manual questions…</div>
+  <div id="grade-review-problems" class="practice-problems-list grade-review-problems"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+<script>
+  window.GRADE_MANUAL_BATCH_CONFIG = {
+    payloadUrl: "{% url 'course_grades_manual_batch_payload' course.id assessment.id %}",
+    saveUrlTemplate: "{% url 'course_grades_attempt_save' course.id assessment.id 0 %}".replace('/0/save/', '/__ATTEMPT__/save/')
+  };
+</script>
+<script type="module" src="{% static 'assessment_tool/js/course_grades_manual_batch.js' %}"></script>
+{% endblock %}

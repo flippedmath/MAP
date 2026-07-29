@@ -770,7 +770,7 @@ def restore_assessment_payload(request, folder):
         Assessment = apps.get_model('assessment_tool', 'Assessment')
         assessment = Assessment.objects.filter(branch_location=folder).first()
         if assessment and getattr(assessment, 'status', None) == 'deleted':
-            assessment.status = 'locked'
+            assessment.status = 'hidden'
             assessment.save(update_fields=['status'])
     except Exception as e:
         raise ValueError(f"Failed to synchronize assessment lifecycle status: {str(e)}")
@@ -7492,6 +7492,56 @@ def _blueprint_is_answer_field(pattern_blueprint):
     )
 
 
+def _parse_jsonish_config(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def entity_accepts_student_input(archetype, *, evaluated_output=None, inputs=None) -> bool:
+    """
+    False when an answer-capable entity is display-only (no student-facing inputs).
+
+    Example: graphBetweenPoints with Let student draw off has nothing to score.
+    """
+    arch = re.sub(r"\d+$", "", str(archetype or "").strip())
+    if arch == "graphBetweenPoints":
+        cfg = _parse_jsonish_config(evaluated_output)
+        if not cfg:
+            cfg = inputs if isinstance(inputs, dict) else {}
+        if not cfg.get("let_student_draw"):
+            return False
+        targets = cfg.get("student_targets")
+        if isinstance(targets, list) and len(targets) > 0:
+            return True
+        segs = cfg.get("segments")
+        if isinstance(segs, list) and any(
+            isinstance(s, dict) and s.get("student_draw") for s in segs
+        ):
+            return True
+        return False
+    return True
+
+
+def answer_field_accepts_student_input(field: dict) -> bool:
+    """True when a frozen answer_field dict should appear in grading/review."""
+    if not isinstance(field, dict):
+        return False
+    return entity_accepts_student_input(
+        field.get("archetype") or field.get("token"),
+        evaluated_output=field.get("evaluated_output")
+        if field.get("evaluated_output") not in (None, "")
+        else field.get("simulated_value"),
+        inputs=field.get("inputs"),
+    )
+
+
 def _slope_field_visual_preview(validator, student_input):
     """
     Bundle slope-field render config + student marks for practice-test grade UI.
@@ -7558,6 +7608,170 @@ def _graph_between_points_visual_preview(validator, student_input):
     }
 
 
+_MC_LINKED_TOKEN_RE = re.compile(
+    r"^(?:&lt;|<)([A-Za-z][A-Za-z0-9_]*\d+)(?:&gt;|>)$"
+)
+
+
+def _segments_by_sequence_token(segments) -> dict:
+    out = {}
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        tok = str(seg.get("sequence_token") or seg.get("indexed_token") or "").strip()
+        if tok:
+            out[tok] = seg
+    return out
+
+
+def _mc_selected_option_ids(student_input) -> list:
+    selected = []
+    if isinstance(student_input, dict):
+        raw = student_input.get("selected", student_input.get("value", []))
+        if isinstance(raw, list):
+            selected = [str(x).strip() for x in raw if x is not None and str(x).strip()]
+        elif raw not in (None, ""):
+            selected = [str(raw).strip()]
+    elif isinstance(student_input, (list, tuple)):
+        selected = [str(x).strip() for x in student_input if x is not None and str(x).strip()]
+    elif student_input is not None and str(student_input).strip():
+        selected = [str(student_input).strip()]
+    seen = set()
+    uniq = []
+    for sid in selected:
+        if sid in seen:
+            continue
+        seen.add(sid)
+        uniq.append(sid)
+    return uniq
+
+
+def _mc_option_display_part(opt, segments_by_token=None) -> dict:
+    """
+    Renderable unit for an MC choice in grade/review UIs.
+    Prefer latex / graph config over sympy Matrix([[…]]) or raw JSON dumps.
+    """
+    segments_by_token = segments_by_token or {}
+    if not isinstance(opt, dict):
+        text = str(opt or "").strip()
+        return {"kind": "text", "value": text} if text else {"kind": "text", "value": ""}
+
+    content = str(opt.get("content") or "").strip()
+    resolved = str(opt.get("content_resolved") or "").strip()
+    match = _MC_LINKED_TOKEN_RE.match(content)
+    if match:
+        tok = match.group(1).strip()
+        seg = segments_by_token.get(tok) or {}
+        arch = re.sub(
+            r"\d+$",
+            "",
+            str(seg.get("archetype") or seg.get("token") or tok).strip(),
+        )
+        if arch == "graph":
+            raw = (
+                seg.get("evaluated_output")
+                or seg.get("simulated_value")
+                or resolved
+            )
+            cfg = raw if isinstance(raw, dict) else _parse_jsonish_config(raw)
+            if isinstance(cfg, dict) and (
+                cfg.get("formulas") is not None or cfg.get("archetype") == "graph"
+            ):
+                return {"kind": "graph", "token": tok, "config": cfg}
+            return {"kind": "text", "value": "[graph]"}
+        if arch == "slopeFieldGraph":
+            raw = (
+                seg.get("evaluated_output")
+                or seg.get("simulated_value")
+                or resolved
+            )
+            cfg = raw if isinstance(raw, dict) else _parse_jsonish_config(raw)
+            if isinstance(cfg, dict) and (
+                cfg.get("equation") is not None or cfg.get("archetype") == "slopeFieldGraph"
+            ):
+                return {"kind": "slopeFieldGraph", "token": tok, "config": cfg}
+            return {"kind": "text", "value": "[slope field]"}
+
+        latex = str(seg.get("latex_output") or "").strip()
+        if (
+            latex
+            and latex not in ("???",)
+            and not latex.startswith("{")
+            and not latex.startswith("[Graph")
+            and not latex.startswith("[Invalid")
+            and not latex.startswith("Matrix(")
+        ):
+            # Matrices / formulas / KaTeX-ready scalars
+            if arch in ("matrix", "matrixResultByIndex", "formula") or "\\" in latex:
+                return {"kind": "latex", "value": latex}
+            return {"kind": "text", "value": latex}
+
+        # Fallback: convert sympy Matrix([[…]]) dumps to KaTeX when latex_output
+        # was omitted from the grade context (e.g. practice all_entities).
+        raw_matrix = resolved or str(seg.get("evaluated_output") or seg.get("simulated_value") or "").strip()
+        if arch in ("matrix", "matrixResultByIndex") or raw_matrix.startswith("Matrix("):
+            try:
+                matrix_latex = sp.latex(sp.sympify(raw_matrix))
+                if matrix_latex:
+                    return {"kind": "latex", "value": matrix_latex}
+            except Exception:
+                pass
+
+        if resolved:
+            if resolved.startswith("{") and '"archetype"' in resolved:
+                return {"kind": "text", "value": f"[{arch or 'entity'}]"}
+            if resolved.startswith("Matrix("):
+                try:
+                    matrix_latex = sp.latex(sp.sympify(resolved))
+                    if matrix_latex:
+                        return {"kind": "latex", "value": matrix_latex}
+                except Exception:
+                    pass
+            return {"kind": "text", "value": resolved}
+        return {"kind": "text", "value": tok}
+
+    text = resolved or content
+    if text.startswith("{") and '"archetype"' in text:
+        return {"kind": "text", "value": "[entity]"}
+    return {"kind": "text", "value": text}
+
+
+def _display_part_plaintext(part: dict) -> str:
+    if not isinstance(part, dict):
+        return str(part or "")
+    kind = part.get("kind")
+    if kind == "latex":
+        return str(part.get("value") or "").strip()
+    if kind in ("graph", "slopeFieldGraph"):
+        return f"[{kind}]"
+    return str(part.get("value") or "").strip()
+
+
+def _mc_answer_display_parts(options, selected_ids, segments_by_token=None) -> list:
+    by_id = {
+        str(o.get("id")).strip(): o
+        for o in (options or [])
+        if isinstance(o, dict) and o.get("id") is not None
+    }
+    parts = []
+    for sid in selected_ids or []:
+        opt = by_id.get(str(sid).strip())
+        if opt:
+            parts.append(_mc_option_display_part(opt, segments_by_token))
+        else:
+            parts.append({"kind": "text", "value": str(sid)})
+    return parts
+
+
+def _mc_expected_display_parts(options, segments_by_token=None) -> list:
+    parts = []
+    for opt in options or []:
+        if not isinstance(opt, dict) or not opt.get("is_correct"):
+            continue
+        parts.append(_mc_option_display_part(opt, segments_by_token))
+    return parts
+
+
 def _format_student_answer_lines(student_input, validator=None, archetype=None):
     """
     Human-readable student answer lines for practice-test grade UI
@@ -7571,32 +7785,13 @@ def _format_student_answer_lines(student_input, validator=None, archetype=None):
 
     if archetype == "multipleChoiceAnswer":
         options = rv.get("options") or []
-        by_id = {}
-        for opt in options:
-            if isinstance(opt, dict) and opt.get("id") is not None:
-                by_id[str(opt["id"]).strip()] = opt
-
-        selected = []
-        if isinstance(student_input, dict):
-            raw = student_input.get("selected", student_input.get("value", []))
-            if isinstance(raw, list):
-                selected = [str(x).strip() for x in raw if x is not None and str(x).strip()]
-            elif raw not in (None, ""):
-                selected = [str(raw).strip()]
-        elif isinstance(student_input, (list, tuple)):
-            selected = [str(x).strip() for x in student_input if x is not None and str(x).strip()]
-        elif str(student_input).strip():
-            selected = [str(student_input).strip()]
-
-        lines = []
-        for sid in selected:
-            opt = by_id.get(sid)
-            if opt:
-                text = str(opt.get("content_resolved") or opt.get("content") or "").strip()
-                lines.append(text or sid)
-            else:
-                lines.append(sid)
-        return lines
+        segs = _segments_by_sequence_token(
+            getattr(validator, "all_entities_payload", None) or []
+        )
+        parts = _mc_answer_display_parts(
+            options, _mc_selected_option_ids(student_input), segs
+        )
+        return [ln for ln in (_display_part_plaintext(p) for p in parts) if ln]
 
     if archetype == "answersOrDne":
         if isinstance(student_input, dict):
@@ -7695,12 +7890,20 @@ def _extract_expected_answers(validator, archetype):
     archetype = str(archetype or "").strip()
 
     # Prefer evaluate_output() — same source as many latex-render-box summaries
+    # Skip MC: evaluate_output dumps sympy Matrix([[…]]) / graph JSON, not latex.
     try:
         evaluated = validator.evaluate_output()
         if evaluated not in (None, ""):
             ev = str(evaluated).strip()
             if ev and not ev.startswith("[Invalid") and ev != "???":
-                if archetype in ("graph", "slopeFieldGraph", "graphBetweenPoints", "matrix", "canvas"):
+                if archetype in (
+                    "graph",
+                    "slopeFieldGraph",
+                    "graphBetweenPoints",
+                    "matrix",
+                    "canvas",
+                    "multipleChoiceAnswer",
+                ):
                     pass
                 elif ev.startswith("{") and '"archetype"' in ev:
                     pass
@@ -7726,10 +7929,11 @@ def _extract_expected_answers(validator, archetype):
             expected.append(str(val))
     elif archetype == "multipleChoiceAnswer" and not expected:
         options = rv.get("options") or []
-        for opt in options:
-            if not isinstance(opt, dict) or not opt.get("is_correct"):
-                continue
-            text = str(opt.get("content_resolved") or opt.get("content") or "").strip()
+        segs = _segments_by_sequence_token(
+            getattr(validator, "all_entities_payload", None) or []
+        )
+        for part in _mc_expected_display_parts(options, segs):
+            text = _display_part_plaintext(part)
             if text:
                 expected.append(text)
     elif archetype == "matrixAnswer" and not expected:
@@ -7823,10 +8027,12 @@ def grade_entities_payload(entities, context_entities, student_answers):
             inputs["sequence_token"] = sequence_token
         all_entities_payload.append({
             "token": archetype,
+            "archetype": archetype,
             "sequence_token": sequence_token,
             "inputs": inputs,
             "simulated_value": item.get("simulated_value") or item.get("evaluated_output") or "",
             "evaluated_output": item.get("evaluated_output") or item.get("simulated_value") or "",
+            "latex_output": item.get("latex_output") or "",
         })
 
     items = []
@@ -7855,6 +8061,14 @@ def grade_entities_payload(entities, context_entities, student_answers):
 
         pattern_blueprint = get_blueprint_for_token(archetype) or {}
         if not _blueprint_is_answer_field(pattern_blueprint):
+            continue
+        if not entity_accepts_student_input(
+            archetype,
+            evaluated_output=item.get("evaluated_output")
+            if item.get("evaluated_output") not in (None, "")
+            else item.get("simulated_value"),
+            inputs=item.get("inputs"),
+        ):
             continue
 
         entity_inputs = dict(item.get("inputs") or {})
@@ -7897,6 +8111,21 @@ def grade_entities_payload(entities, context_entities, student_answers):
             visual_preview = _slope_field_visual_preview(validator, student_input)
         elif archetype == "graphBetweenPoints":
             visual_preview = _graph_between_points_visual_preview(validator, student_input)
+
+        student_parts = []
+        expected_parts = []
+        if archetype == "multipleChoiceAnswer":
+            rv = getattr(validator, "runtime_values", None) or {}
+            options = rv.get("options") or []
+            segs = _segments_by_sequence_token(
+                getattr(validator, "all_entities_payload", None) or []
+            )
+            student_parts = _mc_answer_display_parts(
+                options, _mc_selected_option_ids(student_input), segs
+            )
+            if not fully_correct:
+                expected_parts = _mc_expected_display_parts(options, segs)
+
         earned_total += earned
         max_total += max_pts
         items.append({
@@ -7912,7 +8141,9 @@ def grade_entities_payload(entities, context_entities, student_answers):
             "requires_manual_grading": requires_manual,
             "student_answer": "\n".join(student_lines),
             "student_answer_lines": student_lines,
+            "student_answer_parts": student_parts,
             "expected_answers": expected_answers if not fully_correct else [],
+            "expected_answer_parts": expected_parts,
             "visual_preview": visual_preview,
         })
 
@@ -8017,16 +8248,21 @@ def build_practice_problem_instance(problem):
         }
         loaded_segments.append(seg_payload)
         if seg_payload["is_answer_field"]:
-            answer_fields.append({
-                "token": archetype_name,
-                "archetype": archetype_name,
-                "sequence_token": sequence_token,
-                "points": segment.points,
-                "label": seg_payload["label"],
-                "inputs": clean_inputs,
-                "simulated_value": seg_payload["simulated_value"],
-                "evaluated_output": seg_payload["evaluated_output"],
-            })
+            if entity_accepts_student_input(
+                archetype_name,
+                evaluated_output=evaluated_output,
+                inputs=clean_inputs,
+            ):
+                answer_fields.append({
+                    "token": archetype_name,
+                    "archetype": archetype_name,
+                    "sequence_token": sequence_token,
+                    "points": segment.points,
+                    "label": seg_payload["label"],
+                    "inputs": clean_inputs,
+                    "simulated_value": seg_payload["simulated_value"],
+                    "evaluated_output": seg_payload["evaluated_output"],
+                })
 
     if failed_tokens:
         return {
@@ -8084,6 +8320,7 @@ def build_practice_problem_instance(problem):
                 "inputs": s["inputs"],
                 "simulated_value": s["simulated_value"],
                 "evaluated_output": s["evaluated_output"],
+                "latex_output": s.get("latex_output") or "",
                 "points": s["points"],
                 "label": s["label"],
             }

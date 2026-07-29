@@ -8,8 +8,10 @@ from .models import (
     CustomQuestionDistribution, AssessmentQuestionGroup, 
     CustomQuestionDistribution, CqdPair,
     QuestionBlock, EntitySegment,
-    EntityType, EntityUserInput, Notification,
+    EntityType, Notification,
     FinalGradeCalculation, StudentCourseEnrollment,
+    AssessmentGenerationJob, StudentAssessmentAttempt,
+    AssessmentOptions,
 )
 from .dashboard import dashboard_courses_for_user, user_display_name
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
@@ -51,7 +53,7 @@ from django.utils import timezone
 from datetime import timedelta
 from django.contrib import messages
 from django.db import IntegrityError
-from django.views.decorators.http import require_POST, require_http_methods
+from django.views.decorators.http import require_POST, require_GET, require_http_methods
 from django.contrib.auth.decorators import login_required
 from django.db.models import Q
 from django.db.models import Case, Value, When, IntegerField
@@ -103,7 +105,11 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
         context['dashboard_courses'] = dashboard_courses_for_user(user)
 
         if user.user_type == 'Student':
-            context['ongoing_test'] = user.ongoing_assessment
+            context['ongoing_test'] = False
+            from .student_attempts import open_takeable_assessments_for_student
+            context['open_assessments'] = open_takeable_assessments_for_student(user)
+        else:
+            context['open_assessments'] = []
 
         unread_rows = []
         for note in unread_notifications_for_user(user, include_content=False):
@@ -309,7 +315,8 @@ def database_viewer(request):
         'question_block': QuestionBlock,
         'entity_segment': EntitySegment,
         'entity_type': EntityType,
-        'entity_user_input': EntityUserInput,
+        'student_assessment_attempt': StudentAssessmentAttempt,
+        'assessment_generation_job': AssessmentGenerationJob,
         'notification': Notification,
     }
     
@@ -1616,9 +1623,9 @@ def course_invite_signup_view(request, code):
 def assessment_view(request, course_id):
     # 1. Grab the current course structure context
     course = get_object_or_404(Course, id=course_id)
-    
+
     # 2. Extract current user type session flags from user request profile if needed
-    user_type = getattr(request.user, 'user_type', 'Student') # pretends the 'user_type' is 'Student' if 'user_type' didn't return anything
+    user_type = getattr(request.user, 'user_type', 'Student')
 
     # 3. Fetch master assessment templates linked to this course track
     assessments = (
@@ -1631,12 +1638,208 @@ def assessment_view(request, course_id):
         ).select_related('branch_location').order_by('order', 'creation_date')
     )
 
+    from .student_attempts import (
+        assessment_is_takeable,
+        generation_job_blocks_edits,
+        job_status_payload,
+        latest_generation_job,
+    )
+    from .course_enrollment import get_active_enrollment as _get_active_enrollment
+
+    highlight_id = request.GET.get("highlight")
+    try:
+        highlight_id = int(highlight_id) if highlight_id else None
+    except (TypeError, ValueError):
+        highlight_id = None
+
+    is_student = user_type == "Student"
+    assessment_rows = []
+    now = timezone.now()
+    if is_student:
+        from .assessment_options import select_counting_attempt
+        from .student_attempts import (
+            student_facing_assessment_status,
+            student_may_start_attempt,
+        )
+
+        assessments = assessments.exclude(
+            status__in=("hidden", "deleted")
+        )
+        enrollment = _get_active_enrollment(course=course, user=request.user)
+        attempts_by_assessment = {}
+        if enrollment:
+            from .student_attempts import (
+                assessment_ids_for_template,
+                course_template_assessment,
+            )
+
+            take_ids = []
+            for a in assessments:
+                take_ids.extend(assessment_ids_for_template(a))
+            for att in StudentAssessmentAttempt.objects.filter(
+                enrollment=enrollment,
+                assessment_id__in=take_ids,
+            ).select_related("assessment").order_by("id"):
+                root = course_template_assessment(att.assessment)
+                if root is None:
+                    continue
+                attempts_by_assessment.setdefault(root.id, []).append(att)
+
+        for assessment in assessments:
+            attempts = attempts_by_assessment.get(assessment.id) or []
+            counting = select_counting_attempt(attempts, assessment)
+            submitted_attempts = [
+                a
+                for a in attempts
+                if a.status == StudentAssessmentAttempt.STATUS_SUBMITTED
+                or a.auto_graded_at is not None
+            ]
+            in_progress = next(
+                (
+                    a
+                    for a in reversed(attempts)
+                    if a.status == StudentAssessmentAttempt.STATUS_IN_PROGRESS
+                ),
+                None,
+            )
+            display_attempt = counting or in_progress or (attempts[-1] if attempts else None)
+            takeable = assessment_is_takeable(assessment, now=now)
+            can_start = student_may_start_attempt(
+                assessment, request.user, attempts, now=now
+            )
+            submitted = bool(submitted_attempts)
+            from .assessment_grades import student_may_review_attempt
+
+            reviewable_attempts = [
+                a
+                for a in submitted_attempts
+                if student_may_review_attempt(assessment, a)
+            ]
+            can_review = bool(reviewable_attempts)
+            review_attempts = []
+            for a in sorted(
+                reviewable_attempts,
+                key=lambda x: x.submitted_at or x.creation_date or x.id,
+                reverse=True,
+            ):
+                review_attempts.append(
+                    {
+                        "attempt_id": a.id,
+                        "status": a.status,
+                        "submitted_at": a.submitted_at.isoformat()
+                        if a.submitted_at
+                        else None,
+                        "earned_points": a.earned_points,
+                        "max_points": a.max_points,
+                        "is_counting": counting is not None and a.id == counting.id,
+                        "review_url": reverse(
+                            "course_grades_attempt",
+                            args=[course.id, assessment.id, a.id],
+                        ),
+                    }
+                )
+
+            counting_reviewable = (
+                counting
+                if counting is not None and student_may_review_attempt(assessment, counting)
+                else None
+            )
+            facing_status = student_facing_assessment_status(assessment, now=now)
+            assessment_rows.append(
+                {
+                    "assessment": assessment,
+                    "takeable": takeable,
+                    "can_start": can_start,
+                    "submitted": submitted,
+                    "attempt_status": display_attempt.status if display_attempt else None,
+                    "counting_attempt_id": counting.id if counting else None,
+                    "can_review": can_review,
+                    "review_attempt_count": len(reviewable_attempts),
+                    "review_url": (
+                        reverse(
+                            "course_grades_attempt",
+                            args=[course.id, assessment.id, counting_reviewable.id],
+                        )
+                        if counting_reviewable
+                        else (
+                            reverse(
+                                "course_grades_attempt",
+                                args=[
+                                    course.id,
+                                    assessment.id,
+                                    reviewable_attempts[0].id,
+                                ],
+                            )
+                            if reviewable_attempts
+                            else None
+                        )
+                    ),
+                    "review_attempts": review_attempts,
+                    "review_attempts_json": json.dumps(review_attempts),
+                    "highlight": highlight_id == assessment.id,
+                    "display_status": facing_status,
+                    "show_auto_open": facing_status == "upcoming",
+                }
+            )
+    else:
+        from .assessment_options import ASSESSMENT_DELIVERY_OPTION_GROUPS
+        from .student_attempts import (
+            assessment_has_submissions,
+            normalize_assessment_status,
+        )
+
+        custom_delivery_ids = set(
+            AssessmentOptions.objects.filter(
+                assessment_id__in=[a.id for a in assessments],
+                option_type_id__in=ASSESSMENT_DELIVERY_OPTION_GROUPS,
+            )
+            .values_list("assessment_id", flat=True)
+            .distinct()
+        )
+
+        for assessment in assessments:
+            job = latest_generation_job(assessment)
+            stored_status = normalize_assessment_status(assessment.status)
+            assessment_rows.append(
+                {
+                    "assessment": assessment,
+                    "generating": generation_job_blocks_edits(assessment),
+                    "job": job_status_payload(assessment),
+                    "highlight": highlight_id == assessment.id,
+                    "has_custom_delivery_options": assessment.id in custom_delivery_ids,
+                    "has_submissions": assessment_has_submissions(assessment),
+                    "display_status": stored_status,
+                    "show_auto_open": stored_status == "upcoming",
+                }
+            )
+
+    show_auto_open_column = any(r.get("show_auto_open") for r in assessment_rows)
+    show_submission_column = is_student and any(
+        r.get("can_review") for r in assessment_rows
+    )
+    if is_student:
+        empty_colspan = 3  # name, status, actions
+        if show_auto_open_column:
+            empty_colspan += 1
+        if show_submission_column:
+            empty_colspan += 1
+    else:
+        empty_colspan = 5  # drag, name, status, questions, actions
+        if show_auto_open_column:
+            empty_colspan += 1
+
     context = {
         'course': course,
         'user_type': user_type,
         'assessments': assessments,
-        'active_tab': 'assessments', 
-        'current_time': timezone.now()
+        'assessment_rows': assessment_rows,
+        'is_student': is_student,
+        'show_submission_column': show_submission_column,
+        'show_auto_open_column': show_auto_open_column,
+        'empty_colspan': empty_colspan,
+        'active_tab': 'assessments',
+        'current_time': now,
+        'highlight_id': highlight_id,
     }
     return render(request, 'assessment_tool/assessments.html', context)
 
@@ -1697,7 +1900,7 @@ def create_assessment_ajax(request, course_id):
                 course=course,
                 name=assessment_name,
                 branch_location=assessment_folder,
-                status='inactive',  # Default baseline initialization fallback
+                status='hidden',  # Not visible to students until opened
                 is_historic=False,   # Master template starts variable/algorithmic
                 points_weight=1.0,   # 100% normal weight multiplier assignment
                 order=assessment_name
@@ -1729,15 +1932,66 @@ def update_assessment_status_ajax(request, course_id):
         return JsonResponse({'error': 'Malformed parameters.'}, status=400)
 
     # Valid options from your enum definition
-    valid_statuses = ['closed', 'open', 'locked', 'retake_available', 'submitted', 'active', 'inactive', 'upcoming']
-    if new_status not in valid_statuses:
-        return JsonResponse({'error': 'Target lifecycle flag is not registered inside status enum.'}, status=400)
+    from .student_attempts import (
+        ASSESSMENT_STATUSES,
+        assessment_has_submissions,
+        normalize_assessment_status,
+    )
+
+    new_status = normalize_assessment_status(new_status)
+    if new_status not in ASSESSMENT_STATUSES:
+        return JsonResponse(
+            {'error': 'Target lifecycle flag is not registered inside status enum.'},
+            status=400,
+        )
 
     assessment = get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
+
+    from .student_attempts import generation_job_blocks_edits, start_generation_job, job_status_payload
+
+    if generation_job_blocks_edits(assessment):
+        return JsonResponse(
+            {
+                'error': 'Unique student assessments are still being generated. Status cannot be changed yet.',
+                'code': 'generation_in_progress',
+                'job': job_status_payload(assessment),
+            },
+            status=409,
+        )
+
+    if new_status == 'hidden' and assessment_has_submissions(assessment):
+        return JsonResponse(
+            {
+                'error': (
+                    'Cannot hide an assessment that already has student submissions.'
+                ),
+            },
+            status=400,
+        )
+
     assessment.status = new_status
-    assessment.save()
-    
-    return JsonResponse({'success': True})
+    assessment.save(update_fields=['status'])
+
+    finalize_payload = None
+    if new_status == 'closed':
+        from .student_attempts import close_assessment_and_finalize_attempts
+
+        finalize_payload = close_assessment_and_finalize_attempts(
+            assessment,
+            reason='teacher_closed',
+            set_status=False,  # already saved above
+        )
+
+    job_payload = None
+    if new_status == 'open':
+        job = start_generation_job(assessment)
+        job_payload = job_status_payload(assessment) if job else None
+
+    return JsonResponse({
+        'success': True,
+        'job': job_payload,
+        'finalize': finalize_payload,
+    })
 
 
 @login_required
@@ -1758,17 +2012,39 @@ def update_assessment_window_ajax(request, assessment_id):
         return JsonResponse({'error': 'Malformed properties container framework.'}, status=400)
 
     assessment = get_object_or_404(Assessment, id=assessment_id)
-    
+
+    from .student_attempts import generation_job_blocks_edits, job_status_payload
+
+    if generation_job_blocks_edits(assessment):
+        return JsonResponse(
+            {
+                'error': 'Unique student assessments are still being generated. Window cannot be changed yet.',
+                'code': 'generation_in_progress',
+                'job': job_status_payload(assessment),
+            },
+            status=409,
+        )
+
     # Process updates or strip values to None if matching disable checks
     parsed_start = None
     parsed_end = None
 
+    def _parse_window_instant(raw):
+        """Parse ISO (preferring explicit offset/Z) into an aware UTC datetime."""
+        text = str(raw).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = timezone.datetime.fromisoformat(text)
+        if timezone.is_naive(dt):
+            # Legacy datetime-local without offset: treat as server TIME_ZONE.
+            return timezone.make_aware(dt)
+        return dt
+
     if start_raw and end_raw:
         try:
-            # Parse localized user strings into fully timezone-aware objects
-            parsed_start = timezone.is_aware(timezone.datetime.fromisoformat(start_raw)) or timezone.make_aware(timezone.datetime.fromisoformat(start_raw))
-            parsed_end = timezone.is_aware(timezone.datetime.fromisoformat(end_raw)) or timezone.make_aware(timezone.datetime.fromisoformat(end_raw))
-        except ValueError:
+            parsed_start = _parse_window_instant(start_raw)
+            parsed_end = _parse_window_instant(end_raw)
+        except (TypeError, ValueError):
             return JsonResponse({'error': 'Invalid date string layout tracking parameters.'}, status=400)
 
         # 🛑 Backend Validation Rule Check: Start must precede End
@@ -1778,13 +2054,28 @@ def update_assessment_window_ajax(request, assessment_id):
     # Persist values to database
     assessment.start_time = parsed_start
     assessment.end_time = parsed_end
-    assessment.save()
+    assessment.modified_date = timezone.now()
+    assessment.save(update_fields=["start_time", "end_time", "modified_date"])
 
     return JsonResponse({
         'success': True,
         'assessment_id': assessment.id,
-        'status': assessment.status
+        'status': assessment.status,
+        'start_time': assessment.start_time.isoformat() if assessment.start_time else None,
+        'end_time': assessment.end_time.isoformat() if assessment.end_time else None,
     })
+
+
+@login_required
+@require_GET
+def assessment_generation_status_ajax(request, course_id, assessment_id):
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if user_type not in ['Teacher', 'IT_Support']:
+        return JsonResponse({'error': 'Unauthorized'}, status=403)
+    assessment = get_object_or_404(Assessment, id=assessment_id, course_id=course_id)
+    from .student_attempts import job_status_payload
+
+    return JsonResponse({'success': True, 'job': job_status_payload(assessment)})
 
 @login_required
 @require_POST
@@ -2810,182 +3101,927 @@ def reorder_nested_item_ajax(request):
 
 
 @login_required
-def start_student_assessment_session(request, assessment_id):
-    if request.user.user_type != 'Student':
-        return JsonResponse({'error': 'Unauthorized view permission layout.'}, status=403)
-        
-    assessment = get_object_or_404(Assessment, id=assessment_id)
-    course = assessment.course
-    username = request.user.username
-    
-    # 1. Ensure the specific student course storage path exists
-    # Target Root: /Users/{username}_root/Student Provided Assessments/{Course_Name}/
-    from .folder_roots import student_provided_assessments_path
-    target_root_path = student_provided_assessments_path(username, course.name)
-    
-    with transaction.atomic():
-        # Get or create the course branch container inside the student's virtual layout hierarchy
-        course_container, created = BranchGroup.objects.get_or_create(
-            name=course.name,
-            owner=request.user,
-            defaults={'order': 'M', 'is_directory': True} 
-            # adjust defaults according to your local structural model properties
+def student_assessment_take_view(request, course_id, assessment_id):
+    """Student take UI for a frozen attempt."""
+    if getattr(request.user, "user_type", None) != "Student":
+        return redirect("assessment_view", course_id=course_id)
+    course = get_object_or_404(Course, id=course_id)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .student_attempts import (
+        assessment_available_to_student,
+        assessment_taking_ended,
+        current_attempt_for_student,
+        finalize_student_attempt_if_open,
+        get_or_create_attempt_for_student,
+        student_may_start_attempt,
+    )
+
+    if assessment_taking_ended(assessment) and not student_may_start_attempt(
+        assessment, request.user
+    ):
+        attempt = current_attempt_for_student(assessment, request.user)
+        from .student_attempts import attempt_may_continue_while_closed
+
+        # Do not force-submit an authorized retake when the class row is closed.
+        if attempt is not None and not attempt_may_continue_while_closed(
+            attempt, assessment, request.user
+        ):
+            finalize_student_attempt_if_open(attempt)
+        messages.error(
+            request,
+            "This assessment has been closed. Any answers you had entered were submitted.",
         )
-        
-        # 2. Extract every problem assigned via the assessment question groups
-        aqgs = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order')
-        
-        compiled_test_payload = {
-            "assessment_id": assessment.id,
-            "title": assessment.title,
-            "questions": []
+        return redirect("assessment_view", course_id=course_id)
+
+    try:
+        attempt = get_or_create_attempt_for_student(assessment, request.user)
+    except PermissionError as exc:
+        messages.error(request, str(exc))
+        return redirect("assessment_view", course_id=course_id)
+
+    if attempt.status == StudentAssessmentAttempt.STATUS_SUBMITTED:
+        messages.info(request, "You have already submitted this assessment.")
+        return redirect("assessment_view", course_id=course_id)
+
+    # READY / IN_PROGRESS means the student already has an authorized take
+    # (including a per-student retake on a closed class assessment).
+    if attempt.status not in (
+        StudentAssessmentAttempt.STATUS_READY,
+        StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+    ) and not assessment_available_to_student(assessment, request.user):
+        messages.error(request, "This assessment is not currently open.")
+        return redirect("assessment_view", course_id=course_id)
+
+    from .assessment_options import show_count_up_timer
+
+    return render(
+        request,
+        "assessment_tool/student_assessment_take.html",
+        {
+            "course": course,
+            "assessment": assessment,
+            "attempt": attempt,
+            "active_tab": "assessments",
+            "show_count_up_timer": show_count_up_timer(assessment),
+            # Needed so base.html loads problem_overlay_global + overlay DOM
+            # (PracticeTestPreviewAPI only initializes when #problem-workspace-overlay exists).
+            "load_problem_workspace": True,
+        },
+    )
+
+
+@login_required
+@require_POST
+def student_assessment_start_ajax(request, course_id, assessment_id):
+    if getattr(request.user, "user_type", None) != "Student":
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course_id=course_id, parent_assessment__isnull=True, user__isnull=True
+    )
+    from .student_attempts import (
+        assessment_available_to_student,
+        assessment_taking_ended,
+        begin_attempt_for_student,
+        client_problems_for_attempt,
+        current_attempt_for_student,
+        finalize_student_attempt_if_open,
+        get_or_create_attempt_for_student,
+        student_may_start_attempt,
+    )
+
+    if assessment_taking_ended(assessment) and not student_may_start_attempt(
+        assessment, request.user
+    ):
+        attempt = current_attempt_for_student(assessment, request.user)
+        from .student_attempts import attempt_may_continue_while_closed
+
+        if attempt is not None and not attempt_may_continue_while_closed(
+            attempt, assessment, request.user
+        ):
+            finalize_student_attempt_if_open(attempt)
+        return JsonResponse(
+            {
+                "error": "This assessment has been closed.",
+                "code": "assessment_closed",
+                "closed": True,
+            },
+            status=409,
+        )
+
+    try:
+        attempt = get_or_create_attempt_for_student(assessment, request.user)
+    except PermissionError as exc:
+        return JsonResponse({"error": str(exc)}, status=403)
+
+    if attempt.status == StudentAssessmentAttempt.STATUS_SUBMITTED:
+        return JsonResponse({"error": "Already submitted."}, status=400)
+
+    if attempt.status not in (
+        StudentAssessmentAttempt.STATUS_READY,
+        StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+    ) and not assessment_available_to_student(assessment, request.user):
+        return JsonResponse({"error": "Assessment is not takeable."}, status=400)
+
+    attempt = begin_attempt_for_student(attempt)
+
+    from .assessment_options import show_count_up_timer
+    from .student_attempts import (
+        _aware,
+        assessment_window_bounds,
+        normalize_assessment_status,
+        upcoming_window_contains,
+    )
+
+    now = timezone.now()
+    elapsed_seconds = 0
+    if attempt.started_at is not None:
+        started = _aware(attempt.started_at)
+        if started is not None:
+            elapsed_seconds = max(
+                0, int((now - started).total_seconds())
+            )
+
+    _start, end = assessment_window_bounds(assessment)
+    window_ends_at = None
+    remaining_seconds = None
+    if (
+        normalize_assessment_status(assessment.status) == "upcoming"
+        and upcoming_window_contains(assessment, now=now)
+        and end is not None
+    ):
+        window_ends_at = end.isoformat()
+        remaining_seconds = max(0, int((end - now).total_seconds()))
+
+    return JsonResponse(
+        {
+            "success": True,
+            "attempt_id": attempt.id,
+            "status": attempt.status,
+            "started_at": attempt.started_at.isoformat() if attempt.started_at else None,
+            "elapsed_seconds": elapsed_seconds,
+            "show_count_up_timer": show_count_up_timer(assessment),
+            "window_ends_at": window_ends_at,
+            "remaining_seconds": remaining_seconds,
+            "problems": client_problems_for_attempt(attempt),
         }
-        
-        for aqg in aqgs:
-            # Randomly fetch problems according to the distribution count constraints
-            problems_pool = list(Problem.objects.filter(aqg=aqg))
-            if not problems_pool:
-                continue
-                
-            chosen_problem = random.choice(problems_pool)
-            
-            # Fetch all entity data elements associated with this problem template structure
-            entities = EntitySegment.objects.filter(problem=chosen_problem)
-            
-            evaluated_variables = {}
-            active_answer_blocks = {}
-            
-            # Step A: Evaluate variables first to lock down random selections
-            for entity in entities:
-                meta = json.loads(entity.content)
-                if meta.get('type', '').startswith('variable_'):
-                    val = SymPyAssessmentEngine.evaluate_variable(meta)
-                    evaluated_variables[meta.get('token')] = val
-            
-            # Step B: Process layout blocks and structure multiple-choice distractors securely
-            for entity in entities:
-                meta = json.loads(entity.content)
-                ent_type = meta.get('type')
-                token = meta.get('token')
-                
-                if ent_type == 'multiple_choice' and entity.default_answer:
-                    # Resolve token references in correct values
-                    correct_expr_raw = meta['choices'][0]['content'] # assuming first index is template target
-                    evaluated_correct = SymPyAssessmentEngine.substitute_tokens(correct_expr_raw, evaluated_variables)
-                    
-                    choices_payload = [{'id': 'correct', 'content': evaluated_correct}]
-                    
-                    if meta.get('decoy_generation_mode') == 'sympy_random':
-                        decoys = SymPyAssessmentEngine.generate_sympy_decoys(evaluated_correct, count=3)
-                        for d in decoys:
-                            choices_payload.append({'id': f'decoy_{random.randint(1000,9999)}', 'content': d})
-                    
-                    random.shuffle(choices_payload) # Mix them up so 'correct' isn't always index 0
-                    
-                    active_answer_blocks[token] = {
-                        "type": "multiple_choice",
-                        "choices": choices_payload,
-                        "points": entity.points
-                    }
-                    
-                    # Core security: Cache the master answer validation map in the session snapshot state only
-                    active_answer_blocks[token]["_secure_correct_key"] = evaluated_correct
+    )
 
-                elif ent_type == 'mathematical_expression' and entity.default_answer:
-                    evaluated_correct = SymPyAssessmentEngine.substitute_tokens(meta['correct_formula'], evaluated_variables)
-                    active_answer_blocks[token] = {
-                        "type": "mathematical_expression",
-                        "points": entity.points,
-                        "expected_structure": meta.get('expected_structural_form'),
-                        "_secure_correct_key": evaluated_correct
-                    }
-            
-            # Step C: Compile the display HTML by rendering token replacements safely
-            q_blocks = QuestionBlock.objects.filter(problem=chosen_problem)
-            compiled_html_elements = []
-            
-            for block in q_blocks:
-                rendered_text = SymPyAssessmentEngine.substitute_tokens(block.content, evaluated_variables)
-                
-                # Replace answer tokens with client-safe input elements
-                for token, block_data in active_answer_blocks.items():
-                    if block_data['type'] == 'multiple_choice':
-                        # Generate non-revealing radio select input loops
-                        radio_html = f'<div class="mc-group" data-token="{token}">'
-                        for choice in block_data['choices']:
-                            radio_html += f'<label><input type="radio" name="{token}" value="{choice["content"]}"> {choice["content"]}</label><br>'
-                        radio_html += '</div>'
-                        rendered_text = rendered_text.replace(f"<{token}>", radio_html)
-                        
-                    elif block_data['type'] == 'mathematical_expression':
-                        input_field_html = f'<input type="text" class="math-expr-input" name="{token}" placeholder="Enter formula answer...">'
-                        rendered_text = rendered_text.replace(f"<{token}>", input_field_html)
-                
-                compiled_html_elements.append(rendered_text)
 
-            # Package the processed problem tracking structure state
-            compiled_test_payload["questions"].append({
-                "problem_id": chosen_problem.id,
-                "title": chosen_problem.title,
-                "html_canvas": "".join(compiled_html_elements),
-                # Send configuration items to client without secure validation hashes
-                "client_answer_blocks": {k: {sub_k: sub_v for sub_k, sub_v in v.items() if not sub_k.startswith('_')} for k, v in active_answer_blocks.items()}
-            })
-            
-        # 3. Store the secure state dictionary directly into the Django Session database backend 
-        # to ensure verification keys remain entirely unreachable from browser contexts.
-        session_key = f"active_assessment_snapshot_{assessment.id}"
-        request.session[session_key] = compiled_test_payload
-        
-        return JsonResponse({
-            'success': True,
-            'assessment_title': assessment.title,
-            # Send data to client UI template renderer lines
-            'payload': {
-                "title": compiled_test_payload["title"],
-                "questions": [{k: v for k, v in q.items() if k != '_secure_correct_key'} for q in compiled_test_payload["questions"]]
+@login_required
+def student_assessment_take_status_ajax(request, course_id, assessment_id):
+    """Heartbeat for the take page: detect close / forced submit."""
+    if getattr(request.user, "user_type", None) != "Student":
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course_id=course_id,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .student_attempts import (
+        assessment_taking_ended,
+        assessment_window_bounds,
+        attempt_may_continue_while_closed,
+        current_attempt_for_student,
+        finalize_student_attempt_if_open,
+        normalize_assessment_status,
+        student_facing_assessment_status,
+        student_may_start_attempt,
+        upcoming_window_contains,
+    )
+
+    now = timezone.now()
+    attempt = current_attempt_for_student(assessment, request.user)
+    closed = assessment_taking_ended(assessment, now=now)
+    # If the upcoming window just ended, finalize this student's open take so the
+    # poll kick does not wait on the periodic close job. Never finalize an
+    # in-flight retake / open retake grant — those outlive class closed status.
+    if (
+        closed
+        and attempt is not None
+        and attempt.status
+        in (
+            StudentAssessmentAttempt.STATUS_READY,
+            StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+        )
+        and not attempt_may_continue_while_closed(
+            attempt, assessment, request.user
+        )
+    ):
+        finalize_student_attempt_if_open(attempt)
+        attempt.refresh_from_db()
+
+    attempt_status = attempt.status if attempt else None
+    submitted = bool(
+        attempt
+        and (
+            attempt.status == StudentAssessmentAttempt.STATUS_SUBMITTED
+            or attempt.auto_graded_at is not None
+        )
+    )
+    taking_allowed = student_may_start_attempt(
+        assessment, request.user, now=now
+    )
+    # `closed` must mean "this student's take session should end", NOT merely
+    # that the class assessment row is closed — otherwise retakes on a closed
+    # class are force-submitted by clients that key off `closed`.
+    session_closed = not taking_allowed
+    _start, end = assessment_window_bounds(assessment)
+    window_ends_at = None
+    remaining_seconds = None
+    if (
+        normalize_assessment_status(assessment.status) == "upcoming"
+        and upcoming_window_contains(assessment, now=now)
+        and end is not None
+    ):
+        window_ends_at = end.isoformat()
+        remaining_seconds = max(0, int((end - now).total_seconds()))
+
+    return JsonResponse(
+        {
+            "success": True,
+            "closed": session_closed,
+            "class_closed": closed,
+            "force_close": session_closed,
+            "assessment_status": assessment.status,
+            "display_status": student_facing_assessment_status(assessment, now=now),
+            "attempt_status": attempt_status,
+            "submitted": submitted,
+            "taking_allowed": taking_allowed,
+            "window_ends_at": window_ends_at,
+            "remaining_seconds": remaining_seconds,
+        }
+    )
+
+
+@login_required
+@require_POST
+def student_assessment_autosave_ajax(request, course_id, assessment_id):
+    if getattr(request.user, "user_type", None) != "Student":
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course_id=course_id, parent_assessment__isnull=True
+    )
+    from .student_attempts import (
+        assessment_taking_ended,
+        begin_attempt_for_student,
+        current_attempt_for_student,
+        finalize_student_attempt_if_open,
+        upsert_answers,
+    )
+
+    attempt = current_attempt_for_student(assessment, request.user)
+    if not attempt:
+        return JsonResponse({"error": "No attempt found."}, status=404)
+    if attempt.status == StudentAssessmentAttempt.STATUS_SUBMITTED:
+        return JsonResponse(
+            {
+                "error": "Already submitted.",
+                "code": "already_submitted",
+                "closed": assessment_taking_ended(assessment),
+                "submitted": True,
+            },
+            status=400,
+        )
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+
+    # Active ready/in_progress take (including a per-student retake on a closed
+    # assessment) should keep autosaving. Only finalize when the class is closed
+    # and this attempt is somehow still open without retake access — handled by
+    # the close job; here just block new work if already submitted above.
+    if (
+        assessment_taking_ended(assessment)
+        and attempt.status
+        not in (
+            StudentAssessmentAttempt.STATUS_READY,
+            StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+        )
+    ):
+        upsert_answers(attempt, data)
+        finalize_student_attempt_if_open(attempt)
+        return JsonResponse(
+            {
+                "success": True,
+                "closed": True,
+                "submitted": True,
+                "code": "assessment_closed",
             }
-        }, status=200)
-    
+        )
+
+    upsert_answers(attempt, data)
+    begin_attempt_for_student(attempt)
+    return JsonResponse(
+        {
+            "success": True,
+            "closed": False,
+            "taking_allowed": True,
+        }
+    )
+
+
+@login_required
+@require_POST
+def student_assessment_submit_ajax(request, course_id, assessment_id):
+    if getattr(request.user, "user_type", None) != "Student":
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course_id=course_id, parent_assessment__isnull=True
+    )
+    from .student_attempts import current_attempt_for_student
+
+    attempt = current_attempt_for_student(assessment, request.user)
+    if not attempt:
+        return JsonResponse({"error": "No attempt found."}, status=404)
+    if attempt.status == StudentAssessmentAttempt.STATUS_SUBMITTED:
+        return JsonResponse(
+            {
+                "success": True,
+                "already_submitted": True,
+                "closed": True,
+                "message": "Already submitted.",
+            }
+        )
+    try:
+        data = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+
+    from .student_attempts import submit_and_grade_attempt, upsert_answers
+    from .assessment_grades import scores_visible_to_student
+    from .student_attempts import course_template_assessment
+
+    if data:
+        upsert_answers(attempt, data)
+    try:
+        result = submit_and_grade_attempt(attempt)
+    except ValueError as exc:
+        return JsonResponse(
+            {
+                "success": True,
+                "already_submitted": True,
+                "message": str(exc),
+            }
+        )
+
+    attempt.refresh_from_db()
+    template = course_template_assessment(assessment) or assessment
+    visible = scores_visible_to_student(template, attempt)
+    payload = {
+        "success": True,
+        "scores_visible": visible,
+        "requires_manual_grading": result.get("requires_manual_grading", False),
+        "closed": False,
+    }
+    if visible:
+        payload["earned_total"] = result.get("earned_total")
+        payload["max_total"] = result.get("max_total")
+        payload["problems"] = result.get("problems")
+    else:
+        payload["message"] = (
+            "Submitted. Your score will be available when your teacher "
+            "releases grades."
+        )
+    return JsonResponse(payload)
+
+
+def _teacher_grades_access(request, course):
+    """Return None on success, or an HttpResponse/redirect on denial."""
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        messages.error(request, "Teachers only.")
+        return redirect("dashboard")
+    if not _user_can_access_course_page(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect("dashboard")
+    return None
+
+
+@login_required
+def course_grades_view(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    if not _user_can_access_course_page(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect("dashboard")
+
+    user_type = getattr(request.user, "user_type", None)
+    if user_type in ("Teacher", "IT_Support"):
+        from .assessment_grades import grades_overview_for_course, grades_overview_meta
+
+        grade_rows = grades_overview_for_course(course)
+        meta = grades_overview_meta(course, grade_rows)
+        return render(
+            request,
+            "assessment_tool/course_grades.html",
+            {
+                "course": course,
+                "active_tab": "grades",
+                "grade_rows": grade_rows,
+                "show_weight_column": meta["show_weight_column"],
+                "show_points_column": meta["show_points_column"],
+                "show_curve_column": meta["show_curve_column"],
+                "show_manual_pending_column": meta["show_manual_pending_column"],
+                "grade_aggregation_mode": meta["grade_aggregation_mode"],
+            },
+        )
+
+    if user_type != "Student":
+        messages.error(request, "Unauthorized.")
+        return redirect("dashboard")
+
+    from .assessment_grades import student_grades_for_course
+
+    payload = student_grades_for_course(course, request.user)
+    return render(
+        request,
+        "assessment_tool/course_grades_student.html",
+        {
+            "course": course,
+            "active_tab": "grades",
+            "grade_rows": payload["rows"],
+            "grade_total": payload["total"],
+            "grade_aggregation_mode": payload["grade_aggregation_mode"],
+            "is_teacher_viewer": False,
+        },
+    )
+
+
+@login_required
+def course_grades_assessment_view(request, course_id, assessment_id):
+    course = get_object_or_404(Course, id=course_id)
+    denied = _teacher_grades_access(request, course)
+    if denied:
+        return denied
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .assessment_grades import (
+        assessment_has_retake_attempts,
+        assessment_grade_question_choices,
+        student_rows_for_assessment,
+        unfinished_manual_grading,
+        scores_visible_for_assessment,
+        assessment_release_mode,
+        assessment_counts_toward_grade,
+    )
+
+    student_rows = student_rows_for_assessment(assessment)
+    return render(
+        request,
+        "assessment_tool/course_grades_assessment.html",
+        {
+            "course": course,
+            "assessment": assessment,
+            "active_tab": "grades",
+            "student_rows": student_rows,
+            "show_retake_column": assessment_has_retake_attempts(student_rows),
+            "unfinished": unfinished_manual_grading(assessment),
+            "question_choices": assessment_grade_question_choices(assessment),
+            "scores_visible_to_students": scores_visible_for_assessment(assessment),
+            "student_release_mode": assessment_release_mode(assessment),
+            "counts_toward_grade": assessment_counts_toward_grade(assessment),
+            "assessment_is_open": (assessment.status or "").lower()
+            in ("open", "upcoming", "active", "retake available"),
+        },
+    )
+
+
+@login_required
+def course_grades_manual_batch_view(request, course_id, assessment_id):
+    """Temporary batch page: all questions still needing manual grading."""
+    course = get_object_or_404(Course, id=course_id)
+    denied = _teacher_grades_access(request, course)
+    if denied:
+        return denied
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    return render(
+        request,
+        "assessment_tool/course_grades_manual_batch.html",
+        {
+            "course": course,
+            "assessment": assessment,
+            "active_tab": "grades",
+            "load_problem_workspace": True,
+        },
+    )
+
+
+@login_required
+def course_grades_manual_batch_payload_ajax(request, course_id, assessment_id):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .assessment_grades import manual_batch_review_payload
+
+    payload = manual_batch_review_payload(assessment)
+    return JsonResponse({"success": True, **payload})
+
+
+@login_required
+def course_grades_question_batch_view(request, course_id, assessment_id, slot_index):
+    """One question for all students who have a score on that slot."""
+    course = get_object_or_404(Course, id=course_id)
+    denied = _teacher_grades_access(request, course)
+    if denied:
+        return denied
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .assessment_grades import assessment_grade_question_choices
+
+    choices = assessment_grade_question_choices(assessment)
+    try:
+        slot_i = int(slot_index)
+    except (TypeError, ValueError):
+        messages.error(request, "Invalid question.")
+        return redirect(
+            "course_grades_assessment", course_id=course.id, assessment_id=assessment.id
+        )
+    current = next((c for c in choices if c["slot_index"] == slot_i), None)
+    other_choices = [c for c in choices if c["slot_index"] != slot_i]
+    return render(
+        request,
+        "assessment_tool/course_grades_question_batch.html",
+        {
+            "course": course,
+            "assessment": assessment,
+            "active_tab": "grades",
+            "load_problem_workspace": True,
+            "slot_index": slot_i,
+            "question_title": (current or {}).get("title") or f"Question {slot_i}",
+            "other_question_choices": other_choices,
+        },
+    )
+
+
+@login_required
+def course_grades_question_batch_payload_ajax(
+    request, course_id, assessment_id, slot_index
+):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .assessment_grades import question_batch_review_payload
+
+    payload = question_batch_review_payload(assessment, slot_index)
+    return JsonResponse({"success": True, **payload})
+
+
+@login_required
+@require_POST
+def course_grades_attempt_action_ajax(request, course_id, assessment_id, attempt_id):
+    """Teacher per-student actions: open retake, adjust score, void score."""
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .student_attempts import get_attempt_for_template
+
+    attempt = get_attempt_for_template(assessment, attempt_id)
+    if attempt is None:
+        return JsonResponse({"error": "Attempt not found."}, status=404)
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+
+    action = str(body.get("action") or "").strip().lower()
+    from .student_assessment_actions import (
+        adjust_attempt_score,
+        close_test_for_retake,
+        open_test_for_retake,
+        void_attempt_score,
+    )
+
+    if action == "open_retake":
+        result = open_test_for_retake(assessment, attempt.user)
+    elif action == "close_retake":
+        result = close_test_for_retake(assessment, attempt.user)
+    elif action == "adjust_score":
+        result = adjust_attempt_score(
+            attempt,
+            earned_points=body.get("earned_points"),
+            max_points=body.get("max_points"),
+        )
+    elif action == "void_score":
+        result = void_attempt_score(attempt)
+    else:
+        return JsonResponse({"error": "Unknown action."}, status=400)
+
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+@require_POST
+def course_grades_aggregation_ajax(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    from .assessment_grades import set_course_grade_aggregation_mode
+
+    result = set_course_grade_aggregation_mode(course, body.get("mode") or "")
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+def course_grades_options_ajax(request, course_id):
+    """GET/POST course default assessment options (gear icon)."""
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    from .assessment_options import (
+        course_default_options_payload,
+        save_course_default_options,
+    )
+
+    if request.method == "GET":
+        return JsonResponse(course_default_options_payload(course))
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed."}, status=405)
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    result = save_course_default_options(
+        course,
+        body.get("selections") or [],
+        default_time_limit_minutes=body.get("default_time_limit_minutes"),
+    )
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+def course_grades_assessment_options_ajax(request, course_id, assessment_id):
+    """GET/POST per-assessment option overrides."""
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
+    )
+    from .assessment_options import (
+        assessment_options_payload,
+        save_assessment_options,
+    )
+
+    subset = request.GET.get("subset") or None
+    if request.method == "GET":
+        return JsonResponse(assessment_options_payload(assessment, subset=subset))
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed."}, status=405)
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    subset = body.get("subset") or subset
+    result = save_assessment_options(
+        assessment,
+        body.get("selections") or [],
+        time_limit_minutes=body.get("time_limit_minutes"),
+        subset=subset,
+    )
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+@require_POST
+def course_grades_assessment_weight_ajax(request, course_id, assessment_id):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
+    )
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    from .assessment_grades import set_assessment_grade_weight
+
+    result = set_assessment_grade_weight(assessment, body.get("grade_weight"))
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+@require_POST
+def course_grades_assessment_curve_ajax(request, course_id, assessment_id):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
+    )
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    from .assessment_grades import set_assessment_curve_max_points
+
+    result = set_assessment_curve_max_points(assessment, body.get("curve_max_points"))
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
+    course = get_object_or_404(Course, id=course_id)
+    if not _user_can_access_course_page(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect("dashboard")
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
+    )
+    from .student_attempts import get_attempt_for_template
+
+    attempt = get_attempt_for_template(assessment, attempt_id)
+    if attempt is None or attempt.course_id != course.id:
+        messages.error(request, "Attempt not found.")
+        return redirect("course_grades_assessment", course_id=course.id, assessment_id=assessment.id)
+    from .assessment_grades import (
+        scores_visible_for_assessment,
+        student_may_review_attempt,
+    )
+
+    user_type = getattr(request.user, "user_type", None)
+    student_readonly = False
+    if user_type in ("Teacher", "IT_Support"):
+        pass
+    elif user_type == "Student" and attempt.user_id == request.user.user_id:
+        if not student_may_review_attempt(assessment, attempt):
+            messages.error(
+                request,
+                "Your teacher has not enabled submission review for this assessment.",
+            )
+            return redirect("assessment_view", course_id=course.id)
+        student_readonly = True
+    else:
+        messages.error(request, "Unauthorized.")
+        return redirect("dashboard")
+
+    return render(
+        request,
+        "assessment_tool/course_grades_review.html",
+        {
+            "course": course,
+            "assessment": assessment,
+            "attempt": attempt,
+            "active_tab": "grades",
+            "load_problem_workspace": True,
+            "scores_visible_to_students": scores_visible_for_assessment(assessment),
+            "student_readonly": student_readonly,
+        },
+    )
+
+
+@login_required
+def course_grades_attempt_payload_ajax(request, course_id, assessment_id, attempt_id):
+    course = get_object_or_404(Course, id=course_id)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
+    )
+    from .student_attempts import get_attempt_for_template
+
+    attempt = get_attempt_for_template(assessment, attempt_id)
+    if attempt is None:
+        return JsonResponse({"error": "Attempt not found."}, status=404)
+    user_type = getattr(request.user, "user_type", None)
+    student_readonly = False
+    if user_type in ("Teacher", "IT_Support"):
+        pass
+    elif user_type == "Student" and attempt.user_id == request.user.user_id:
+        from .assessment_grades import student_may_review_attempt
+
+        if not student_may_review_attempt(assessment, attempt):
+            return JsonResponse({"error": "Review not available."}, status=403)
+        student_readonly = True
+    else:
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+
+    from .assessment_grades import teacher_review_payload
+
+    payload = teacher_review_payload(attempt)
+    payload["student_readonly"] = student_readonly
+    return JsonResponse({"success": True, **payload})
+
+
+@login_required
+@require_POST
+def course_grades_attempt_save_ajax(request, course_id, assessment_id, attempt_id):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
+    )
+    from .student_attempts import get_attempt_for_template
+
+    attempt = get_attempt_for_template(assessment, attempt_id)
+    if attempt is None:
+        return JsonResponse({"error": "Attempt not found."}, status=404)
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+    from .assessment_grades import apply_teacher_scores
+
+    result = apply_teacher_scores(attempt, body.get("updates") or [])
+    return JsonResponse(result)
+
+
+# Legacy session stubs retired — use student_assessment_* endpoints above.
+@login_required
+@require_POST
+def start_student_assessment_session(request, assessment_id):
+    return JsonResponse(
+        {
+            "error": "Deprecated. Use the student assessment take flow.",
+            "code": "deprecated",
+        },
+        status=410,
+    )
+
 
 @login_required
 @require_POST
 def submit_student_assessment_evaluation(request, assessment_id):
-    session_key = f"active_assessment_snapshot_{assessment_id}"
-    snapshot = request.session.get(session_key)
-    
-    if not snapshot:
-        return JsonResponse({'error': 'Active testing sequence data context snapshot not found.'}, status=400)
-        
-    try:
-        submission_data = json.loads(request.body)
-        student_answers = submission_data.get('answers', {}) # Expected dictionary format: {"token_name": "student_string_input"}
-        
-        total_score = 0.0
-        max_possible_points = 0.0
-        grading_ledger_report = []
-
-        # Access original session map objects completely invisible to the request context layers
-        for question in snapshot["questions"]:
-            # Reconstruct answer blocks with validation keys safely intact
-            for token, secure_meta in question["client_answer_blocks"].items():
-                # We fetch original structural rules directly from our backend snapshot model data
-                pass
-            
-            # For demonstration, evaluating direct values against snapshot session properties
-            # (In practice, match tokens submitted out of student_answers directly)
-            
-        # Clear out session map upon successful processing to lock down multiple submission pathways
-        del request.session[session_key]
-        
-        return JsonResponse({
-            'status': 'success',
-            'score': total_score,
-            'max_points': max_possible_points
-        }, status=200)
-        
-    except Exception as e:
-        return JsonResponse({'error': f"Grading System Runtime Failure: {str(e)}"}, status=400)
+    return JsonResponse(
+        {
+            "error": "Deprecated. Use the student assessment take flow.",
+            "code": "deprecated",
+        },
+        status=410,
+    )
 
 
 def verify_workspace_clearance(user, problem):

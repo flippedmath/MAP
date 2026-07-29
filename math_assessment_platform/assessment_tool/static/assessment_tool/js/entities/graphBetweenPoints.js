@@ -1078,8 +1078,12 @@ export function renderGraphBetweenPointsCanvas(targetEl, config, options = {}) {
         </svg>
     `;
 
-    // Student UI mount (preview wrapper)
-    if (mode === 'student' && typeof options.onStudentAnswerChange === 'function') {
+    // Student UI mount (preview wrapper) — skip when review/read-only
+    if (
+        mode === 'student'
+        && typeof options.onStudentAnswerChange === 'function'
+        && !options.readOnly
+    ) {
         const wrap = targetEl.closest('.simulated-gbp-wrapper');
         if (wrap && !wrap.dataset.gbpStudentBound) {
             mountStudentSegmentUi(wrap, config, options);

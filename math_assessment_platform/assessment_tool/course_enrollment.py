@@ -12,14 +12,13 @@ import logging
 from datetime import timedelta
 
 from django.db import transaction
-from django.db.models import Sum
 from django.utils import timezone
 
 from .models import (
     Assessment,
-    EntityUserInput,
     FinalGradeCalculation,
     OpenStudentAssessmentOverwrite,
+    StudentAssessmentAttempt,
     StudentCourseEnrollment,
     UsersInCourse,
 )
@@ -84,59 +83,36 @@ def start_enrollment_for_slot(*, course, user, slot) -> StudentCourseEnrollment:
     return ensure_active_enrollment(course=course, user=user, slot=slot)
 
 
-def _score_from_student_assessment_copy(assessment: Assessment) -> tuple[float | None, float | None]:
-    """
-    Best-effort score from entity_user_input on a student assessment copy.
-    Returns (points, max_points); either may be None if nothing graded yet.
-    """
-    from .models import AssessmentQuestionGroup, EntitySegment, Problem
-
-    aqg_ids = list(
-        AssessmentQuestionGroup.objects.filter(assessment=assessment).values_list(
-            "id", flat=True
-        )
-    )
-    problem_ids = list(
-        Problem.objects.filter(aqg_id__in=aqg_ids).values_list("id", flat=True)
-    )
-    entities = EntitySegment.objects.filter(problem_id__in=problem_ids)
-    entity_ids = list(entities.values_list("id", flat=True))
-    if not entity_ids:
+def _score_from_student_attempt(attempt: StudentAssessmentAttempt) -> tuple[float | None, float | None]:
+    """Return (points, max_points) from a frozen student_assessment_attempt row."""
+    if attempt is None:
         return None, None
-
-    inputs = EntityUserInput.objects.filter(entity_id__in=entity_ids)
-    scored = inputs.exclude(points_score__isnull=True)
-    if not scored.exists():
+    if attempt.auto_graded_at is None and attempt.status != StudentAssessmentAttempt.STATUS_SUBMITTED:
         return None, None
-
-    points = float(scored.aggregate(total=Sum("points_score"))["total"] or 0.0)
-    max_points_agg = entities.exclude(points__isnull=True).aggregate(total=Sum("points"))
-    max_points = max_points_agg["total"]
-    max_points = float(max_points) if max_points is not None else None
-    return points, max_points
+    return attempt.earned_points, attempt.max_points
 
 
 def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
     """
     Ensure ``final_grade_calculation`` has rows for scores already earned in
-    this stint (submitted student assessment copies).
+    this stint (submitted frozen student attempts).
 
     Does **not** invent zeros for open/unattempted tests — those are written
-    when a teacher closes an assessment (see ``record_zeros_on_assessment_close``).
+    on close only when at least one student has started or submitted
+    (see ``record_zeros_on_assessment_close`` / ``close_assessment_and_finalize_attempts``).
     Existing enrollment-scoped grade rows are left untouched.
     """
     course = enrollment.course
     student = enrollment.user
     created = 0
 
-    student_copies = Assessment.objects.filter(
-        course=course,
-        user=student,
-        parent_assessment__isnull=False,
-    ).select_related("parent_assessment")
+    attempts = StudentAssessmentAttempt.objects.filter(
+        enrollment=enrollment,
+        status=StudentAssessmentAttempt.STATUS_SUBMITTED,
+    ).select_related("assessment")
 
-    for copy in student_copies:
-        parent = copy.parent_assessment
+    for attempt in attempts:
+        parent = attempt.assessment
         if parent is None:
             continue
         if FinalGradeCalculation.objects.filter(
@@ -145,14 +121,8 @@ def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
         ).exists():
             continue
 
-        status = (copy.status or "").lower()
-        points, max_points = _score_from_student_assessment_copy(copy)
-        has_attempt_record = points is not None or status in {
-            "submitted",
-            "closed",
-            "graded",
-        }
-        if not has_attempt_record:
+        points, max_points = _score_from_student_attempt(attempt)
+        if points is None and attempt.auto_graded_at is None:
             continue
 
         weight = 1
@@ -178,11 +148,12 @@ def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
 
 def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
     """
-    When a teacher closes a class assessment, write 0 / max for each actively
-    enrolled student who does not already have a grade row for this assessment
-    on their current enrollment stint.
+    When a class assessment closes after real student engagement, write 0 / max
+    for each actively enrolled student who does not already have a grade row
+    for this assessment on their current enrollment stint.
 
-    Call this from assessment-close flows once those are wired.
+    No-ops when nobody has started or submitted (experimental open→close should
+    leave no grade rows at all — see close_assessment_and_finalize_attempts).
     """
     if assessment is None or assessment.user_id is not None:
         # Only parent/class assessments.
@@ -190,10 +161,10 @@ def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
     if assessment.course_id is None:
         return 0
 
-    status = (assessment.status or "").lower()
-    if status not in {"closed", "close"}:
-        # Caller may set status before invoking; still allow explicit call.
-        pass
+    from .student_attempts import assessment_has_student_engagement
+
+    if not assessment_has_student_engagement(assessment):
+        return 0
 
     max_points = None
     weight = 1
@@ -235,8 +206,9 @@ def _delete_student_course_progress(course, student) -> None:
         a__course=course,
     ).delete()
 
-    # Student-specific assessment copies (and cascaded AQG/options).
+    # Student-specific assessment copies (legacy) and frozen attempts for this course.
     Assessment.objects.filter(course=course, user=student).delete()
+    StudentAssessmentAttempt.objects.filter(course=course, user=student).delete()
 
 
 def enrollment_within_credit_reimbursement_window(enrollment: StudentCourseEnrollment) -> bool:

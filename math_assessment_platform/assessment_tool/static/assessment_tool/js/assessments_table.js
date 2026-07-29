@@ -10,7 +10,7 @@ function handleStatusFieldMutation(assessmentId, newStatus) {
             const startInput = autoOpenCell.querySelector('.start-time-picker');
             const endInput = autoOpenCell.querySelector('.end-time-picker');
             
-            if (errorMsg && (!startInput.value || !endInput.value)) {
+            if (errorMsg && (!startInput?.value || !endInput?.value)) {
                 errorMsg.style.display = 'block'; 
             }
         } else {
@@ -29,6 +29,44 @@ function handleStatusFieldMutation(assessmentId, newStatus) {
     }
 }
 
+/** Parse a UTC/offset ISO string as an absolute instant (naive → UTC). */
+function parseUtcInstant(iso) {
+    if (!iso) return null;
+    let text = String(iso).trim();
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text)) {
+        text += 'Z';
+    }
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+}
+
+/** Format a Date as YYYY-MM-DDTHH:mm for datetime-local (browser local TZ). */
+function toDatetimeLocalValue(date) {
+    if (!date) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return (
+        `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+        `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+    );
+}
+
+/** datetime-local wall clock → ISO UTC for the server. */
+function localInputToUtcIso(value) {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date.toISOString();
+}
+
+function hydrateWindowInputsFromUtc(cell) {
+    cell.querySelectorAll('.window-input[data-utc-iso]').forEach((input) => {
+        const iso = input.getAttribute('data-utc-iso');
+        const date = parseUtcInstant(iso);
+        input.value = date ? toDatetimeLocalValue(date) : '';
+    });
+}
+
 // 🕒 Helper function to compute countdown string fields
 function updateCountdownLabel(cell) {
     const countdownSpan = cell.querySelector('.window-status-countdown');
@@ -37,9 +75,8 @@ function updateCountdownLabel(cell) {
     // Clear previous state
     countdownSpan.innerHTML = "";
 
-    // 1️⃣ Match your extra HTML elif block: If the cell is NOT upcoming, show the blue message
+    // Non-upcoming rows leave the Auto-Open cell blank.
     if (cell.classList.contains('status-not-upcoming')) {
-        countdownSpan.innerHTML = '<span style="color: #6fadbb;">Not in effect unless \'status\' = \'upcoming\'</span>';
         return;
     }
 
@@ -73,7 +110,13 @@ function updateCountdownLabel(cell) {
     } 
     // 3️⃣ Scenario B: Start date is in the past, End date is in the future
     else if (startDate <= now && endDate >= now) {
-        countdownSpan.innerHTML = '<span style="color: #10b981;">CURRENTLY OPEN</span>';
+        const diffMs = endDate - now;
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+        countdownSpan.innerHTML =
+            `<span style="color: #10b981;">CURRENTLY OPEN — ends in ${diffHours}h ${diffMinutes}m</span>`;
+    } else if (endDate < now) {
+        countdownSpan.innerHTML = '<span style="color: #ef4444;">Window ended (will auto-close)</span>';
     }
 }
 
@@ -82,12 +125,15 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initial run to build countdown text values on loaded inputs
     document.querySelectorAll('.auto-open-cell').forEach(cell => {
+        hydrateWindowInputsFromUtc(cell);
         updateCountdownLabel(cell);
 
         const assessmentId = cell.getAttribute('data-assessment-id');
         const startInput = cell.querySelector('.start-time-picker');
         const endInput = cell.querySelector('.end-time-picker');
         const lockCheckbox = cell.querySelector('.disable-window-checkbox');
+
+        if (!startInput || !endInput) return;
 
         if (lockCheckbox && lockCheckbox.checked) {
             startInput.disabled = true;
@@ -100,7 +146,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     startInput.disabled = true;
                     endInput.disabled = true;
                     if (startInput.value || endInput.value) {
-                        saveWindowTimestamps(assessmentId, startInput.value || null, endInput.value || null);
+                        saveWindowTimestamps(
+                            assessmentId,
+                            localInputToUtcIso(startInput.value),
+                            localInputToUtcIso(endInput.value)
+                        );
                     }
                 } else {
                     startInput.disabled = false;
@@ -131,12 +181,23 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Trigger dynamic live label refresh
             updateCountdownLabel(cell);
-            saveWindowTimestamps(assessmentId, startVal || null, endVal || null);
+            saveWindowTimestamps(
+                assessmentId,
+                localInputToUtcIso(startVal),
+                localInputToUtcIso(endVal)
+            );
         }
 
-        if (startInput) startInput.addEventListener('change', handleDateChange);
-        if (endInput) endInput.addEventListener('change', handleDateChange);
+        startInput.addEventListener('change', handleDateChange);
+        endInput.addEventListener('change', handleDateChange);
     });
+
+    // Refresh countdown labels once a minute while the page is open.
+    window.setInterval(() => {
+        document.querySelectorAll('.auto-open-cell').forEach((cell) => {
+            updateCountdownLabel(cell);
+        });
+    }, 60000);
 
     async function saveWindowTimestamps(assessmentId, startTime, endTime) {
         try {
@@ -155,6 +216,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await response.json();
             if (!response.ok) {
                 console.error(`Backend Exception: ${data.error || 'Failed saving window parameters.'}`);
+                return;
+            }
+            const cell = document.querySelector(
+                `.auto-open-cell[data-assessment-id="${assessmentId}"]`
+            );
+            if (cell && data.start_time != null) {
+                const startInput = cell.querySelector('.start-time-picker');
+                const endInput = cell.querySelector('.end-time-picker');
+                if (startInput) startInput.setAttribute('data-utc-iso', data.start_time || '');
+                if (endInput) endInput.setAttribute('data-utc-iso', data.end_time || '');
             }
         } catch (err) {
             console.error("Transmission error updating window fields:", err);
@@ -181,7 +252,6 @@ document.addEventListener('DOMContentLoaded', function() {
             e.preventDefault();
             
             const assessmentId = this.getAttribute('data-assessment-id');
-            const branchGroupId = this.getAttribute('data-branch-group-id');
             const targetedRow = this.closest('tr');
 
             const userConfirmed = confirm("Are you sure you want to delete this assessment? This will move its structural files to the Trash folder and remove it from your active dashboard.");

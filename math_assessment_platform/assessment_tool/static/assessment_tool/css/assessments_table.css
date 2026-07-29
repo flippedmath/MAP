@@ -319,12 +319,12 @@
     min-width: 260px;
 }
 
-/* 🔒 Greyed Out Rule for Statuses other than 'upcoming' */
+/* 🔒 Non-upcoming Auto-Open cells stay blank (inputs only render for upcoming). */
 .auto-open-cell.status-not-upcoming .datetime-inputs-grid,
-.auto-open-cell.status-not-upcoming .checkbox-toggle-label {
-    opacity: 0.45;
-    filter: grayscale(40%);
-    transition: opacity 0.2s ease;
+.auto-open-cell.status-not-upcoming .checkbox-toggle-label,
+.auto-open-cell.status-not-upcoming .datetime-range-wrapper,
+.auto-open-cell.status-not-upcoming .assessment-window-error-msg {
+    display: none;
 }
 
 /* Keep inputs fully readable and actionable even when parent frame container is faded */

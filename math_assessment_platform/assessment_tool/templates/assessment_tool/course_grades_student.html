@@ -1,0 +1,116 @@
+{% extends "assessment_tool/components/course_sidebar.html" %}
+{% load static %}
+
+{% block course_extra_css %}
+<link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
+<style>
+  .grades-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600;
+  }
+  .grades-badge.muted { background: #f1f5f9; color: #475569; }
+  .grades-badge.warn { background: #fef3c7; color: #92400e; }
+  .grades-badge.ok { background: #dcfce7; color: #166534; }
+  .grades-pending { color: #64748b; font-style: italic; }
+  .grades-excluded { color: #92400e; font-size: 0.8rem; margin-left: 6px; }
+  a.grades-link { color: #2563eb; font-weight: 600; text-decoration: none; }
+  a.grades-link:hover { text-decoration: underline; }
+  .grades-total-row td {
+    font-weight: 700; background: #f8fafc; border-top: 2px solid #cbd5e1;
+  }
+  .grades-score-pct { color: #475569; }
+</style>
+{% endblock %}
+
+{% block course_sub_content %}
+<div class="assessments-pane-header">
+  <div class="header-title-block">
+    <h2>Grades</h2>
+    <p class="subtitle">Your scores for assessments in this course.</p>
+  </div>
+</div>
+
+<div class="table-responsive-wrapper">
+  <table class="dashboard-data-table">
+    <thead>
+      <tr>
+        <th>Assessment</th>
+        <th>Status</th>
+        <th>Score</th>
+        {% if grade_aggregation_mode == 'equal_weight' %}
+        <th>Weight</th>
+        {% endif %}
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in grade_rows %}
+      <tr>
+        <td>
+          {{ row.name }}
+          {% if row.scores_visible and not row.counts_toward_grade %}
+            <span class="grades-excluded">(does not count toward course total)</span>
+          {% endif %}
+        </td>
+        <td>{{ row.assessment_status|default:"—" }}</td>
+        <td>
+          {% if row.scores_visible and row.earned_points is not None %}
+            {{ row.earned_points }} / {{ row.max_points }}{% if grade_aggregation_mode == 'equal_weight' and row.percent is not None %} <span class="grades-score-pct">= {{ row.percent }}%</span>{% endif %}
+          {% elif row.manual_pending %}
+            <span class="grades-badge warn">Awaiting teacher grading</span>
+          {% else %}
+            <span class="grades-pending">—</span>
+          {% endif %}
+        </td>
+        {% if grade_aggregation_mode == 'equal_weight' %}
+        <td>
+          {% if row.weight_percent is not None and row.counts_toward_grade %}
+            {{ row.weight_percent }}%
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        {% endif %}
+        <td>
+          {% if row.can_review %}
+            <a class="grades-link" href="{% url 'course_grades_attempt' course.id row.assessment_id row.attempt_id %}">View results</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="{% if grade_aggregation_mode == 'equal_weight' %}5{% else %}4{% endif %}">
+          No graded assessments yet. Submitted work will appear here.
+        </td>
+      </tr>
+      {% endfor %}
+      {% if grade_rows %}
+      <tr class="grades-total-row">
+        <td>Total score</td>
+        <td>
+          {% if grade_aggregation_mode == 'sum_points' %}
+            Sum of points
+          {% else %}
+            Weighted average
+          {% endif %}
+        </td>
+        <td>
+          {% if grade_total.aggregation_mode == 'sum_points' and grade_total.earned_sum is not None %}
+            {{ grade_total.earned_sum }} / {{ grade_total.max_sum }}{% if grade_total.percent is not None %} <span class="grades-score-pct">= {{ grade_total.percent }}%</span>{% endif %}
+          {% elif grade_total.percent is not None %}
+            {{ grade_total.percent }}%
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        {% if grade_aggregation_mode == 'equal_weight' %}
+        <td>
+          {% if grade_total.percent is not None %}100%{% else %}—{% endif %}
+        </td>
+        {% endif %}
+        <td></td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

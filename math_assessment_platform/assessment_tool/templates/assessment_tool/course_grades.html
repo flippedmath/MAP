@@ -1,0 +1,306 @@
+{% extends "assessment_tool/components/course_sidebar.html" %}
+{% load static %}
+
+{% block course_extra_css %}
+<link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
+<style>
+  .grades-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600;
+  }
+  .grades-badge.warn { background: #fef3c7; color: #92400e; }
+  .grades-badge.ok { background: #dcfce7; color: #166534; }
+  .grades-badge.muted { background: #f1f5f9; color: #475569; }
+  a.grades-link { color: #2563eb; font-weight: 600; text-decoration: none; }
+  a.grades-link:hover { text-decoration: underline; }
+  .btn-release {
+    background:#2563eb; color:#fff; border:none; border-radius:6px; padding:0.35rem 0.75rem;
+    font-weight:600; cursor:pointer; font-size:0.8rem;
+  }
+  .btn-release:hover { background:#1d4ed8; }
+  .btn-release.secondary { background:#64748b; }
+  .grades-modal-overlay {
+    position: fixed; inset: 0; background: rgba(15,23,42,0.45); display: none;
+    align-items: center; justify-content: center; z-index: 1200; padding: 16px;
+  }
+  .grades-modal-overlay.is-open { display: flex; }
+  .grades-modal-card {
+    background: #fff; border-radius: 12px; max-width: 520px; width: 100%;
+    padding: 20px 22px; box-shadow: 0 20px 40px rgba(15,23,42,0.25);
+  }
+  .grades-modal-card.grades-options-card { max-width: 640px; max-height: 85vh; overflow: auto; }
+  .grades-options-header {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  }
+  .grades-options-close {
+    border: none; background: transparent; font-size: 1.5rem; line-height: 1;
+    color: #64748b; cursor: pointer; padding: 0 4px;
+  }
+  .grades-options-close:hover { color: #0f172a; }
+  .grades-modal-card h3 { margin: 0 0 4px; }
+  .grades-modal-sub { margin: 0 0 14px; color: #64748b; font-size: 0.9rem; }
+  .grades-release-options { border: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .grades-release-option { display: flex; gap: 10px; align-items: flex-start; font-size: 0.92rem; color: #334155; cursor: pointer; }
+  .grades-release-check { margin-top: 14px; }
+  .grades-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .grades-modal-status { min-height: 1.2em; margin: 8px 0 0; font-size: 0.85rem; color: #334155; }
+  .grades-agg-bar { display:flex; align-items:center; gap:10px; margin: 0 0 1rem; }
+  .grades-gear-btn {
+    border: 1px solid #cbd5e1; background: #fff; border-radius: 6px; padding: 6px 10px; cursor: pointer; color: #475569;
+  }
+  .grades-options-body { display: flex; flex-direction: column; gap: 14px; }
+  .grades-options-group {
+    border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; margin: 0;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .grades-options-group legend {
+    padding: 0 4px; font-weight: 600; font-size: 0.88rem; color: #0f172a;
+  }
+  .grades-options-time-limit {
+    display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-left: 1.6rem;
+    font-size: 0.85rem; color: #475569;
+  }
+  .grades-options-time-limit input {
+    width: 4.5rem; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px;
+  }
+  .grades-options-note {
+    margin: 0 0 4px; padding: 10px 12px; border-radius: 8px;
+    background: #f8fafc; border: 1px solid #e2e8f0; color: #475569;
+    font-size: 0.88rem; line-height: 1.4;
+  }
+  .btn-visibility {
+    background: transparent; border: 1px solid #cbd5e1; border-radius: 6px;
+    padding: 0.25rem 0.55rem; font-size: 0.78rem; font-weight: 600; cursor: pointer; color: #334155;
+  }
+  .btn-visibility:hover { background: #f1f5f9; }
+  .grades-settings-cell { white-space: nowrap; vertical-align: middle; }
+  .grades-settings-cell.has-custom-options { background: #fff7ed; }
+  .grades-metric-cell {
+    display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .grades-weight-input, .grades-curve-input {
+    width: 2.6rem; padding: 3px 4px; border: 1px solid #cbd5e1; border-radius: 4px;
+    font-size: 0.85rem; text-align: center;
+  }
+  .grades-metric-pct { color: #64748b; font-size: 0.85rem; min-width: 3.2rem; }
+  .grades-points-total { font-weight: 600; font-size: 0.9rem; color: #334155; }
+</style>
+{% endblock %}
+
+{% block course_sub_content %}
+<div class="assessments-pane-header">
+  <div class="header-title-block">
+    <h2>Grades</h2>
+    <p class="subtitle">
+      You always see student scores here. Student visibility comes from the
+      Student view of graded assessments setting (course gear or Settings).
+    </p>
+  </div>
+</div>
+
+<div class="grades-agg-bar">
+  <span style="font-size:0.9rem;color:#475569;">
+    Course total method:
+    {% if grade_aggregation_mode == 'sum_points' %}
+      Accumulated points
+    {% else %}
+      Percent of final grade (weighted)
+    {% endif %}
+  </span>
+  <button
+    type="button"
+    class="grades-gear-btn"
+    id="btn-grade-agg"
+    title="Course default assessment options"
+    data-course-options
+    data-options-load-url="{% url 'course_grades_options' course.id %}"
+    data-options-save-url="{% url 'course_grades_options' course.id %}"
+  >
+    <i class="fas fa-cog"></i>
+  </button>
+</div>
+
+<div class="table-responsive-wrapper">
+  <table class="dashboard-data-table" id="grades-overview-table"
+    data-course-id="{{ course.id }}">
+    <thead>
+      <tr>
+        <th>Assessment</th>
+        <th>Status</th>
+        <th>Submitted</th>
+        {% if show_manual_pending_column %}<th>Manual pending</th>{% endif %}
+        {% if show_weight_column %}<th>Weight</th>{% endif %}
+        {% if show_points_column %}<th>Points</th>{% endif %}
+        {% if show_curve_column %}<th>Curve Test</th>{% endif %}
+        <th>Student visibility</th>
+        <th>Settings</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in grade_rows %}
+      <tr>
+        <td>{{ row.name }}</td>
+        <td>{{ row.status|default:"—" }}</td>
+        <td>{{ row.submitted_count }} / {{ row.attempt_count }}</td>
+        {% if show_manual_pending_column %}
+        <td>
+          {% if row.unfinished_manual_count %}
+            <span class="grades-badge warn">{{ row.unfinished_manual_count }} student{{ row.unfinished_manual_count|pluralize }}</span>
+          {% else %}
+            <span class="grades-badge ok">None</span>
+          {% endif %}
+        </td>
+        {% endif %}
+        {% if show_weight_column %}
+        <td>
+          <div class="grades-metric-cell">
+            <input
+              type="number"
+              class="grades-weight-input"
+              min="0"
+              step="1"
+              value="{{ row.grade_weight|floatformat:0 }}"
+              data-weight-url="{% url 'course_grades_assessment_weight' course.id row.assessment_id %}"
+              aria-label="Weight for {{ row.name }}"
+            />
+            <span class="grades-metric-pct" data-weight-pct>{{ row.weight_percent }}%</span>
+          </div>
+        </td>
+        {% endif %}
+        {% if show_points_column %}
+        <td>
+          <div class="grades-metric-cell">
+            <span class="grades-points-total">{{ row.assessment_total_points }}</span>
+            <span class="grades-metric-pct">{{ row.points_percent }}%</span>
+          </div>
+        </td>
+        {% endif %}
+        {% if show_curve_column %}
+        <td>
+          {% if row.curve_allowed %}
+          <div class="grades-metric-cell">
+            <input
+              type="number"
+              class="grades-curve-input"
+              min="0"
+              max="{{ row.curve_live_total }}"
+              step="any"
+              value="{{ row.curve_max_points }}"
+              data-curve-url="{% url 'course_grades_assessment_curve' course.id row.assessment_id %}"
+              data-curve-max="{{ row.curve_live_total }}"
+              aria-label="Curve for {{ row.name }}"
+            />
+            <span class="grades-metric-pct">/ {{ row.curve_live_total }}</span>
+          </div>
+          {% else %}
+            <span class="grades-badge muted">—</span>
+          {% endif %}
+        </td>
+        {% endif %}
+        <td>
+          {% if row.student_release_mode == 'full_review' %}
+            <span class="grades-badge ok">Student Answers Review Enabled</span>
+          {% else %}
+            <span class="grades-badge ok">Scores Only</span>
+          {% endif %}
+          {% if not row.counts_toward_grade %}
+            <span class="grades-badge warn" title="Excluded from course totals">Not counted</span>
+          {% endif %}
+        </td>
+        <td class="grades-settings-cell{% if row.has_custom_options %} has-custom-options{% endif %}">
+          <button
+            type="button"
+            class="btn-visibility"
+            data-assessment-options
+            data-assessment-id="{{ row.assessment_id }}"
+            data-assessment-name="{{ row.name|escape }}"
+            data-options-load-url="{% url 'course_grades_assessment_options' course.id row.assessment_id %}?subset=grades"
+            data-options-save-url="{% url 'course_grades_assessment_options' course.id row.assessment_id %}"
+            data-options-subset="grades"
+          >Change…</button>
+        </td>
+        <td style="white-space:nowrap;">
+          <a class="grades-link" href="{% url 'course_grades_assessment' course.id row.assessment_id %}">Open</a>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="10">No assessments in this course.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script src="{% static 'assessment_tool/js/course_grades_options.js' %}"></script>
+<script>
+(function () {
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  async function postJson(url, body) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': getCookie('csrftoken'),
+      },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    return { res, data };
+  }
+
+  function refreshWeightPercents() {
+    const inputs = Array.from(document.querySelectorAll('.grades-weight-input'));
+    let total = 0;
+    const vals = inputs.map((input) => {
+      const n = Number(input.value);
+      const w = Number.isFinite(n) && n >= 0 ? n : 0;
+      total += w;
+      return w;
+    });
+    inputs.forEach((input, i) => {
+      const pctEl = input.parentElement.querySelector('[data-weight-pct]');
+      if (!pctEl) return;
+      const pct = total > 0 ? Math.round((vals[i] / total) * 1000) / 10 : 0;
+      pctEl.textContent = pct + '%';
+    });
+  }
+
+  document.querySelectorAll('.grades-weight-input').forEach((input) => {
+    input.addEventListener('input', refreshWeightPercents);
+    input.addEventListener('change', async () => {
+      const url = input.getAttribute('data-weight-url');
+      if (!url) return;
+      const { data } = await postJson(url, { grade_weight: Number(input.value) });
+      if (!data.success) {
+        window.alert(data.error || 'Could not save weight.');
+        return;
+      }
+      refreshWeightPercents();
+    });
+  });
+
+  document.querySelectorAll('.grades-curve-input').forEach((input) => {
+    input.addEventListener('change', async () => {
+      const url = input.getAttribute('data-curve-url');
+      if (!url) return;
+      const max = Number(input.getAttribute('data-curve-max'));
+      let val = Number(input.value);
+      if (Number.isFinite(max) && max >= 0 && val > max) {
+        val = max;
+        input.value = String(max);
+      }
+      const { data } = await postJson(url, { curve_max_points: val });
+      if (!data.success) {
+        window.alert(data.error || 'Could not save curve.');
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

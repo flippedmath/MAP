@@ -1,0 +1,537 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
+<style>
+  .grades-assessment-page {
+    max-width: 1100px;
+    margin: 1.5rem auto;
+    padding: 0 1.25rem 2rem;
+  }
+  .grades-toolbar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin: 0.75rem 0 1rem; }
+  .grades-badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.75rem; font-weight:600; }
+  .grades-badge.warn { background:#fef3c7; color:#92400e; }
+  .grades-badge.ok { background:#dcfce7; color:#166534; }
+  .grades-badge.muted { background:#f1f5f9; color:#475569; }
+  .grades-badge.grades-yes { background:#fee2e2; color:#b91c1c; }
+  .grades-badge.grades-no { background:#dcfce7; color:#166534; }
+  .grades-badge.voided { background:#fee2e2; color:#991b1b; }
+  .unfinished-box {
+    background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:12px 14px; margin-bottom:1rem;
+    font-size:0.9rem; color:#92400e;
+  }
+  .unfinished-box ul { margin:0.4rem 0 0 1.1rem; }
+  a.grades-link { color:#2563eb; font-weight:600; text-decoration:none; }
+  a.grades-link:hover { text-decoration:underline; }
+  th.grades-student-toggle {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .grades-original-score {
+    color: #64748b; font-size: 0.85rem; margin-left: 6px;
+  }
+  .btn-student-action {
+    background: transparent; border: 1px solid #cbd5e1; border-radius: 6px;
+    padding: 0.25rem 0.55rem; font-size: 0.78rem; font-weight: 600; cursor: pointer; color: #334155;
+  }
+  .btn-student-action:hover { background: #f1f5f9; }
+  .grades-action-overlay {
+    position: fixed; inset: 0; background: rgba(15,23,42,0.45); display: none;
+    align-items: center; justify-content: center; z-index: 1200; padding: 16px;
+  }
+  .grades-action-overlay.is-open { display: flex; }
+  .grades-action-card {
+    background: #fff; border-radius: 12px; max-width: 560px; width: 100%;
+    padding: 20px 22px; box-shadow: 0 20px 40px rgba(15,23,42,0.25);
+    max-height: 85vh; overflow: auto;
+  }
+  .grades-action-header {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  }
+  .grades-action-header h3 { margin: 0 0 4px; }
+  .grades-action-close {
+    border: none; background: transparent; font-size: 1.5rem; line-height: 1;
+    color: #64748b; cursor: pointer; padding: 0 4px;
+  }
+  .grades-action-note {
+    margin: 0 0 14px; padding: 10px 12px; border-radius: 8px;
+    background: #f8fafc; border: 1px solid #e2e8f0; color: #475569;
+    font-size: 0.88rem; line-height: 1.4;
+  }
+  .grades-action-options { display: flex; flex-direction: column; gap: 12px; }
+  .grades-action-option {
+    border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px;
+  }
+  .grades-action-option label.grades-action-choice {
+    display: flex; gap: 10px; align-items: flex-start; cursor: pointer;
+    font-size: 0.95rem; color: #0f172a; font-weight: 600;
+  }
+  .grades-action-detail {
+    margin-top: 10px; padding-left: 1.6rem; display: none;
+  }
+  .grades-action-option.is-selected .grades-action-detail { display: block; }
+  .grades-action-score-row {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    font-size: 0.9rem; color: #334155;
+  }
+  .grades-action-score-row input {
+    width: 5rem; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px;
+  }
+  .grades-action-actions {
+    display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;
+  }
+  .grades-action-actions button {
+    border-radius: 6px; padding: 0.45rem 0.9rem; font-weight: 600; cursor: pointer;
+    border: 1px solid #cbd5e1; background: #fff; color: #334155;
+  }
+  .grades-action-actions .btn-primary {
+    background: #2563eb; border-color: #2563eb; color: #fff;
+  }
+  .grades-action-status {
+    min-height: 1.2em; margin: 8px 0 0; font-size: 0.85rem; color: #334155;
+  }
+  .grades-question-load {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+    margin: 1rem 0 0;
+  }
+  .grades-question-load button {
+    border: 1px solid #2563eb; background: #eff6ff; color: #1d4ed8;
+    border-radius: 6px; padding: 0.45rem 0.85rem; font-size: 0.85rem;
+    font-weight: 700; cursor: pointer;
+  }
+  .grades-question-load button:hover { background: #dbeafe; }
+  .grades-question-load button:disabled {
+    opacity: 0.55; cursor: default;
+  }
+  .grades-question-load select {
+    min-width: 220px; max-width: 100%; padding: 0.4rem 0.55rem;
+    border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem;
+    color: #0f172a; background: #fff;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="grades-assessment-page">
+<div class="assessments-pane-header">
+  <div class="header-title-block">
+    <h2 style="display:inline-flex; align-items:center; gap:10px;">
+      <a href="{% url 'course_grades' course.id %}" title="Back to grades" style="color:#64748b;"><i class="fas fa-arrow-left"></i></a>
+      Grades: {{ assessment.name }}
+    </h2>
+    <p class="subtitle">You always see scores here. Student visibility follows the assessment settings.</p>
+  </div>
+</div>
+
+<div class="grades-toolbar">
+  {% if student_release_mode == 'full_review' %}
+    <span class="grades-badge ok">Student Answers Review Enabled</span>
+  {% else %}
+    <span class="grades-badge ok">Scores Only</span>
+  {% endif %}
+  {% if not counts_toward_grade %}
+    <span class="grades-badge warn">Not counted toward course total</span>
+  {% endif %}
+</div>
+
+{% if unfinished %}
+<div class="unfinished-box" id="unfinished-box">
+  <strong>Unfinished manual grading</strong>
+  <ul>
+    {% for row in unfinished %}
+    <li>
+      <strong
+        class="grades-student-label"
+        data-formal-name="{{ row.formal_name|escape }}"
+        data-username="{{ row.username|escape }}"
+      >{{ row.formal_name }}</strong>:
+      {% for q in row.questions %}
+        Q{{ q.slot_index }}{% if not forloop.last %}, {% endif %}
+      {% endfor %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="table-responsive-wrapper">
+  <table class="dashboard-data-table" id="grades-assessment-roster" data-student-mode="name">
+    <thead>
+      <tr>
+        <th
+          class="grades-student-toggle"
+          id="grades-student-header"
+          role="button"
+          tabindex="0"
+          aria-label="Toggle student name and username"
+        >Student</th>
+        {% if show_retake_column %}<th>Attempt Number</th>{% endif %}
+        <th>Status</th>
+        <th>Time Taken</th>
+        <th>Score</th>
+        <th>
+          Manual Grading Needed
+          {% if unfinished %}
+          <div style="margin-top:8px;">
+            <a
+              class="grades-link"
+              href="{% url 'course_grades_manual_batch' course.id assessment.id %}"
+              style="display:inline-block; font-size:0.75rem; font-weight:700; padding:4px 8px; border:1px solid #f59e0b; border-radius:6px; background:#fffbeb; color:#92400e;"
+            >Review all manual</a>
+          </div>
+          {% endif %}
+        </th>
+        <th>Action</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in student_rows %}
+      <tr>
+        <td
+          class="grades-student-label"
+          data-formal-name="{{ row.formal_name|escape }}"
+          data-username="{{ row.username|escape }}"
+        >{{ row.formal_name }}</td>
+        {% if show_retake_column %}
+        <td>
+          {% if row.attempt_count >= 2 and row.attempt_number %}
+            {{ row.attempt_number }}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        {% endif %}
+        <td>
+          {{ row.status }}
+          {% if row.score_voided %}
+            <span class="grades-badge voided">Voided</span>
+          {% elif row.retake_open or row.retake_active %}
+            <span class="grades-badge warn">Retake open</span>
+          {% endif %}
+        </td>
+        <td>{{ row.duration_display }}</td>
+        <td>
+          {% if row.score_voided %}
+            <span class="grades-badge voided">Voided</span>
+          {% elif row.earned_points is not None %}
+            {{ row.earned_points }} / {{ row.max_points }}
+            {% if row.score_adjusted %}
+              <span class="grades-original-score">(original {{ row.original_earned_points }} / {{ row.original_max_points }})</span>
+            {% endif %}
+          {% else %}
+            —
+          {% endif %}
+        </td>
+        <td>
+          {% if row.manual_pending_slots %}
+            <span class="grades-badge grades-yes">Yes</span>
+          {% else %}
+            <span class="grades-badge grades-no">No</span>
+          {% endif %}
+        </td>
+        <td>
+          <button
+            type="button"
+            class="btn-student-action"
+            data-student-action
+            data-attempt-id="{{ row.attempt_id }}"
+            data-student-name="{{ row.formal_name|escape }}"
+            data-username="{{ row.username|escape }}"
+            data-status="{{ row.status }}"
+            data-earned="{{ row.earned_points|default_if_none:'' }}"
+            data-max="{{ row.max_points|default_if_none:'' }}"
+            data-original-earned="{{ row.original_earned_points|default_if_none:'' }}"
+            data-original-max="{{ row.original_max_points|default_if_none:'' }}"
+            data-voided="{{ row.score_voided|yesno:'true,false' }}"
+            data-retake-open="{{ row.retake_open|yesno:'true,false' }}"
+            data-retake-active="{{ row.retake_active|yesno:'true,false' }}"
+            data-action-url="{% url 'course_grades_attempt_action' course.id assessment.id row.attempt_id %}"
+          >Action</button>
+        </td>
+        <td>
+          {% if row.status == 'submitted' %}
+            <a class="grades-link" href="{% url 'course_grades_attempt' course.id assessment.id row.attempt_id %}">Review</a>
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="{% if show_retake_column %}8{% else %}7{% endif %}">No student attempts yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="grades-question-load">
+  <button
+    type="button"
+    id="grades-load-question-btn"
+    {% if not question_choices %}disabled{% endif %}
+  >Load specific question for all Students</button>
+  <select id="grades-load-question-select" aria-label="Question to load for all students">
+    <option value="">—</option>
+    {% for q in question_choices %}
+      <option value="{{ q.slot_index }}">{{ q.title }}</option>
+    {% endfor %}
+  </select>
+</div>
+</div>
+
+<div id="grades-student-action-overlay" class="grades-action-overlay" aria-hidden="true">
+  <div class="grades-action-card" role="dialog" aria-modal="true" aria-labelledby="grades-action-title">
+    <div class="grades-action-header">
+      <div>
+        <h3 id="grades-action-title">Student actions</h3>
+        <p class="subtitle" id="grades-action-sub" style="margin:0;color:#64748b;font-size:0.9rem;"></p>
+      </div>
+      <button type="button" class="grades-action-close" id="grades-action-close" aria-label="Close">×</button>
+    </div>
+    <p class="grades-action-note">
+      Any changes here only apply to this specific student.
+    </p>
+    <div class="grades-action-options">
+      <div class="grades-action-option" data-action-option="open_retake">
+        <label class="grades-action-choice">
+          <input type="radio" name="student-action" value="open_retake" />
+          <span>Open test for retake</span>
+        </label>
+      </div>
+      <div class="grades-action-option" data-action-option="close_retake">
+        <label class="grades-action-choice">
+          <input type="radio" name="student-action" value="close_retake" />
+          <span>Close retake</span>
+        </label>
+      </div>
+      <div class="grades-action-option" data-action-option="adjust_score">
+        <label class="grades-action-choice">
+          <input type="radio" name="student-action" value="adjust_score" />
+          <span>Adjust score of existing test</span>
+        </label>
+        <div class="grades-action-detail">
+          <div class="grades-action-score-row">
+            <label>Earned <input type="number" id="grades-action-earned" step="any" min="0" /></label>
+            <span>/</span>
+            <label>Max <input type="number" id="grades-action-max" step="any" min="0" /></label>
+            <span class="grades-original-score" id="grades-action-original" hidden></span>
+          </div>
+        </div>
+      </div>
+      <div class="grades-action-option" data-action-option="void_score">
+        <label class="grades-action-choice">
+          <input type="radio" name="student-action" value="void_score" />
+          <span id="grades-action-void-label">Void test score</span>
+        </label>
+      </div>
+    </div>
+    <p class="grades-action-status" id="grades-action-status" aria-live="polite"></p>
+    <div class="grades-action-actions">
+      <button type="button" id="grades-action-cancel">Cancel</button>
+      <button type="button" class="btn-primary" id="grades-action-apply">Apply</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+(function () {
+  const table = document.getElementById('grades-assessment-roster');
+  const header = document.getElementById('grades-student-header');
+  if (table && header) {
+    function applyMode(mode) {
+      table.setAttribute('data-student-mode', mode);
+      document.querySelectorAll('.grades-student-label').forEach((el) => {
+        const value =
+          mode === 'username'
+            ? el.getAttribute('data-username')
+            : el.getAttribute('data-formal-name');
+        el.textContent = value || '';
+      });
+    }
+    function toggle() {
+      const next =
+        table.getAttribute('data-student-mode') === 'username' ? 'name' : 'username';
+      applyMode(next);
+    }
+    header.addEventListener('click', toggle);
+    header.addEventListener('keydown', (evt) => {
+      if (evt.key === 'Enter' || evt.key === ' ') {
+        evt.preventDefault();
+        toggle();
+      }
+    });
+  }
+
+  function getCookie(name) {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+
+  const overlay = document.getElementById('grades-student-action-overlay');
+  const subEl = document.getElementById('grades-action-sub');
+  const statusEl = document.getElementById('grades-action-status');
+  const earnedInput = document.getElementById('grades-action-earned');
+  const maxInput = document.getElementById('grades-action-max');
+  const originalEl = document.getElementById('grades-action-original');
+  const voidLabel = document.getElementById('grades-action-void-label');
+  let pending = null;
+
+  function selectedAction() {
+    const checked = overlay.querySelector('input[name="student-action"]:checked');
+    return checked ? checked.value : '';
+  }
+
+  function syncOptionSelection() {
+    const action = selectedAction();
+    overlay.querySelectorAll('[data-action-option]').forEach((block) => {
+      block.classList.toggle('is-selected', block.getAttribute('data-action-option') === action);
+    });
+  }
+
+  function closeOverlay() {
+    overlay.classList.remove('is-open');
+    overlay.setAttribute('aria-hidden', 'true');
+    pending = null;
+    statusEl.textContent = '';
+  }
+
+  function openOverlay(btn) {
+    pending = {
+      url: btn.getAttribute('data-action-url'),
+      name: btn.getAttribute('data-student-name') || '',
+      username: btn.getAttribute('data-username') || '',
+      status: btn.getAttribute('data-status') || '',
+      voided: btn.getAttribute('data-voided') === 'true',
+      retakeOpen: btn.getAttribute('data-retake-open') === 'true',
+      retakeActive: btn.getAttribute('data-retake-active') === 'true',
+      earned: btn.getAttribute('data-earned'),
+      max: btn.getAttribute('data-max'),
+      originalEarned: btn.getAttribute('data-original-earned'),
+      originalMax: btn.getAttribute('data-original-max'),
+    };
+    subEl.textContent = pending.name
+      ? `${pending.name} (${pending.username})`
+      : pending.username;
+    statusEl.textContent = '';
+    earnedInput.value = pending.earned !== '' ? pending.earned : '';
+    maxInput.value = pending.max !== '' ? pending.max : '';
+    if (pending.originalEarned !== '' || pending.originalMax !== '') {
+      originalEl.hidden = false;
+      originalEl.textContent =
+        `(original ${pending.originalEarned || '—'} / ${pending.originalMax || '—'})`;
+    } else {
+      originalEl.hidden = true;
+      originalEl.textContent = '';
+    }
+    if (voidLabel) {
+      voidLabel.textContent = pending.voided
+        ? 'Restore voided test score'
+        : 'Void test score';
+    }
+    overlay.querySelectorAll('input[name="student-action"]').forEach((input) => {
+      input.checked = false;
+      const opt = input.closest('[data-action-option]');
+      let disabled = false;
+      if (input.value === 'open_retake') {
+        // Only from a finished attempt, and only when a retake is not already active.
+        disabled = pending.status !== 'submitted' || pending.retakeActive;
+      } else if (input.value === 'close_retake') {
+        disabled = !pending.retakeActive;
+      } else if (pending.status !== 'submitted') {
+        // Adjust/void only apply to submitted attempt rows.
+        disabled = true;
+      } else if (pending.voided && input.value === 'adjust_score') {
+        disabled = true;
+      }
+      input.disabled = disabled;
+      if (opt) opt.style.opacity = disabled ? '0.5' : '';
+    });
+    syncOptionSelection();
+    overlay.classList.add('is-open');
+    overlay.setAttribute('aria-hidden', 'false');
+  }
+
+  overlay.querySelectorAll('input[name="student-action"]').forEach((input) => {
+    input.addEventListener('change', syncOptionSelection);
+  });
+
+  document.querySelectorAll('[data-student-action]').forEach((btn) => {
+    btn.addEventListener('click', () => openOverlay(btn));
+  });
+
+  document.getElementById('grades-action-close').addEventListener('click', closeOverlay);
+  document.getElementById('grades-action-cancel').addEventListener('click', closeOverlay);
+  overlay.addEventListener('click', (evt) => {
+    if (evt.target === overlay) closeOverlay();
+  });
+  document.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Escape' && overlay.classList.contains('is-open')) closeOverlay();
+  });
+
+  document.getElementById('grades-action-apply').addEventListener('click', async () => {
+    if (!pending) return;
+    const action = selectedAction();
+    if (!action) {
+      statusEl.textContent = 'Choose an action.';
+      return;
+    }
+    const body = { action };
+    if (action === 'adjust_score') {
+      if (earnedInput.value === '' || maxInput.value === '') {
+        statusEl.textContent = 'Enter earned and max points.';
+        return;
+      }
+      body.earned_points = Number(earnedInput.value);
+      body.max_points = Number(maxInput.value);
+      if (!Number.isFinite(body.earned_points) || !Number.isFinite(body.max_points)) {
+        statusEl.textContent = 'Invalid score values.';
+        return;
+      }
+    }
+    statusEl.textContent = 'Saving…';
+    try {
+      const res = await fetch(pending.url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCookie('csrftoken'),
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        statusEl.textContent = data.error || 'Action failed.';
+        return;
+      }
+      window.location.reload();
+    } catch (err) {
+      statusEl.textContent = err.message || 'Action failed.';
+    }
+  });
+
+  const loadBtn = document.getElementById('grades-load-question-btn');
+  const loadSelect = document.getElementById('grades-load-question-select');
+  if (loadBtn && loadSelect) {
+    const questionUrlTemplate =
+      "{% url 'course_grades_question_batch' course.id assessment.id 0 %}".replace(
+        '/question/0/',
+        '/question/__SLOT__/'
+      );
+    loadBtn.addEventListener('click', () => {
+      const slot = String(loadSelect.value || '').trim();
+      if (!slot) {
+        loadSelect.focus();
+        return;
+      }
+      window.location.href = questionUrlTemplate.replace('__SLOT__', encodeURIComponent(slot));
+    });
+  }
+})();
+</script>
+{% endblock %}

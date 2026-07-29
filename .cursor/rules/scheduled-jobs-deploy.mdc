@@ -28,5 +28,6 @@ Prompt the developer and complete:
 |-----|----------|-------------|------------------------|
 | Purge notification trash older than 30 days | Daily 03:15 local | `math_assessment_platform/scripts/purge_trashed_notifications.sh` → `manage.py purge_trashed_notifications` | Marker `MAP:purge_trashed_notifications`. Local: `15 3 * * * .../scripts/purge_trashed_notifications.sh` |
 | Purge explorer Trash older than 30 days | Daily 03:20 local | `math_assessment_platform/scripts/purge_trashed_branch_groups.sh` → `manage.py purge_trashed_branch_groups` | Marker `MAP:purge_trashed_branch_groups`. Local: `20 3 * * * .../scripts/purge_trashed_branch_groups.sh` |
+| Close expired upcoming assessment windows | Every minute **on the production server only** (do **not** install on local Mac) | `math_assessment_platform/scripts/close_expired_upcoming_assessments.sh` → `manage.py close_expired_upcoming_assessments` | Marker `MAP:close_expired_upcoming_assessments`. Server install: `* * * * * /server/path/scripts/close_expired_upcoming_assessments.sh # MAP:close_expired_upcoming_assessments` |
 
-Log (local): `math_assessment_platform/logs/purge_trashed_notifications.log` and `math_assessment_platform/logs/purge_trashed_branch_groups.log` (gitignored).
+Log (local, for jobs that run on Mac): `math_assessment_platform/logs/purge_trashed_notifications.log` and `purge_trashed_branch_groups.log` (gitignored). Production also uses `close_expired_upcoming_assessments.log`.

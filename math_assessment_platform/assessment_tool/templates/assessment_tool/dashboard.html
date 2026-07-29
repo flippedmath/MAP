@@ -102,10 +102,67 @@
     </div>
     {% endif %}
 
-    {% if user.user_type == "Student" and ongoing_test %}
-        <div class="alert alert-warning">
-            You have an assessment in progress. <a href="#">Resume Test</a>
+    {% if user.user_type == "Student" and open_assessments %}
+    <div class="card dashboard-open-assessments-card">
+        <h2>Open assessments</h2>
+        <div class="dashboard-course-list">
+            {% for row in open_assessments %}
+            <div class="dashboard-course-row">
+                <div class="dashboard-course-main">
+                    <div class="dashboard-course-name">
+                        <a href="{% url 'assessment_view' row.course_id %}?highlight={{ row.assessment_id }}">
+                            {{ row.assessment_name }}
+                        </a>
+                    </div>
+                    <div class="dashboard-course-meta">
+                        <span class="dashboard-course-status">{{ row.course_name }}</span>
+                        {% if row.attempt_status == 'in_progress' %}
+                        <span class="dashboard-course-teachers">In progress</span>
+                        {% endif %}
+                        {% if row.window_ends_at %}
+                        <span class="dashboard-course-teachers dashboard-open-remaining"
+                              data-window-ends-at="{{ row.window_ends_at }}">
+                            Open for
+                            <span data-role="remaining">—</span>
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="dashboard-course-actions">
+                    <a href="{% url 'assessment_view' row.course_id %}?highlight={{ row.assessment_id }}" class="btn">
+                        Go to assessments
+                    </a>
+                </div>
+            </div>
+            {% endfor %}
         </div>
+    </div>
+    <script>
+    (function () {
+      function formatRemaining(ms) {
+        var totalSec = Math.max(0, Math.floor(ms / 1000));
+        var hours = Math.floor(totalSec / 3600);
+        var minutes = Math.floor((totalSec % 3600) / 60);
+        if (hours > 0) return hours + 'h ' + minutes + 'm';
+        return minutes + 'm';
+      }
+      function tick() {
+        document.querySelectorAll('[data-window-ends-at]').forEach(function (el) {
+          var endMs = Date.parse(el.getAttribute('data-window-ends-at') || '');
+          var label = el.querySelector('[data-role="remaining"]');
+          if (!label || !Number.isFinite(endMs)) return;
+          var left = endMs - Date.now();
+          if (left <= 0) {
+            label.textContent = '0m';
+            return;
+          }
+          label.textContent = formatRemaining(left);
+        });
+      }
+      tick();
+      window.setInterval(tick, 30000);
+    })();
+    </script>
     {% endif %}
 
     {% if user.user_type == "Teacher" %}

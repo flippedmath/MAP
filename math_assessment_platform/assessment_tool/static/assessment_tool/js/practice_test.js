@@ -131,7 +131,49 @@ function formatExpectedListHtml(expectedList, { multiline = false } = {}) {
     return parts[0];
 }
 
+const practiceMcVisualById = new Map();
+
+function formatAnswerPartsHtml(parts, linesFallback, { multiline = false } = {}) {
+    const list = Array.isArray(parts) ? parts.filter((p) => p && typeof p === 'object') : [];
+    if (!list.length) {
+        if (Array.isArray(linesFallback)) {
+            return formatExpectedListHtml(linesFallback, { multiline });
+        }
+        return '';
+    }
+
+    const blocks = list.map((part, idx) => {
+        const kind = String(part.kind || 'text');
+        if ((kind === 'graph' || kind === 'slopeFieldGraph') && part.config) {
+            const visualId = `practice-mc-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 8)}`;
+            practiceMcVisualById.set(visualId, { kind, config: part.config });
+            const canvasId = `${visualId}-canvas`;
+            return `<div class="practice-answer-visual" data-role="mc-visual" data-visual-id="${escapeHtml(visualId)}" data-canvas-id="${escapeHtml(canvasId)}">
+                <div id="${escapeHtml(canvasId)}" style="width:260px;height:180px;max-width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:6px;background:#fff;"></div>
+            </div>`;
+        }
+        if (kind === 'latex') {
+            return `<div class="practice-answer-part">${formatExpectedAnswerHtml(part.value || '')}</div>`;
+        }
+        const text = String(part.value ?? '').trim();
+        return text ? `<div class="practice-answer-part">${formatExpectedAnswerHtml(text)}</div>` : '';
+    }).filter(Boolean);
+
+    if (!blocks.length) {
+        return Array.isArray(linesFallback)
+            ? formatExpectedListHtml(linesFallback, { multiline })
+            : '';
+    }
+    if (blocks.length === 1) return blocks[0];
+    return `<div class="practice-answer-parts">${blocks.join('')}</div>`;
+}
+
 function formatStudentAnswerHtml(field) {
+    if (Array.isArray(field.student_answer_parts) && field.student_answer_parts.length) {
+        return formatAnswerPartsHtml(field.student_answer_parts, field.student_answer_lines, {
+            multiline: true,
+        }) || '<em>blank</em>';
+    }
     const lines = Array.isArray(field.student_answer_lines) && field.student_answer_lines.length
         ? field.student_answer_lines
         : (field.student_answer ? String(field.student_answer).split('\n') : []);
@@ -586,6 +628,7 @@ document.addEventListener('DOMContentLoaded', () => {
         gradingSection.hidden = false;
         lastGradePayload = data;
         visualPreviewById.clear();
+        practiceMcVisualById.clear();
 
         const scoredProblems = (data.problems || []).filter((p) => {
             const maxPts = Number(p.max);
@@ -617,12 +660,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     visualCompareHtml = formatVisualCompareHtml(f, previewId);
                 }
                 const hasVisual = !!visualCompareHtml;
+                const expectedParts = Array.isArray(f.expected_answer_parts) ? f.expected_answer_parts : [];
                 const expected = Array.isArray(f.expected_answers) ? f.expected_answers.filter(Boolean) : [];
-                const multilineExpected = f.archetype === 'answersOrDne' || expected.length > 1;
-                const expectedHtml = (!manual && !hasVisual && incomplete && expected.length)
+                const multilineExpected = f.archetype === 'answersOrDne' || expected.length > 1 || expectedParts.length > 1;
+                const expectedBody = expectedParts.length
+                    ? formatAnswerPartsHtml(expectedParts, expected, { multiline: multilineExpected })
+                    : formatExpectedListHtml(expected, { multiline: multilineExpected });
+                const expectedHtml = (!manual && !hasVisual && incomplete && expectedBody)
                     ? `<div class="practice-reveal-answers practice-expected-answers">
                             <div class="practice-answer-label">Expected</div>
-                            ${formatExpectedListHtml(expected, { multiline: multilineExpected })}
+                            ${expectedBody}
                        </div>`
                     : '';
                 const studentAlways = manual;
@@ -690,8 +737,41 @@ document.addEventListener('DOMContentLoaded', () => {
         bindGradeScoreControls(gradingResults);
         updateGradeTotalsFromDom();
         mountVisualGradePreviews(gradingResults);
+        mountMcAnswerVisuals(gradingResults);
         applyExpectedVisibility();
         gradingSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function mountMcAnswerVisuals(root) {
+        if (!root) return;
+        const api = window.PracticeTestPreviewAPI;
+        if (!api) return;
+        root.querySelectorAll('[data-role="mc-visual"]').forEach((wrap) => {
+            if (wrap.getAttribute('data-mounted') === '1') return;
+            const visualId = wrap.getAttribute('data-visual-id') || '';
+            const canvasId = wrap.getAttribute('data-canvas-id') || '';
+            const entry = practiceMcVisualById.get(visualId);
+            if (!entry || !entry.config) return;
+            try {
+                if (entry.kind === 'graph' && typeof api.renderGraphComponentCanvas === 'function') {
+                    api.renderGraphComponentCanvas(canvasId, entry.config, { width: 260, height: 180 });
+                } else if (entry.kind === 'slopeFieldGraph' && typeof api.renderSlopeFieldCanvas === 'function') {
+                    const host = document.getElementById(canvasId);
+                    if (!host) return;
+                    api.renderSlopeFieldCanvas(host, entry.config, {
+                        mode: 'author',
+                        readOnly: true,
+                        width: 260,
+                        height: 180,
+                    });
+                } else {
+                    return;
+                }
+                wrap.setAttribute('data-mounted', '1');
+            } catch (err) {
+                console.error('Failed to render MC answer visual', err);
+            }
+        });
     }
 
     function mountVisualGradePreviews(root) {

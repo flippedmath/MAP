@@ -24,6 +24,32 @@ def user_display_name(user) -> str:
     return getattr(user, "username", "") or ""
 
 
+def user_roster_formal_name(user) -> str:
+    """
+    Roster label: "Last, First M" (middle initials from extra first-name tokens).
+    Falls back to username when name fields are empty.
+    """
+    if user is None:
+        return "?"
+    username = (getattr(user, "username", None) or "").strip() or "?"
+    first = (getattr(user, "user_first_name", None) or "").strip()
+    last = (getattr(user, "user_last_name", None) or "").strip()
+    if not first and not last:
+        return username
+    parts = first.split()
+    given = parts[0] if parts else ""
+    middle_initials = " ".join(p[0].upper() for p in parts[1:] if p)
+    if last and given and middle_initials:
+        return f"{last}, {given} {middle_initials}"
+    if last and given:
+        return f"{last}, {given}"
+    if last:
+        return last
+    if given and middle_initials:
+        return f"{given} {middle_initials}"
+    return given or username
+
+
 def _status_label(status: str) -> str:
     raw = (status or "").strip()
     if not raw:

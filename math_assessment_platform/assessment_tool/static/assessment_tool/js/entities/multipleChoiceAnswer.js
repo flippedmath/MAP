@@ -831,7 +831,8 @@ function renderPreviewToken(contextData = {}) {
     }
 
     const correctCount = options.filter(o => o.is_correct).length;
-    const useRadio = forceRadio && correctCount === 1;
+    // Student take strips is_correct; treat force_radio alone as single-choice.
+    const useRadio = forceRadio && correctCount <= 1;
 
     const linkCtx = {
         getEntityInformation,

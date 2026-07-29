@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="{% static 'assessment_tool/css/base_style.css' %}">
     
-    {% if user.is_authenticated and user.user_type != 'Student' and load_problem_workspace %}
+    {% if user.is_authenticated and load_problem_workspace %}
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
         
         <link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
@@ -66,7 +66,7 @@
         {% block content %}{% endblock %}
     </main>    
 
-    {% if user.is_authenticated and user.user_type != 'Student' and load_problem_workspace %}
+    {% if user.is_authenticated and load_problem_workspace %}
         {% include "assessment_tool/components/problem_workspace_overlay.html" %}
         
         <!-- KaTeX Math Layouts -->

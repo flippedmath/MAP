@@ -25,6 +25,11 @@
                 <span class="nav-icon">📝</span>
                 <span class="nav-label">Assessments</span>
             </a>
+
+            <a href="{% url 'course_grades' course.id %}" class="nav-item {% if active_tab == 'grades' %}active{% endif %}">
+                <span class="nav-icon">📈</span>
+                <span class="nav-label">Grades</span>
+            </a>
             
             {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
             {% course_allows_management course as show_course_management %}

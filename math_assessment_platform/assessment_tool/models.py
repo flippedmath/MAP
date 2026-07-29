@@ -193,14 +193,42 @@ class Assessment(models.Model):
     order = models.CharField(max_length=100, blank=True, null=True, db_comment="Will only be 'null' if it's the copied version assigned to a student for test taking")
     parent_assessment = models.ForeignKey('self', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
     user = models.ForeignKey('UserProfile', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
-    points_weight = models.FloatField(blank=True, null=True, db_comment='This is used to make the assessment grade for all students be tilted')
-    status = models.TextField(blank=True, null=True, db_comment="closed, open, locked, retake available, submitted, active, inactive, upcoming. 'null' means it's not tied to an individual (like a template course)")  # This field type is a guess.
+    points_weight = models.FloatField(blank=True, null=True, db_comment='Legacy tilt multiplier; prefer grade_weight / curve_max_points')
+    grade_weight = models.FloatField(
+        default=1,
+        db_comment='Relative weight for percent-of-final-grade course totals. 0 excludes the assessment.',
+    )
+    curve_max_points = models.FloatField(
+        blank=True,
+        null=True,
+        db_comment='Teacher curve denominator. NULL follows live assessment total when unlocked.',
+    )
+    time_limit_minutes = models.IntegerField(
+        blank=True,
+        null=True,
+        db_comment='Allotted minutes when forcibly-end countdown option is active.',
+    )
+    status = models.TextField(blank=True, null=True, db_comment="Postgres enum assessment_status_enum: closed | open | upcoming | hidden (teacher lifecycle); deleted (trash).")  # This field type is a guess.
     is_historic = models.BooleanField(db_comment="When 'true' this is used to determine if the assessment is a static, needs to be unchanged, assessment that a Student is specifically assigned to complete with a single static (with concrete, not variable, inputs) answer tied to the problems. When 'false' it determines the assessment has questions with multiple answers tied to the problems.")
     branch_location = models.OneToOneField('BranchGroup', models.CASCADE, db_column='branch_location', related_name='assessment', db_comment="Just like 'course' this points to a branch location")
     start_time = models.DateTimeField(blank=True, null=True, db_comment="only an available option for the 'parent' assessment")
     end_time = models.DateTimeField(blank=True, null=True, db_comment="only an available option for the 'parent' assessment")
     creation_date = models.DateTimeField(blank=True, null=True)
     modified_date = models.DateTimeField(blank=True, null=True)
+    scores_released = models.BooleanField(
+        default=False,
+        db_comment='When true, students may see scores for this assessment (teacher release).',
+    )
+    scores_released_at = models.DateTimeField(blank=True, null=True)
+    student_release_mode = models.CharField(
+        max_length=32,
+        default='hidden',
+        db_comment='hidden | scores_only | full_review',
+    )
+    counts_toward_grade = models.BooleanField(
+        default=True,
+        db_comment='When false, score may be visible but excluded from course totals.',
+    )
 
     def duplicate_assessment(self, new_course, new_owner):
         """Duplicates the assessment and all its related questions."""
@@ -242,7 +270,7 @@ class AssessmentOptionGroup(models.Model):
         db_table = 'assessment_option_group'
         # This is the real database constraint. The 'unique=True' on 'group_num' is fake and doesn't actually apply because managed=False
         unique_together = (('group_num', 'choice'),)
-        db_table_comment = "See 'database actions' for list of options. (I added the table name where I specified options.) count-up timer, count-down timer, desmos, lock_on, whiteboard, multiple_choice, synchronize_test, same_questions_for_each_student"
+        db_table_comment = "Growable enum of assessment settings. Active groups: student view, course total, retake scoring, timers, lock on focus, synchronize tests, curve."
 
 
 class AssessmentOptions(models.Model):
@@ -368,6 +396,16 @@ class Course(models.Model):
     )
     version = models.CharField(max_length=100, blank=True, null=True, unique=True)
     introduction = models.TextField(blank=True, null=True)
+    grade_aggregation_mode = models.CharField(
+        max_length=32,
+        default='equal_weight',
+        db_comment='equal_weight | sum_points — course total calculation for student grades.',
+    )
+    default_time_limit_minutes = models.IntegerField(
+        blank=True,
+        null=True,
+        db_comment='Default allotted minutes for forcibly-end countdown when assessments do not override.',
+    )
 
     @classmethod
     def create_developing(cls, owner, name, short_desc, image_file=None):
@@ -589,15 +627,23 @@ class EntityType(models.Model):
         db_table_comment = "This table will be populated with all of the variations of problem categories that a problem can have a student provide an answer for. Examples include: problem, number, string, formula, paragraph_block, radio_selection, checkbox_selection, dropdown_selection, matrix, unordered_list, etc. Also includes: 'formula_prompt', 'number_prompt', 'paragraph_prompt', 'string_prompt'"
 
 
-class EntityUserInput(models.Model):
-    entity = models.ForeignKey(EntitySegment, models.CASCADE)
-    points_score = models.FloatField(blank=True, null=True, db_comment="Score can be initially set to 'null' if it requires Teacher to do the grading.")
-    content = models.TextField(blank=True, null=True, db_comment='Depending on the entity_type that is tied to the entity_segment, how the json is read as information will change. It is a good idea to consistently organize all data as a json though. This could be a string, an image (canvas/graph), a series of data representing a canvas/graph, a number/float, a formula, etc')  # This field type is a guess.
+class AssessmentGenerationJob(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_RUNNING = 'running'
+    STATUS_COMPLETE = 'complete'
+    STATUS_FAILED = 'failed'
+
+    assessment = models.ForeignKey(Assessment, models.DO_NOTHING, db_column='assessment_id')
+    status = models.CharField(max_length=16, default=STATUS_PENDING)
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(blank=True, null=True)
+    error_message = models.TextField(blank=True, null=True)
+    total_students = models.IntegerField(default=0)
+    completed_students = models.IntegerField(default=0)
 
     class Meta:
         managed = False
-        db_table = 'entity_user_input'
-        db_table_comment = 'The json will identify the difference between a student answer to the question, a calculated answer, or just an entity calculation that sets up the problem'
+        db_table = 'assessment_generation_job'
 
 
 class StudentCourseEnrollment(models.Model):
@@ -631,6 +677,90 @@ class StudentCourseEnrollment(models.Model):
             'One row per student enrollment stint in a course. Survives kick/finish so grades '
             'can be scoped to that instance. users_in_course remains the current seat/slot only.'
         )
+
+
+class StudentAssessmentAttempt(models.Model):
+    STATUS_READY = 'ready'
+    STATUS_IN_PROGRESS = 'in_progress'
+    STATUS_SUBMITTED = 'submitted'
+
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='user_id')
+    enrollment = models.ForeignKey(
+        StudentCourseEnrollment, models.DO_NOTHING, db_column='enrollment_id'
+    )
+    assessment = models.ForeignKey(
+        Assessment, models.DO_NOTHING, db_column='assessment_id', blank=True, null=True
+    )
+    course = models.ForeignKey(Course, models.DO_NOTHING, db_column='course_id')
+    status = models.CharField(max_length=16, default=STATUS_READY)
+    started_at = models.DateTimeField(blank=True, null=True)
+    submitted_at = models.DateTimeField(blank=True, null=True)
+    auto_graded_at = models.DateTimeField(blank=True, null=True)
+    earned_points = models.FloatField(blank=True, null=True)
+    max_points = models.FloatField(blank=True, null=True)
+    original_earned_points = models.FloatField(
+        blank=True,
+        null=True,
+        db_comment='Earned points before teacher attempt-level adjustment.',
+    )
+    original_max_points = models.FloatField(
+        blank=True,
+        null=True,
+        db_comment='Max points before teacher attempt-level adjustment.',
+    )
+    score_voided = models.BooleanField(
+        default=False,
+        db_comment='Voided attempts are excluded from grade counting.',
+    )
+    branch = models.ForeignKey(
+        BranchGroup, models.DO_NOTHING, db_column='branch_id', blank=True, null=True
+    )
+    creation_date = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'student_assessment_attempt'
+
+
+class StudentAssessmentProblem(models.Model):
+    attempt = models.ForeignKey(
+        StudentAssessmentAttempt, models.DO_NOTHING, db_column='attempt_id',
+        related_name='problems',
+    )
+    slot_index = models.IntegerField()
+    section_name = models.CharField(max_length=255, blank=True, null=True)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    source_problem_id = models.IntegerField(blank=True, null=True)
+    body_html = models.TextField()
+    render_payload = models.JSONField(default=dict)
+    answer_key = models.JSONField(default=dict)
+    answer_fields = models.JSONField(default=list)
+    earned_points = models.FloatField(blank=True, null=True)
+    max_points = models.FloatField(blank=True, null=True)
+    requires_manual_grading = models.BooleanField(default=False)
+    branch = models.ForeignKey(
+        BranchGroup, models.DO_NOTHING, db_column='branch_id', blank=True, null=True
+    )
+
+    class Meta:
+        managed = False
+        db_table = 'student_assessment_problem'
+
+
+class StudentAssessmentAnswer(models.Model):
+    problem = models.ForeignKey(
+        StudentAssessmentProblem, models.DO_NOTHING, db_column='problem_id',
+        related_name='answers',
+    )
+    field_token = models.CharField(max_length=255)
+    content = models.JSONField(blank=True, null=True)
+    points_score = models.FloatField(blank=True, null=True)
+    auto_points_score = models.FloatField(blank=True, null=True)
+    detail = models.JSONField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'student_assessment_answer'
 
 
 class FinalGradeCalculation(models.Model):

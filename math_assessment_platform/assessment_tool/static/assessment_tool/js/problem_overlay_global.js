@@ -1251,7 +1251,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         cleanToken,
                         card,
                         renderGraphComponentCanvas,
-                        previewInstanceId: `live-preview-canvas-${cleanToken}-${++previewGraphSeq}`,
+                        // Include previewNamePrefix so batch pages (multiple cards, same token) get unique canvas ids.
+                        previewInstanceId: `live-preview-canvas-${previewNamePrefix || 'p'}-${cleanToken}-${++previewGraphSeq}`,
                         registerPreviewGraph: (job) => {
                             if (job) pendingGraphRenders.push(job);
                         }
@@ -1292,7 +1293,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         cardScope: cardScope === document ? null : cardScope,
                         renderGraphComponentCanvas,
                         renderSlopeFieldCanvas,
-                        previewInstanceId: `live-preview-canvas-${cleanToken}-${++previewGraphSeq}`,
+                        // Include previewNamePrefix so batch pages (multiple cards, same token) get unique canvas ids.
+                        previewInstanceId: `live-preview-canvas-${previewNamePrefix || 'p'}-${cleanToken}-${++previewGraphSeq}`,
                         previewNamePrefix,
                         registerPreviewGraph: (job) => {
                             if (job) pendingGraphRenders.push(job);
@@ -1651,7 +1653,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         jobs.forEach((job) => {
             if (!job || !job.canvasId || !job.graphConfig) return;
-            const canvasEl = document.getElementById(job.canvasId);
+            // Prefer the current preview root so batch pages never paint into another card's canvas.
+            const canvasEl = (root.querySelector && root.querySelector(`#${CSS.escape(job.canvasId)}`))
+                || document.getElementById(job.canvasId);
             if (!canvasEl) return;
 
             const hostTd = canvasEl.closest('td, th');
@@ -1700,7 +1704,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         width,
                         height,
                         initialMarks,
+                        readOnly: !!window.__PREVIEW_INTERACTIVE_READONLY,
                         onStudentAnswerChange: (marks) => {
+                            if (window.__PREVIEW_INTERACTIVE_READONLY) return;
                             if (!tokenKey) return;
                             const payload = { marks: Array.isArray(marks) ? marks : [] };
                             previewStudentAnswers[tokenKey] = payload;
@@ -1724,7 +1730,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         height,
                         initialValue,
                         studentSegments: Array.isArray(initialValue?.segments) ? initialValue.segments : [],
+                        readOnly: !!window.__PREVIEW_INTERACTIVE_READONLY,
                         onStudentAnswerChange: (payload) => {
+                            if (window.__PREVIEW_INTERACTIVE_READONLY) return;
                             if (!tokenKey) return;
                             const next = payload && typeof payload === 'object'
                                 ? payload
@@ -1983,13 +1991,96 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    /** Nesting depth among ancestor <table> elements (0 = outermost). */
+    function previewTableNestDepth(table) {
+        let depth = 0;
+        let node = table && table.parentElement;
+        while (node) {
+            if (node.tagName === 'TABLE') depth += 1;
+            node = node.parentElement;
+        }
+        return depth;
+    }
+
+    /**
+     * With table-layout:fixed + overflow:visible, scrollWidth often equals the
+     * locked cell box and ignores overflowing KaTeX/widgets. Unlock to auto /
+     * max-content, measure natural sizes, then callers re-lock via applyColumnWidths.
+     */
+    function measureExpandTableCellNeeds(table, rows, floorWidths, floorHeights) {
+        const colgroup = table.querySelector(':scope > colgroup');
+        table.style.tableLayout = 'auto';
+        table.style.width = 'max-content';
+        table.style.minWidth = '0';
+        table.style.maxWidth = 'none';
+        if (colgroup) {
+            Array.from(colgroup.children).forEach((col) => {
+                col.style.width = 'auto';
+                col.style.minWidth = '0';
+            });
+        }
+        rows.forEach((tr) => {
+            tr.style.height = 'auto';
+            tr.style.minHeight = '';
+            tr.style.maxHeight = 'none';
+            Array.from(tr.children).filter((el) => el.matches('td, th')).forEach((td) => {
+                td.style.overflow = 'visible';
+                td.style.width = 'auto';
+                td.style.minWidth = '0';
+                td.style.maxWidth = 'none';
+                td.style.height = 'auto';
+                td.style.minHeight = '';
+                td.style.maxHeight = 'none';
+            });
+        });
+        void table.offsetWidth;
+
+        const nextWidths = floorWidths.slice();
+        const nextHeights = floorHeights.slice();
+        rows.forEach((tr, ri) => {
+            let rowH = floorHeights[ri] || 16;
+            Array.from(tr.children).filter((el) => el.matches('td, th')).forEach((td, ci) => {
+                const cs = window.getComputedStyle(td);
+                const padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+                const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+                const borderX = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+                const borderY = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+                const rect = td.getBoundingClientRect();
+                let neededW = Math.ceil(Math.max(rect.width || 0, td.scrollWidth || 0));
+                let neededH = Math.ceil(Math.max(rect.height || 0, td.scrollHeight || 0));
+                // Direct children (KaTeX, widgets) can still paint wider than the auto cell.
+                Array.from(td.children).forEach((child) => {
+                    if (child.classList && child.classList.contains('ql-workspace-nested-table')) return;
+                    const cr = child.getBoundingClientRect();
+                    neededW = Math.max(
+                        neededW,
+                        Math.ceil((cr.width || 0) + padX + borderX)
+                    );
+                    neededH = Math.max(
+                        neededH,
+                        Math.ceil((cr.height || 0) + padY + borderY)
+                    );
+                });
+                if (ci < nextWidths.length) {
+                    nextWidths[ci] = Math.max(nextWidths[ci], neededW);
+                }
+                rowH = Math.max(rowH, neededH);
+            });
+            nextHeights[ri] = rowH;
+        });
+        return { nextWidths, nextHeights };
+    }
+
     /**
      * Preview-only: grow col/row sizes (never shrink below editor sizes) so
      * rendered entities (KaTeX, matrix, graphs) are not clipped by overflow:hidden.
      */
     function expandPreviewTablesForEntities(root) {
         if (!root) return;
-        const tables = Array.from(root.querySelectorAll('table')).filter(previewTableShouldExpandEntities);
+        const tables = Array.from(root.querySelectorAll('table'))
+            .filter(previewTableShouldExpandEntities)
+            // Deepest first so nested growth is reflected when outer host cells measure.
+            .sort((a, b) => previewTableNestDepth(b) - previewTableNestDepth(a));
         tables.forEach(table => {
             table.classList.add('ql-table-expand-entities');
             table.classList.remove('ql-table-fixed-entities');
@@ -2026,36 +2117,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 );
             });
 
-            // Temporarily release fixed heights so scroll metrics reflect rendered entities
-            rows.forEach(tr => {
-                tr.style.height = 'auto';
-                tr.style.minHeight = '';
-                Array.from(tr.children).filter(el => el.matches('td, th')).forEach(td => {
-                    td.style.overflow = 'visible';
-                    td.style.height = 'auto';
-                    td.style.minHeight = '';
-                    td.style.maxHeight = 'none';
-                });
-            });
-
-            const nextWidths = floorWidths.slice();
-            const nextHeights = floorHeights.slice();
-            rows.forEach((tr, ri) => {
-                let rowH = floorHeights[ri] || 16;
-                Array.from(tr.children).filter(el => el.matches('td, th')).forEach((td, ci) => {
-                    const neededW = Math.ceil(Math.max(td.scrollWidth || 0, td.getBoundingClientRect().width || 0));
-                    const neededH = Math.ceil(Math.max(td.scrollHeight || 0, td.getBoundingClientRect().height || 0));
-                    if (ci < nextWidths.length) {
-                        nextWidths[ci] = Math.max(nextWidths[ci], neededW);
-                    }
-                    rowH = Math.max(rowH, neededH);
-                });
-                nextHeights[ri] = rowH;
-            });
+            const { nextWidths, nextHeights } = measureExpandTableCellNeeds(
+                table, rows, floorWidths, floorHeights
+            );
 
             if (table.classList.contains('ql-nested-table-inner') || table.closest('.ql-workspace-nested-table')) {
-                // Nested tables: trust editor-locked data-value sizes. Live/scroll
-                // expand ratchets with absolute-fill CSS + delayed fit passes.
+                // Nested tables: grow from editor-locked floors using measured entity sizes.
                 const embed = table.closest('.ql-workspace-nested-table');
                 const cfg = parseNestedTableConfig(embed ? embed.getAttribute('data-value') || '' : '');
                 const lockedW = (cfg.colWidths && cfg.colWidths.length)
@@ -2064,13 +2131,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 const lockedH = (cfg.rowHeights && cfg.rowHeights.length)
                     ? cfg.rowHeights.map(h => Math.max(NESTED_MIN_ROW, Math.round(h)))
                     : nextHeights;
-                applyNestedInnerLayout(table, lockedW, lockedH);
+                const grownW = lockedW.map((w, i) => Math.max(w, nextWidths[i] || 0));
+                const grownH = lockedH.map((h, i) => Math.max(h, nextHeights[i] || 0));
+                applyNestedInnerLayout(table, grownW, grownH);
                 // If nested grew, also enlarge the outer host cell so the preview isn't clipped by the parent cell
                 const host = embed ? embed.closest('td, th') : null;
                 const outerTable = host ? host.closest('table') : null;
                 if (host && outerTable && !isNestedTableElement(outerTable) && previewTableShouldExpandEntities(outerTable)) {
-                    const neededW = lockedW.reduce((a, b) => a + b, 0);
-                    const neededH = lockedH.reduce((a, b) => a + b, 0);
+                    const neededW = grownW.reduce((a, b) => a + b, 0);
+                    const neededH = grownH.reduce((a, b) => a + b, 0);
                     const outerRows = Array.from(outerTable.querySelectorAll(':scope > tr, :scope > tbody > tr'));
                     const outerRow = host.parentElement;
                     const outerRowIndex = outerRows.indexOf(outerRow);
@@ -8100,6 +8169,9 @@ document.addEventListener('DOMContentLoaded', function() {
         },
         renderGraphBetweenPointsCanvas(targetEl, config, options = {}) {
             return renderGraphBetweenPointsCanvas(targetEl, config, options);
+        },
+        renderGraphComponentCanvas(canvasIdOrEl, config, options = {}) {
+            return renderGraphComponentCanvas(canvasIdOrEl, config, options);
         },
     };
 });

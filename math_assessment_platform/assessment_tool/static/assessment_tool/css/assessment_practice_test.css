@@ -146,9 +146,17 @@
 .practice-preview-target table td,
 .practice-preview-target table th {
     border: 1px solid #cbd5e1;
-    padding: 6px 8px;
+    padding: 8px 10px;
     vertical-align: top;
     box-sizing: border-box;
+}
+
+/* Compact cells must match the editor/simulation padding — otherwise locked
+   40×16 layouts overflow and expand-fit under-measures under table-layout:fixed. */
+.practice-preview-target table.ql-table-compact td,
+.practice-preview-target table.ql-table-compact th {
+    padding: 1px 2px;
+    min-width: 14px;
 }
 
 .practice-preview-target table.no-border > tr > td,
@@ -179,6 +187,43 @@
     height: auto;
     width: auto;
     display: block;
+}
+
+/* Mirror workspace simulation expand / fixed-fit table rules for practice + take */
+.practice-preview-target table.ql-table-expand-entities > tr > td,
+.practice-preview-target table.ql-table-expand-entities > tr > th,
+.practice-preview-target table.ql-table-expand-entities > tbody > tr > td,
+.practice-preview-target table.ql-table-expand-entities > tbody > tr > th,
+.practice-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tr > td,
+.practice-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tr > th,
+.practice-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tbody > tr > td,
+.practice-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tbody > tr > th {
+    overflow: visible !important;
+}
+
+.practice-preview-target table.ql-table-fixed-entities > tr > td,
+.practice-preview-target table.ql-table-fixed-entities > tr > th,
+.practice-preview-target table.ql-table-fixed-entities > tbody > tr > td,
+.practice-preview-target table.ql-table-fixed-entities > tbody > tr > th,
+.practice-preview-target table.ql-nested-table-inner.ql-table-fixed-entities > tr > td,
+.practice-preview-target table.ql-nested-table-inner.ql-table-fixed-entities > tr > th,
+.practice-preview-target table.ql-nested-table-inner.ql-table-fixed-entities > tbody > tr > td,
+.practice-preview-target table.ql-nested-table-inner.ql-table-fixed-entities > tbody > tr > th {
+    overflow: hidden !important;
+}
+
+.practice-preview-target .ql-preview-fit-viewport {
+    box-sizing: border-box;
+    overflow: hidden;
+    position: relative;
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+.practice-preview-target .ql-preview-fit-scale {
+    transform-origin: top left;
+    max-width: none;
 }
 
 .practice-stub-host {
