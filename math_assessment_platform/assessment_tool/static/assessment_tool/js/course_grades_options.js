@@ -176,7 +176,7 @@
         wrap.className = 'grades-options-time-limit';
         wrap.setAttribute('data-time-limit-wrap', '1');
         wrap.innerHTML = `
-          <span>time_limit (minutes):</span>
+          <span>Time limit (minutes):</span>
           <input type="number" min="1" step="1" id="grades-options-time-limit"
             value="${mins != null ? escapeHtml(mins) : ''}" placeholder="e.g. 45" />
         `;

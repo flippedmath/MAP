@@ -102,33 +102,53 @@ def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
     (see ``record_zeros_on_assessment_close`` / ``close_assessment_and_finalize_attempts``).
     Existing enrollment-scoped grade rows are left untouched.
     """
+    from .assessment_options import select_counting_attempt
+    from .student_attempts import course_template_assessment
+
     course = enrollment.course
     student = enrollment.user
     created = 0
 
-    attempts = StudentAssessmentAttempt.objects.filter(
-        enrollment=enrollment,
-        status=StudentAssessmentAttempt.STATUS_SUBMITTED,
-    ).select_related("assessment")
-
+    attempts = list(
+        StudentAssessmentAttempt.objects.filter(
+            enrollment=enrollment,
+            status=StudentAssessmentAttempt.STATUS_SUBMITTED,
+            score_voided=False,
+        ).select_related("assessment")
+    )
+    by_template: dict[int, list] = {}
+    templates: dict[int, Assessment] = {}
     for attempt in attempts:
-        parent = attempt.assessment
-        if parent is None:
+        if attempt.assessment is None:
             continue
+        template = course_template_assessment(attempt.assessment)
+        if template is None:
+            continue
+        by_template.setdefault(template.id, []).append(attempt)
+        templates[template.id] = template
+
+    for template_id, group in by_template.items():
+        template = templates[template_id]
         if FinalGradeCalculation.objects.filter(
             enrollment=enrollment,
-            assessment=parent,
+            assessment_id=template_id,
         ).exists():
             continue
 
-        points, max_points = _score_from_student_attempt(attempt)
-        if points is None and attempt.auto_graded_at is None:
+        counting = select_counting_attempt(group, template)
+        if counting is None:
+            continue
+        points, max_points = _score_from_student_attempt(counting)
+        if points is None and counting.auto_graded_at is None:
             continue
 
         weight = 1
-        if parent.points_weight is not None:
+        raw_weight = getattr(template, "grade_weight", None)
+        if raw_weight is None:
+            raw_weight = template.points_weight
+        if raw_weight is not None:
             try:
-                weight = int(parent.points_weight)
+                weight = int(round(float(raw_weight)))
             except (TypeError, ValueError):
                 weight = 1
 
@@ -136,7 +156,7 @@ def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
             enrollment=enrollment,
             course=course,
             user=student,
-            assessment=parent,
+            assessment_id=template_id,
             weight=weight,
             assessment_grade_points=0.0 if points is None else points,
             assessment_grade_max_points=max_points,
@@ -161,16 +181,20 @@ def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
     if assessment.course_id is None:
         return 0
 
+    from .assessment_grades import assessment_template_total_points
     from .student_attempts import assessment_has_student_engagement
 
     if not assessment_has_student_engagement(assessment):
         return 0
 
-    max_points = None
+    max_points = assessment_template_total_points(assessment)
     weight = 1
-    if assessment.points_weight is not None:
+    raw_weight = getattr(assessment, "grade_weight", None)
+    if raw_weight is None:
+        raw_weight = assessment.points_weight
+    if raw_weight is not None:
         try:
-            weight = int(assessment.points_weight)
+            weight = int(round(float(raw_weight)))
         except (TypeError, ValueError):
             weight = 1
 
@@ -193,7 +217,7 @@ def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
             assessment=assessment,
             weight=weight,
             assessment_grade_points=0.0,
-            assessment_grade_max_points=max_points,
+            assessment_grade_max_points=float(max_points or 0.0),
         )
         created += 1
     return created

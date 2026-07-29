@@ -43,6 +43,45 @@
     gap: 8px;
     align-items: center;
   }
+  .practice-back-link--disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  .student-take-save-status {
+    margin-top: 0.35rem;
+    font-size: 0.9rem;
+    color: #64748b;
+  }
+  .student-take-save-status.is-saving { color: #0369a1; }
+  .student-take-save-status.is-saved { color: #15803d; }
+  .student-take-save-status.is-error { color: #b91c1c; font-weight: 600; }
+  .student-focus-lock-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 12000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, 0.72);
+  }
+  .student-focus-lock-overlay.is-visible { display: flex; }
+  .student-focus-lock-card {
+    width: min(560px, 100%);
+    padding: 28px;
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35);
+    text-align: center;
+  }
+  .student-focus-lock-card h2 { margin: 0 0 12px; color: #991b1b; }
+  .student-focus-lock-card p { color: #475569; line-height: 1.55; }
+  .student-focus-lock-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+  }
 </style>
 {% endblock %}
 
@@ -53,9 +92,13 @@
             <div class="student-take-header-row">
               <div class="header-title-block">
                   <h2 style="display: inline-flex; align-items: center; gap: 10px;">
-                      <a href="{% url 'assessment_view' course.id %}?highlight={{ assessment.id }}" class="practice-back-link" title="Back to assessments">
+                      <span
+                        class="practice-back-link practice-back-link--disabled"
+                        title="Finish or submit this assessment before leaving"
+                        aria-disabled="true"
+                      >
                           <i class="fas fa-arrow-left"></i>
-                      </a>
+                      </span>
                       {{ assessment.name }}
                   </h2>
                   <p class="subtitle">Your answers are saved automatically. Submit when you are finished.</p>
@@ -63,7 +106,7 @@
               <div class="student-take-timers">
                 <div id="student-take-close-timer" class="student-take-timer is-closing" aria-live="polite" hidden>
                   <i class="fas fa-hourglass-end" aria-hidden="true"></i>
-                  <span data-role="close-timer-value">2:00</span>
+                  <span data-role="close-timer-value">—</span>
                 </div>
                 <div id="student-take-timer" class="student-take-timer" aria-live="polite" hidden>
                   <i class="fas fa-clock" aria-hidden="true"></i>
@@ -74,6 +117,7 @@
         </div>
 
         <div id="student-take-status" class="practice-status" aria-live="polite">Loading assessment…</div>
+        <div id="student-take-save-status" class="practice-status student-take-save-status" aria-live="polite">Saved</div>
         <div id="student-take-problems" class="practice-problems-list"></div>
 
         <div class="student-take-footer">
@@ -89,6 +133,30 @@
         </section>
     </div>
 </div>
+
+<div
+  id="student-focus-lock-overlay"
+  class="student-focus-lock-overlay"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="student-focus-lock-title"
+  aria-hidden="true"
+>
+  <div class="student-focus-lock-card">
+    <h2 id="student-focus-lock-title">Assessment Locked</h2>
+    <p>
+      This assessment was locked because focus left the assessment tab.
+      Your saved answers cannot be changed until your teacher unlocks it.
+    </p>
+    <p>You may wait for your teacher, or submit your currently saved answers now.</p>
+    <div class="student-focus-lock-actions">
+      <button type="button" id="student-focus-lock-submit" class="btn-practice-primary">
+        Submit Current Answers
+      </button>
+    </div>
+    <p id="student-focus-lock-status" aria-live="polite"></p>
+  </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -99,6 +167,8 @@
     startUrl: "{% url 'student_assessment_start' course.id assessment.id %}",
     autosaveUrl: "{% url 'student_assessment_autosave' course.id assessment.id %}",
     submitUrl: "{% url 'student_assessment_submit' course.id assessment.id %}",
+    focusLockUrl: "{% url 'student_assessment_focus_lock' course.id assessment.id %}",
+    submitLockedUrl: "{% url 'student_assessment_submit_locked' course.id assessment.id %}",
     statusUrl: "{% url 'student_assessment_take_status' course.id assessment.id %}",
     assessmentsUrl: "{% url 'assessment_view' course.id %}?highlight={{ assessment.id }}",
     assessmentName: "{{ assessment.name|escapejs }}",

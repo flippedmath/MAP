@@ -41,7 +41,7 @@ SET description = EXCLUDED.description,
 -- Group 3: Course total calculation
 -- ---------------------------------------------------------------------------
 UPDATE assessment_option_group
-SET description = 'Each assessment represents a % of the final grade',
+SET description = 'Each assessment represents a % of the final grade and can be distributed by an assigned weight.',
     deprecated = false
 WHERE group_num = 3 AND choice = 2;
 
@@ -144,6 +144,29 @@ VALUES
     14,
     2,
     'Adjusting the scores on the class as a whole allowed',
+    false
+  )
+ON CONFLICT (group_num, choice) DO UPDATE
+SET description = EXCLUDED.description,
+    deprecated = false;
+
+-- ---------------------------------------------------------------------------
+-- Group 15: Score release
+-- ---------------------------------------------------------------------------
+INSERT INTO assessment_option_group (id, group_num, choice, description, deprecated)
+VALUES
+  (
+    nextval('assessment_option_group_id_seq'),
+    15,
+    1,
+    'Release grades to students automatically when scores are ready',
+    false
+  ),
+  (
+    nextval('assessment_option_group_id_seq'),
+    15,
+    2,
+    'Teacher must release grades to students for each assessment',
     false
   )
 ON CONFLICT (group_num, choice) DO UPDATE

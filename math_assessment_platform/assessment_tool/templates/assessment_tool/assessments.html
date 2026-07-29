@@ -355,6 +355,7 @@
 <script src="{% static 'assessment_tool/js/assessments_table.js' %}"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script src="{% static 'assessment_tool/js/course_grades_options.js' %}"></script>
+<script src="{% static 'assessment_tool/js/assessment_sync_decision.js' %}"></script>
 {% endif %}
 
 <script>
@@ -502,18 +503,41 @@ document.addEventListener("DOMContentLoaded", function() {
             const previousState = this.getAttribute('data-previous');
             const targetState = this.value;
             try {
-                const response = await fetch("{% url 'update_assessment_status_ajax' course.id %}", {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    },
-                    body: JSON.stringify({
+                async function submitStatus(synchronizationDecision) {
+                    const body = {
                         assessment_id: assessmentId,
                         status: targetState
-                    })
-                });
-                const data = await response.json();
+                    };
+                    if (synchronizationDecision) {
+                        body.synchronization_decision = synchronizationDecision;
+                    }
+                    const response = await fetch("{% url 'update_assessment_status_ajax' course.id %}", {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': '{{ csrf_token }}'
+                        },
+                        body: JSON.stringify(body)
+                    });
+                    return { response, data: await response.json() };
+                }
+
+                let result = await submitStatus('');
+                if (
+                    result.response.status === 409 &&
+                    result.data.code === 'synchronization_decision_required'
+                ) {
+                    const decision = await window.requestAssessmentSynchronizationDecision(
+                        result.data
+                    );
+                    if (!decision) {
+                        this.value = previousState;
+                        return;
+                    }
+                    result = await submitStatus(decision);
+                }
+                const response = result.response;
+                const data = result.data;
                 if (response.ok && data.success) {
                     this.setAttribute('data-previous', targetState);
                     // Upcoming toggles the Auto-Open column / cell markup; reload to sync.

@@ -8001,6 +8001,43 @@ def _extract_expected_answers(validator, archetype):
     return unique
 
 
+def _student_answer_is_nonblank(content) -> bool:
+    """True when the student left a usable response for grading/manual review."""
+    if content is None:
+        return False
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, bool):
+        return content
+    if isinstance(content, (int, float)):
+        return True
+    if isinstance(content, (list, tuple)):
+        return any(_student_answer_is_nonblank(item) for item in content)
+    if not isinstance(content, dict):
+        return bool(content)
+    if content.get("dne") is True:
+        return True
+    for key in (
+        "value",
+        "selected",
+        "marks",
+        "cells",
+        "segments",
+        "entries",
+        "strokes",
+        "dataUrl",
+        "data_url",
+        "png",
+    ):
+        if key in content and _student_answer_is_nonblank(content.get(key)):
+            return True
+    return any(
+        _student_answer_is_nonblank(value)
+        for key, value in content.items()
+        if key not in {"dne", "format", "archetype", "kind", "type"}
+    )
+
+
 def grade_entities_payload(entities, context_entities, student_answers):
     """
     Ephemeral grading shared by workspace preview and practice-test batch grade.
@@ -8104,7 +8141,9 @@ def grade_entities_payload(entities, context_entities, student_answers):
 
         fully_correct = max_pts > 0 and earned >= max_pts - 1e-9
         requires_manual = (
-            archetype in ("longAnswer", "canvas") and max_pts > 0
+            archetype in ("longAnswer", "canvas")
+            and max_pts > 0
+            and _student_answer_is_nonblank(student_input)
         )
         visual_preview = None
         if archetype == "slopeFieldGraph":

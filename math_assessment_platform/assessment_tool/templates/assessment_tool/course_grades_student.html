@@ -18,6 +18,7 @@
     font-weight: 700; background: #f8fafc; border-top: 2px solid #cbd5e1;
   }
   .grades-score-pct { color: #475569; }
+  .grades-curve-bonus { color:#166534; font-size:0.8rem; font-weight:600; }
 </style>
 {% endblock %}
 
@@ -55,6 +56,9 @@
         <td>
           {% if row.scores_visible and row.earned_points is not None %}
             {{ row.earned_points }} / {{ row.max_points }}{% if grade_aggregation_mode == 'equal_weight' and row.percent is not None %} <span class="grades-score-pct">= {{ row.percent }}%</span>{% endif %}
+            {% if row.curve_bonus_points %}
+              <span class="grades-curve-bonus">(+{{ row.curve_bonus_points|floatformat:2 }} curve points)</span>
+            {% endif %}
           {% elif row.manual_pending %}
             <span class="grades-badge warn">Awaiting teacher grading</span>
           {% else %}

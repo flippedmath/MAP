@@ -193,15 +193,14 @@ class Assessment(models.Model):
     order = models.CharField(max_length=100, blank=True, null=True, db_comment="Will only be 'null' if it's the copied version assigned to a student for test taking")
     parent_assessment = models.ForeignKey('self', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
     user = models.ForeignKey('UserProfile', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
-    points_weight = models.FloatField(blank=True, null=True, db_comment='Legacy tilt multiplier; prefer grade_weight / curve_max_points')
+    points_weight = models.FloatField(blank=True, null=True, db_comment='Legacy tilt multiplier; prefer grade_weight / curve bonus setting')
     grade_weight = models.FloatField(
         default=1,
         db_comment='Relative weight for percent-of-final-grade course totals. 0 excludes the assessment.',
     )
     curve_max_points = models.FloatField(
-        blank=True,
-        null=True,
-        db_comment='Teacher curve denominator. NULL follows live assessment total when unlocked.',
+        default=0,
+        db_comment='Bonus points added to every recorded student grade for this assessment.',
     )
     time_limit_minutes = models.IntegerField(
         blank=True,
@@ -646,6 +645,72 @@ class AssessmentGenerationJob(models.Model):
         db_table = 'assessment_generation_job'
 
 
+class AssessmentSynchronizedForm(models.Model):
+    assessment = models.ForeignKey(
+        Assessment,
+        models.CASCADE,
+        db_column='assessment_id',
+        related_name='synchronized_forms',
+    )
+    attempt_number = models.IntegerField()
+    cohort_number = models.IntegerField()
+    blueprint_hash = models.CharField(max_length=64)
+    content_hash = models.CharField(max_length=64)
+    is_current = models.BooleanField(default=True)
+    unsynchronized_history_acknowledged_at = models.DateTimeField(default=timezone.now)
+    created_by = models.ForeignKey(
+        'UserProfile',
+        models.SET_NULL,
+        db_column='created_by_id',
+        blank=True,
+        null=True,
+    )
+    creation_date = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = False
+        db_table = 'assessment_synchronized_form'
+        unique_together = (('assessment', 'attempt_number', 'cohort_number'),)
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(attempt_number__gte=1),
+                name='assessment_sync_form_attempt_number_check',
+            ),
+            models.CheckConstraint(
+                check=models.Q(cohort_number__gte=1),
+                name='assessment_sync_form_cohort_number_check',
+            ),
+            models.UniqueConstraint(
+                fields=('assessment', 'attempt_number'),
+                condition=models.Q(is_current=True),
+                name='uq_assessment_sync_form_current',
+            ),
+        ]
+
+
+class AssessmentSynchronizedProblem(models.Model):
+    synchronized_form = models.ForeignKey(
+        AssessmentSynchronizedForm,
+        models.CASCADE,
+        db_column='synchronized_form_id',
+        related_name='problems',
+    )
+    slot_index = models.IntegerField()
+    section_name = models.CharField(max_length=255, blank=True, null=True)
+    title = models.CharField(max_length=255, blank=True, null=True)
+    source_problem_id = models.IntegerField(blank=True, null=True)
+    body_html = models.TextField()
+    render_payload = models.JSONField(default=dict)
+    answer_key = models.JSONField(default=dict)
+    answer_fields = models.JSONField(default=list)
+    max_points = models.FloatField(default=0)
+
+    class Meta:
+        managed = False
+        db_table = 'assessment_synchronized_problem'
+        unique_together = (('synchronized_form', 'slot_index'),)
+
+
 class StudentCourseEnrollment(models.Model):
     """One enrollment stint for a student in a course; survives kick/finish for grade history."""
 
@@ -715,11 +780,55 @@ class StudentAssessmentAttempt(models.Model):
     branch = models.ForeignKey(
         BranchGroup, models.DO_NOTHING, db_column='branch_id', blank=True, null=True
     )
+    synchronized_form = models.ForeignKey(
+        AssessmentSynchronizedForm,
+        models.SET_NULL,
+        db_column='synchronized_form_id',
+        blank=True,
+        null=True,
+        related_name='student_attempts',
+    )
     creation_date = models.DateTimeField()
 
     class Meta:
         managed = False
         db_table = 'student_assessment_attempt'
+
+
+class StudentAssessmentFocusLock(models.Model):
+    REASON_TEACHER = 'teacher'
+    REASON_SUBMITTED = 'submitted'
+    REASON_WINDOW_ENDED = 'window_ended'
+    REASON_ASSESSMENT_CLOSED = 'assessment_closed'
+
+    attempt = models.ForeignKey(
+        StudentAssessmentAttempt,
+        models.CASCADE,
+        db_column='attempt_id',
+        related_name='focus_locks',
+    )
+    locked_at = models.DateTimeField(default=timezone.now)
+    unlocked_at = models.DateTimeField(blank=True, null=True)
+    unlocked_by = models.ForeignKey(
+        UserProfile,
+        models.SET_NULL,
+        db_column='unlocked_by_id',
+        blank=True,
+        null=True,
+        related_name='released_assessment_focus_locks',
+    )
+    unlock_reason = models.CharField(max_length=32, blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'student_assessment_focus_lock'
+        constraints = [
+            models.UniqueConstraint(
+                fields=('attempt',),
+                condition=models.Q(unlocked_at__isnull=True),
+                name='uq_student_assessment_focus_lock_active',
+            ),
+        ]
 
 
 class StudentAssessmentProblem(models.Model):

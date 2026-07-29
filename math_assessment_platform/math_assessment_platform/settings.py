@@ -51,6 +51,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'assessment_tool.middleware.OneSessionPerUserMiddleware', # must come after 'AuthenticationMiddleware' and 'MessageMiddleware'
+    'assessment_tool.middleware.ActiveAssessmentRedirectMiddleware',
     'assessment_tool.middleware.ContentViewOnlyMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]

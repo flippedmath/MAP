@@ -11,7 +11,7 @@ VALUES
 
   -- Group 3: Course total calculation
   (nextval('assessment_option_group_id_seq'), 3, 2,
-   'Each assessment represents a % of the final grade', false),
+   'Each assessment represents a % of the final grade and can be distributed by an assigned weight.', false),
   (nextval('assessment_option_group_id_seq'), 3, 3,
    'Calculate final score by accumulated points', false),
 
@@ -46,5 +46,11 @@ VALUES
   -- Group 14: Curve
   (nextval('assessment_option_group_id_seq'), 14, 1, 'No adjusting the scores', false),
   (nextval('assessment_option_group_id_seq'), 14, 2,
-   'Adjusting the scores on the class as a whole allowed', false)
+   'Adjusting the scores on the class as a whole allowed', false),
+
+  -- Group 15: Score release
+  (nextval('assessment_option_group_id_seq'), 15, 1,
+   'Release grades to students automatically when scores are ready', false),
+  (nextval('assessment_option_group_id_seq'), 15, 2,
+   'Teacher must release grades to students for each assessment', false)
 ON CONFLICT (group_num, choice) DO NOTHING;

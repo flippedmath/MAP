@@ -173,6 +173,81 @@ def assessment_taking_ended(assessment, *, now=None) -> bool:
     return upcoming_window_expired(assessment, now=now)
 
 
+def attempt_force_deadline(assessment, attempt, *, now=None):
+    """
+    Authoritative server deadline for an open attempt.
+
+    Returns (deadline_datetime_or_None, reason_or_None). Reasons:
+    ``assessment_end``, ``time_limit``, or ``class_closed``.
+    """
+    if assessment is None or attempt is None:
+        return None, None
+    m = _models()
+    if (
+        attempt.status == m.StudentAssessmentAttempt.STATUS_SUBMITTED
+        or attempt.auto_graded_at is not None
+    ):
+        return None, None
+
+    now = _aware(now) or timezone.now()
+    template = course_template_assessment(assessment) or assessment
+    _start, window_end = assessment_window_bounds(template)
+    from .assessment_options import countdown_timer_payload
+
+    countdown = countdown_timer_payload(
+        template,
+        attempt,
+        window_end=window_end,
+        now=now,
+    )
+    force_iso = countdown.get("force_submit_at")
+    force_reason = countdown.get("force_submit_reason")
+    force_at = None
+    if force_iso:
+        from django.utils.dateparse import parse_datetime
+
+        force_at = parse_datetime(force_iso)
+        if force_at is not None and timezone.is_naive(force_at):
+            force_at = timezone.make_aware(
+                force_at, timezone.get_current_timezone()
+            )
+
+    if force_at is not None and force_at <= now:
+        return force_at, force_reason or "time_limit"
+
+    if assessment_taking_ended(template, now=now):
+        if not attempt_may_continue_while_closed(attempt, template, attempt.user):
+            return now, "class_closed"
+
+    if force_at is not None:
+        return force_at, force_reason
+    return None, None
+
+
+def attempt_deadline_expired(assessment, attempt, *, now=None) -> bool:
+    deadline, _reason = attempt_force_deadline(assessment, attempt, now=now)
+    if deadline is None:
+        return False
+    now = _aware(now) or timezone.now()
+    return deadline <= now
+
+
+def attempt_must_stop_taking(assessment, attempt, *, now=None) -> dict:
+    """
+    Whether an open attempt must stop (window/time-limit/class closed).
+
+    Returns ``{must_stop, reason, force_submit_at}``.
+    """
+    deadline, reason = attempt_force_deadline(assessment, attempt, now=now)
+    now = _aware(now) or timezone.now()
+    must_stop = bool(deadline is not None and deadline <= now)
+    return {
+        "must_stop": must_stop,
+        "reason": reason if must_stop else None,
+        "force_submit_at": deadline,
+    }
+
+
 def force_submit_unsubmitted_attempts(template, *, reason: str = "closed") -> dict:
     """
     Compile saved answers for every ready/in_progress attempt on this template
@@ -201,7 +276,15 @@ def force_submit_unsubmitted_attempts(template, *, reason: str = "closed") -> di
             skipped_retake_ids.append(attempt.id)
             continue
         try:
-            submit_and_grade_attempt(attempt)
+            focus_reason = (
+                "window_ended"
+                if reason in ("window_ended", "window_expired", "time_limit")
+                else "assessment_closed"
+            )
+            submit_and_grade_attempt(
+                attempt,
+                focus_unlock_reason=focus_reason,
+            )
             submitted_ids.append(attempt.id)
         except ValueError:
             # Already graded concurrently — treat as done.
@@ -420,6 +503,9 @@ def student_may_start_attempt(assessment, student, attempts=None, *, now=None) -
     )
     open_attempt = in_progress or ready
     if open_attempt is not None:
+        # Per-attempt time limit or window end: stop continuing.
+        if attempt_deadline_expired(template, open_attempt, now=now):
+            return False
         # Class/window ended: only an in-flight retake (or open retake grant) may continue.
         if assessment_taking_ended(template, now=now):
             return attempt_may_continue_while_closed(open_attempt, template, student)
@@ -947,7 +1033,7 @@ def _create_student_take_assessment(template, student, *, parent_take, branch):
         user=student,
         points_weight=template.points_weight,
         grade_weight=grade_weight,
-        curve_max_points=getattr(template, "curve_max_points", None),
+        curve_max_points=float(getattr(template, "curve_max_points", 0) or 0),
         time_limit_minutes=getattr(template, "time_limit_minutes", None),
         status=None,
         is_historic=True,
@@ -998,10 +1084,22 @@ def generate_attempt_for_student(parent_assessment, student, enrollment, *, forc
     Each take gets its own historic Assessment row:
       - first take: parent_assessment → course template
       - retake: parent_assessment → previous take Assessment
-    Problems are freshly generated for every new take.
+    Problems are freshly generated for every new take unless Synchronize tests
+    is enabled, in which case the current canonical form for this take number
+    is cloned.
     """
     m = _models()
     template = course_template_assessment(parent_assessment) or parent_assessment
+
+    # Serialize concurrent starts/retakes for the same enrollment.
+    locked_enrollment = (
+        m.StudentCourseEnrollment.objects.select_for_update()
+        .filter(pk=enrollment.pk)
+        .first()
+    )
+    if locked_enrollment is None:
+        raise PermissionError("Student enrollment was not found.")
+    enrollment = locked_enrollment
 
     prior_attempts = list(
         attempts_qs_for_template(template)
@@ -1031,12 +1129,28 @@ def generate_attempt_for_student(parent_assessment, student, enrollment, *, forc
 
     take_index = len(prior_attempts) + 1
     course = template.course
-    assembled = assemble_practice_test(
-        template,
-        actor_user=None,
-        allow_status_mutation=False,
+    from .assessment_sync import (
+        ensure_synchronized_form,
+        synchronized_tests_enabled,
     )
-    problems = assembled.get("problems") or []
+
+    synchronized_form = None
+    synchronized_problems = []
+    problems = []
+    if synchronized_tests_enabled(template):
+        # Locked get-or-create so parallel late enrollments cannot mint
+        # competing cohorts for the same attempt ordinal.
+        synchronized_form = ensure_synchronized_form(template, take_index)
+        synchronized_problems = list(
+            synchronized_form.problems.all().order_by("slot_index", "id")
+        )
+    else:
+        assembled = assemble_practice_test(
+            template,
+            actor_user=None,
+            allow_status_mutation=False,
+        )
+        problems = assembled.get("problems") or []
 
     assessment_folder = _create_take_folder(
         student, course, template.name, take_index
@@ -1056,31 +1170,65 @@ def generate_attempt_for_student(parent_assessment, student, enrollment, *, forc
         course=course,
         status=m.StudentAssessmentAttempt.STATUS_READY,
         branch=assessment_folder,
+        synchronized_form=synchronized_form,
         creation_date=now,
     )
 
-    for inst in problems:
-        answer_key, render_payload, answer_fields, body_html = _freeze_instance(inst)
-        slot = int(inst.get("slot_index") or 0)
-        title = inst.get("title") or f"Question {slot}"
+    frozen_problems = []
+    if synchronized_form is not None:
+        for source in synchronized_problems:
+            frozen_problems.append(
+                {
+                    "slot": int(source.slot_index or 0),
+                    "section_name": source.section_name,
+                    "title": source.title,
+                    "source_problem_id": source.source_problem_id,
+                    "body_html": source.body_html,
+                    "render_payload": copy.deepcopy(source.render_payload or {}),
+                    "answer_key": copy.deepcopy(source.answer_key or {}),
+                    "answer_fields": copy.deepcopy(source.answer_fields or []),
+                    "max_points": float(source.max_points or 0),
+                }
+            )
+    else:
+        for inst in problems:
+            answer_key, render_payload, answer_fields, body_html = _freeze_instance(inst)
+            max_points = 0.0
+            for field in answer_key.get("answer_fields") or []:
+                try:
+                    max_points += float(field.get("points") or 0)
+                except (TypeError, ValueError):
+                    pass
+            slot = int(inst.get("slot_index") or 0)
+            frozen_problems.append(
+                {
+                    "slot": slot,
+                    "section_name": inst.get("section_name"),
+                    "title": inst.get("title") or f"Question {slot}",
+                    "source_problem_id": inst.get("problem_id"),
+                    "body_html": body_html,
+                    "render_payload": render_payload,
+                    "answer_key": answer_key,
+                    "answer_fields": answer_fields,
+                    "max_points": max_points,
+                }
+            )
+
+    for frozen in frozen_problems:
+        slot = frozen["slot"]
+        title = frozen["title"] or f"Question {slot}"
         q_folder = _create_question_folder(student, assessment_folder, slot, title)
-        max_pts = 0.0
-        for f in answer_key.get("answer_fields") or []:
-            try:
-                max_pts += float(f.get("points") or 0)
-            except (TypeError, ValueError):
-                pass
         m.StudentAssessmentProblem.objects.create(
             attempt=attempt,
             slot_index=slot,
-            section_name=inst.get("section_name"),
+            section_name=frozen["section_name"],
             title=title,
-            source_problem_id=inst.get("problem_id"),
-            body_html=body_html,
-            render_payload=render_payload,
-            answer_key=answer_key,
-            answer_fields=answer_fields,
-            max_points=max_pts,
+            source_problem_id=frozen["source_problem_id"],
+            body_html=frozen["body_html"],
+            render_payload=frozen["render_payload"],
+            answer_key=frozen["answer_key"],
+            answer_fields=frozen["answer_fields"],
+            max_points=frozen["max_points"],
             branch=q_folder,
         )
 
@@ -1101,6 +1249,11 @@ def begin_attempt_for_student(attempt) -> object:
     if attempt.started_at is None:
         attempt.started_at = timezone.now()
     attempt.save(update_fields=["status", "started_at"])
+    if attempt.user_id:
+        m.UserProfile.objects.filter(pk=attempt.user_id).update(
+            ongoing_assessment=True
+        )
+        attempt.user.ongoing_assessment = True
     return attempt
 
 
@@ -1172,6 +1325,19 @@ def run_generation_job(job_id: int):
     job.total_students = len(enrollments)
     job.completed_students = 0
     job.save(update_fields=["total_students", "completed_students"])
+
+    # Mint the shared attempt-1 form once before cloning to every student.
+    from .assessment_sync import ensure_synchronized_form, synchronized_tests_enabled
+
+    if synchronized_tests_enabled(assessment):
+        try:
+            ensure_synchronized_form(assessment, 1)
+        except Exception as exc:
+            job.status = m.AssessmentGenerationJob.STATUS_FAILED
+            job.error_message = f"Synchronized form generation failed: {exc}"[:4000]
+            job.finished_at = timezone.now()
+            job.save(update_fields=["status", "error_message", "finished_at"])
+            return
 
     errors = []
     for enrollment in enrollments:
@@ -1329,7 +1495,7 @@ def upsert_answers(attempt, answers_payload: list[dict] | dict):
 
 
 @transaction.atomic
-def submit_and_grade_attempt(attempt):
+def submit_and_grade_attempt(attempt, *, focus_unlock_reason: str = "submitted"):
     """
     One-shot auto-grade. Raises ValueError if already graded.
     Returns summary dict.
@@ -1466,6 +1632,14 @@ def submit_and_grade_attempt(attempt):
         ]
     )
 
+    from .assessment_focus_lock import (
+        close_active_focus_lock,
+        sync_user_ongoing_assessment,
+    )
+
+    close_active_focus_lock(attempt, reason=focus_unlock_reason)
+    sync_user_ongoing_assessment(attempt.user)
+
     _upsert_final_grade(attempt)
 
     if attempt.user_id and attempt.assessment_id:
@@ -1484,6 +1658,251 @@ def submit_and_grade_attempt(attempt):
         "problems": problem_results,
         "requires_manual_grading": any_manual,
     }
+
+
+@transaction.atomic
+def regrade_attempt(attempt, *, preserve_teacher_scores: bool = True) -> dict:
+    """
+    Re-run automatic grading for a submitted attempt (answer-key corrections).
+
+    Teacher-rescored fields are preserved when ``preserve_teacher_scores`` is True.
+    """
+    m = _models()
+    attempt = m.StudentAssessmentAttempt.objects.select_for_update().get(pk=attempt.pk)
+    if attempt.status != m.StudentAssessmentAttempt.STATUS_SUBMITTED:
+        return {"success": False, "error": "Only submitted attempts can be re-graded."}
+    if getattr(attempt, "score_voided", False):
+        return {"success": False, "error": "Voided attempts cannot be re-graded."}
+
+    problems = list(
+        m.StudentAssessmentProblem.objects.filter(attempt=attempt)
+        .order_by("slot_index", "id")
+        .select_for_update()
+    )
+    answers = {
+        (a.problem_id, a.field_token): a
+        for a in m.StudentAssessmentAnswer.objects.filter(
+            problem_id__in=[p.id for p in problems]
+        ).select_for_update()
+    }
+
+    earned_total = 0.0
+    max_total = 0.0
+    any_manual = False
+    for problem in problems:
+        key = problem.answer_key or {}
+        entities = key.get("answer_fields") or []
+        context = key.get("all_entities") or key.get("loaded_segments") or []
+        student_answers = {}
+        for f in entities:
+            if not isinstance(f, dict):
+                continue
+            token = str(f.get("sequence_token") or f.get("token") or "").strip()
+            if not token:
+                continue
+            ans = answers.get((problem.id, token))
+            if ans and ans.content is not None:
+                content = ans.content
+                if isinstance(content, dict) and set(content.keys()) == {"value"}:
+                    student_answers[token] = content["value"]
+                else:
+                    student_answers[token] = content
+
+        graded = grade_entities_payload(entities, context, student_answers)
+        p_earned = 0.0
+        p_max = float(graded.get("max_total") or 0)
+        requires_manual = False
+        graded_by_token = {
+            str(item.get("sequence_token") or item.get("token") or "").strip(): item
+            for item in (graded.get("items") or [])
+        }
+        for f in entities:
+            if not isinstance(f, dict):
+                continue
+            token = str(f.get("sequence_token") or f.get("token") or "").strip()
+            if not token:
+                continue
+            item = graded_by_token.get(token) or {}
+            ans = answers.get((problem.id, token))
+            teacher_kept = (
+                preserve_teacher_scores
+                and ans is not None
+                and isinstance(ans.detail, dict)
+                and ans.detail.get("teacher_rescored")
+            )
+            if teacher_kept:
+                try:
+                    pts = float(ans.points_score) if ans.points_score is not None else 0.0
+                except (TypeError, ValueError):
+                    pts = 0.0
+                detail = dict(ans.detail or {})
+                try:
+                    field_max = float(detail.get("max")) if detail.get("max") is not None else float(
+                        item.get("max") or 0
+                    )
+                except (TypeError, ValueError):
+                    field_max = float(item.get("max") or 0)
+                p_earned += pts
+                if field_max > 0:
+                    # Max already included via graded max_total when not overridden.
+                    pass
+                continue
+
+            try:
+                pts_f = float(item.get("earned")) if item.get("earned") is not None else 0.0
+            except (TypeError, ValueError):
+                pts_f = 0.0
+            try:
+                auto_pts_f = (
+                    float(item.get("auto_earned"))
+                    if item.get("auto_earned") is not None
+                    else pts_f
+                )
+            except (TypeError, ValueError):
+                auto_pts_f = pts_f
+            if item.get("requires_manual_grading"):
+                requires_manual = True
+                any_manual = True
+            detail = {
+                k: item.get(k)
+                for k in (
+                    "earned",
+                    "auto_earned",
+                    "max",
+                    "detail",
+                    "fully_correct",
+                    "requires_manual_grading",
+                    "archetype",
+                    "label",
+                )
+            }
+            if ans is None:
+                ans = m.StudentAssessmentAnswer.objects.create(
+                    problem=problem,
+                    field_token=token,
+                    content=None,
+                    points_score=pts_f,
+                    auto_points_score=auto_pts_f,
+                    detail=detail,
+                )
+                answers[(problem.id, token)] = ans
+            else:
+                ans.points_score = pts_f
+                ans.auto_points_score = auto_pts_f
+                ans.detail = detail
+                ans.save(
+                    update_fields=["points_score", "auto_points_score", "detail"]
+                )
+            p_earned += pts_f
+
+        # Prefer graded max; teacher max overrides already reflected in field details.
+        if p_max <= 0:
+            p_max = float(problem.max_points or 0)
+        problem.earned_points = p_earned
+        problem.max_points = p_max
+        problem.requires_manual_grading = requires_manual
+        problem.save(
+            update_fields=["earned_points", "max_points", "requires_manual_grading"]
+        )
+        earned_total += p_earned
+        max_total += p_max
+
+    if attempt.original_earned_points is None and attempt.earned_points is not None:
+        attempt.original_earned_points = float(attempt.earned_points)
+    if attempt.original_max_points is None and attempt.max_points is not None:
+        attempt.original_max_points = float(attempt.max_points)
+    attempt.earned_points = earned_total
+    attempt.max_points = max_total
+    if attempt.auto_graded_at is None:
+        attempt.auto_graded_at = timezone.now()
+    attempt.save(
+        update_fields=[
+            "earned_points",
+            "max_points",
+            "original_earned_points",
+            "original_max_points",
+            "auto_graded_at",
+        ]
+    )
+    _upsert_final_grade(attempt)
+    return {
+        "success": True,
+        "earned_total": earned_total,
+        "max_total": max_total,
+        "requires_manual_grading": any_manual,
+    }
+
+
+def notify_teachers_focus_enforcement_bypassed(attempt) -> None:
+    """Inform course teachers that focus-leave client cooperation was missing."""
+    from datetime import timedelta
+
+    from .notifications import create_notification
+
+    m = _models()
+    template = course_template_assessment(attempt.assessment) or attempt.assessment
+    course = attempt.course or (template.course if template is not None else None)
+    if course is None:
+        return
+    student = attempt.user
+    recent = timezone.now() - timedelta(hours=1)
+    if m.Notification.objects.filter(
+        reason="focus_leave_bypass",
+        sender_id=getattr(student, "pk", None),
+        creation_date__gte=recent,
+        content__contains=f"attempt_id={attempt.id}",
+    ).exists():
+        return
+
+    student_name = " ".join(
+        part
+        for part in (
+            (getattr(student, "user_first_name", None) or "").strip(),
+            (getattr(student, "user_last_name", None) or "").strip(),
+        )
+        if part
+    ) or (getattr(student, "username", None) or "Unknown student")
+    username = getattr(student, "username", None) or "—"
+    assessment_name = (
+        (template.name if template is not None else None)
+        or (attempt.assessment.name if attempt.assessment else None)
+        or f"Assessment {attempt.assessment_id}"
+    )
+    course_name = getattr(course, "name", None) or f"Course {course.id}"
+    stamped = timezone.now()
+    title = "Focus-leave enforcement bypassed"
+    content = (
+        f"{student_name} ({username}) submitted or updated answers for "
+        f'"{assessment_name}" in {course_name} without the focus-leave '
+        f"enforcement client active. Timestamp (UTC): {stamped.isoformat()}. "
+        f"(attempt_id={attempt.id})"
+    )
+    teachers = m.UsersInCourse.objects.filter(
+        course=course, user__user_type="Teacher", user__isnull=False
+    ).select_related("user")
+    seen = set()
+    for row in teachers:
+        if row.user_id in seen:
+            continue
+        seen.add(row.user_id)
+        create_notification(
+            row.user,
+            title=title,
+            content=content,
+            reason="focus_leave_bypass",
+            sender=student,
+            creation_date=stamped,
+        )
+    owner = getattr(course, "owner", None)
+    if owner is not None and owner.pk not in seen and getattr(owner, "user_type", None) == "Teacher":
+        create_notification(
+            owner,
+            title=title,
+            content=content,
+            reason="focus_leave_bypass",
+            sender=student,
+            creation_date=stamped,
+        )
 
 
 def _upsert_final_grade(attempt):
@@ -1531,12 +1950,21 @@ def _upsert_final_grade(attempt):
         ).delete()
         return
 
+    from .assessment_grades import assessment_curve_bonus_points
+
+    curve_bonus = assessment_curve_bonus_points(template)
+    curved_earned = (
+        float(counting.earned_points) + curve_bonus
+        if counting.earned_points is not None
+        else None
+    )
+
     existing = m.FinalGradeCalculation.objects.filter(
         enrollment_id=attempt.enrollment_id,
         assessment_id=template_id,
     ).first()
     if existing:
-        existing.assessment_grade_points = counting.earned_points
+        existing.assessment_grade_points = curved_earned
         existing.assessment_grade_max_points = counting.max_points
         existing.weight = weight
         existing.course_id = counting.course_id
@@ -1557,7 +1985,7 @@ def _upsert_final_grade(attempt):
             assessment_id=template_id,
             enrollment_id=counting.enrollment_id,
             weight=weight,
-            assessment_grade_points=counting.earned_points,
+            assessment_grade_points=curved_earned,
             assessment_grade_max_points=counting.max_points,
         )
 

@@ -17,6 +17,23 @@
   .grades-badge.grades-yes { background:#fee2e2; color:#b91c1c; }
   .grades-badge.grades-no { background:#dcfce7; color:#166534; }
   .grades-badge.voided { background:#fee2e2; color:#991b1b; }
+  .focus-lock-history { position:relative; display:inline-block; }
+  .focus-lock-count {
+    display:inline-flex; min-width:28px; justify-content:center; padding:2px 8px;
+    border-radius:999px; background:#fee2e2; color:#991b1b; font-weight:700;
+  }
+  .focus-lock-popover {
+    position:absolute; left:50%; bottom:calc(100% + 8px); z-index:30;
+    display:none; width:max-content; min-width:220px; max-width:320px;
+    transform:translateX(-50%); padding:10px 12px; border:1px solid #cbd5e1;
+    border-radius:8px; background:#fff; color:#334155;
+    box-shadow:0 10px 30px rgba(15,23,42,.18); text-align:left;
+    pointer-events:none;
+  }
+  .focus-lock-popover.is-open {
+    position:fixed; display:block; bottom:auto; z-index:13000;
+  }
+  .focus-lock-popover time { display:block; padding:2px 0; white-space:nowrap; }
   .unfinished-box {
     background:#fffbeb; border:1px solid #fcd34d; border-radius:8px; padding:12px 14px; margin-bottom:1rem;
     font-size:0.9rem; color:#92400e;
@@ -110,11 +127,22 @@
     border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem;
     color: #0f172a; background: #fff;
   }
+  .grades-live-unlock-box {
+    margin: 12px 0; padding: 12px 14px; border: 1px solid #fecaca;
+    border-radius: 8px; background: #fef2f2; color: #991b1b;
+  }
+  .grades-live-unlock-box ul { margin: 6px 0 0; padding-left: 20px; }
+  .grades-live-unlock-box a { color: #991b1b; font-weight: 700; }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="grades-assessment-page">
+<div
+  class="grades-assessment-page"
+  id="grades-assessment-page"
+  data-assessment-id="{{ assessment.id }}"
+  data-live-attention-url="{% url 'teacher_live_attention' %}"
+>
 <div class="assessments-pane-header">
   <div class="header-title-block">
     <h2 style="display:inline-flex; align-items:center; gap:10px;">
@@ -156,6 +184,11 @@
 </div>
 {% endif %}
 
+<div class="grades-live-unlock-box" id="grades-live-unlock-box" hidden>
+  <strong>Students awaiting unlock</strong>
+  <ul id="grades-live-unlock-list"></ul>
+</div>
+
 <div class="table-responsive-wrapper">
   <table class="dashboard-data-table" id="grades-assessment-roster" data-student-mode="name">
     <thead>
@@ -170,6 +203,7 @@
         {% if show_retake_column %}<th>Attempt Number</th>{% endif %}
         <th>Status</th>
         <th>Time Taken</th>
+        <th data-focus-lock-column {% if not show_focus_lock_column %}hidden{% endif %}>Focus Locks</th>
         <th>Score</th>
         <th>
           Manual Grading Needed
@@ -189,7 +223,7 @@
     </thead>
     <tbody>
       {% for row in student_rows %}
-      <tr>
+      <tr id="attempt-{{ row.attempt_id }}" data-attempt-row="{{ row.attempt_id }}">
         <td
           class="grades-student-label"
           data-formal-name="{{ row.formal_name|escape }}"
@@ -206,6 +240,9 @@
         {% endif %}
         <td>
           {{ row.status }}
+          {% if row.is_counting and row.status == "submitted" and not row.score_voided %}
+            <span class="grades-badge ok" title="This attempt counts toward the student's grade">Counting</span>
+          {% endif %}
           {% if row.score_voided %}
             <span class="grades-badge voided">Voided</span>
           {% elif row.retake_open or row.retake_active %}
@@ -213,6 +250,23 @@
           {% endif %}
         </td>
         <td>{{ row.duration_display }}</td>
+        <td data-focus-lock-column data-focus-lock-cell="{{ row.attempt_id }}" {% if not show_focus_lock_column %}hidden{% endif %}>
+          <span
+            class="focus-lock-history"
+            tabindex="0"
+            aria-label="{{ row.focus_lock_count }} focus lock{{ row.focus_lock_count|pluralize }}"
+            {% if not row.focus_lock_count %}hidden{% endif %}
+          >
+            <span class="focus-lock-count">{{ row.focus_lock_count }}</span>
+            <span class="focus-lock-popover" role="tooltip">
+              <strong>Locked at:</strong>
+              {% for timestamp in row.focus_lock_timestamps %}
+                <time class="local-datetime" datetime="{{ timestamp }}">{{ timestamp }}</time>
+              {% endfor %}
+            </span>
+          </span>
+          <span data-focus-lock-empty {% if row.focus_lock_count %}hidden{% endif %}>—</span>
+        </td>
         <td>
           {% if row.score_voided %}
             <span class="grades-badge voided">Voided</span>
@@ -248,6 +302,7 @@
             data-voided="{{ row.score_voided|yesno:'true,false' }}"
             data-retake-open="{{ row.retake_open|yesno:'true,false' }}"
             data-retake-active="{{ row.retake_active|yesno:'true,false' }}"
+            data-focus-locked="{{ row.focus_locked|yesno:'true,false' }}"
             data-action-url="{% url 'course_grades_attempt_action' course.id assessment.id row.attempt_id %}"
           >Action</button>
         </td>
@@ -260,7 +315,7 @@
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="{% if show_retake_column %}8{% else %}7{% endif %}">No student attempts yet.</td></tr>
+      <tr><td colspan="{% if show_retake_column and show_focus_lock_column %}9{% elif show_retake_column or show_focus_lock_column %}8{% else %}7{% endif %}">No student attempts yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -306,6 +361,12 @@
           <span>Close retake</span>
         </label>
       </div>
+      <div class="grades-action-option" data-action-option="unlock_focus">
+        <label class="grades-action-choice">
+          <input type="radio" name="student-action" value="unlock_focus" />
+          <span>Unlock focus-locked assessment</span>
+        </label>
+      </div>
       <div class="grades-action-option" data-action-option="adjust_score">
         <label class="grades-action-choice">
           <input type="radio" name="student-action" value="adjust_score" />
@@ -319,6 +380,12 @@
             <span class="grades-original-score" id="grades-action-original" hidden></span>
           </div>
         </div>
+      </div>
+      <div class="grades-action-option" data-action-option="regrade">
+        <label class="grades-action-choice">
+          <input type="radio" name="student-action" value="regrade" />
+          <span>Re-run automatic grading</span>
+        </label>
       </div>
       <div class="grades-action-option" data-action-option="void_score">
         <label class="grades-action-choice">
@@ -338,8 +405,148 @@
 
 {% block extra_js %}
 {{ block.super }}
+<script src="{% static 'assessment_tool/js/assessment_sync_decision.js' %}"></script>
 <script>
 (function () {
+  document.querySelectorAll('.focus-lock-history').forEach((trigger) => {
+    const popover = trigger.querySelector('.focus-lock-popover');
+    if (!popover) return;
+    function showLockHistory() {
+      document.body.appendChild(popover);
+      popover.classList.add('is-open');
+      const rect = trigger.getBoundingClientRect();
+      const popRect = popover.getBoundingClientRect();
+      let top = rect.top - popRect.height - 8;
+      if (top < 8) top = rect.bottom + 8;
+      let left = rect.left + rect.width / 2;
+      const half = popRect.width / 2;
+      left = Math.max(half + 8, Math.min(window.innerWidth - half - 8, left));
+      popover.style.top = `${top}px`;
+      popover.style.left = `${left}px`;
+    }
+    function hideLockHistory() {
+      popover.classList.remove('is-open');
+      popover.removeAttribute('style');
+      trigger.appendChild(popover);
+    }
+    trigger.addEventListener('mouseenter', showLockHistory);
+    trigger.addEventListener('mouseleave', hideLockHistory);
+    trigger.addEventListener('focus', showLockHistory);
+    trigger.addEventListener('blur', hideLockHistory);
+  });
+
+  const page = document.getElementById('grades-assessment-page');
+  const liveUnlockBox = document.getElementById('grades-live-unlock-box');
+  const liveUnlockList = document.getElementById('grades-live-unlock-list');
+  const assessmentId = page ? Number(page.getAttribute('data-assessment-id')) : null;
+
+  function appendLiveLockTimestamp(item) {
+    const cell = document.querySelector(
+      `[data-focus-lock-cell="${item.attempt_id}"]`
+    );
+    if (!cell) return;
+    document.querySelectorAll('[data-focus-lock-column]').forEach((el) => {
+      el.hidden = false;
+    });
+    const history = cell.querySelector('.focus-lock-history');
+    const popover = cell.querySelector('.focus-lock-popover');
+    const empty = cell.querySelector('[data-focus-lock-empty]');
+    if (!history || !popover) return;
+    const exists = Array.from(popover.querySelectorAll('time[datetime]')).some(
+      (time) => time.getAttribute('datetime') === item.locked_at
+    );
+    if (!exists) {
+      const time = document.createElement('time');
+      time.className = 'local-datetime';
+      time.setAttribute('datetime', item.locked_at);
+      time.textContent = item.locked_at;
+      popover.appendChild(time);
+      if (typeof window.MAPHydrateLocalDatetimes === 'function') {
+        window.MAPHydrateLocalDatetimes(popover);
+      }
+    }
+    const count = popover.querySelectorAll('time[datetime]').length;
+    const countEl = history.querySelector('.focus-lock-count');
+    if (countEl) countEl.textContent = String(count);
+    history.setAttribute('aria-label', `${count} focus lock${count === 1 ? '' : 's'}`);
+    history.hidden = false;
+    if (empty) empty.hidden = true;
+  }
+
+  function renderLiveUnlocks(allRows) {
+    const rows = (allRows || []).filter(
+      (item) => Number(item.assessment_id) === assessmentId
+    );
+    document.querySelectorAll('[data-student-action]').forEach((button) => {
+      button.setAttribute('data-focus-locked', 'false');
+    });
+    if (liveUnlockList) liveUnlockList.replaceChildren();
+    rows.forEach((item) => {
+      const actionButton = document.querySelector(
+        `[data-student-action][data-attempt-id="${item.attempt_id}"]`
+      );
+      if (actionButton) actionButton.setAttribute('data-focus-locked', 'true');
+      appendLiveLockTimestamp(item);
+
+      if (liveUnlockList) {
+        const li = document.createElement('li');
+        li.appendChild(document.createTextNode(
+          `${item.student_name} is waiting for ${item.assessment_name}. `
+        ));
+        const unlock = document.createElement('button');
+        unlock.type = 'button';
+        unlock.className = 'btn-student-action';
+        unlock.textContent = 'Unlock now';
+        unlock.addEventListener('click', async () => {
+          unlock.disabled = true;
+          try {
+            const response = await fetch(item.action_url, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+              },
+              body: JSON.stringify({ action: 'unlock_focus' }),
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+              throw new Error(data.error || 'Unlock failed.');
+            }
+            await pollLiveAttention();
+          } catch (err) {
+            window.alert(err.message || 'Unlock failed.');
+            unlock.disabled = false;
+          }
+        });
+        li.appendChild(unlock);
+        liveUnlockList.appendChild(li);
+      }
+    });
+    if (liveUnlockBox) liveUnlockBox.hidden = rows.length === 0;
+  }
+
+  async function pollLiveAttention() {
+    if (!page) return;
+    try {
+      const response = await fetch(page.getAttribute('data-live-attention-url'), {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        renderLiveUnlocks(data.focus_unlock_requests || []);
+      }
+    } catch (_) {
+      // Keep the last known state during transient network errors.
+    }
+  }
+
+  if (page) {
+    window.setInterval(pollLiveAttention, 2500);
+    pollLiveAttention();
+  }
+
   const table = document.getElementById('grades-assessment-roster');
   const header = document.getElementById('grades-student-header');
   if (table && header) {
@@ -409,6 +616,7 @@
       voided: btn.getAttribute('data-voided') === 'true',
       retakeOpen: btn.getAttribute('data-retake-open') === 'true',
       retakeActive: btn.getAttribute('data-retake-active') === 'true',
+      focusLocked: btn.getAttribute('data-focus-locked') === 'true',
       earned: btn.getAttribute('data-earned'),
       max: btn.getAttribute('data-max'),
       originalEarned: btn.getAttribute('data-original-earned'),
@@ -442,10 +650,12 @@
         disabled = pending.status !== 'submitted' || pending.retakeActive;
       } else if (input.value === 'close_retake') {
         disabled = !pending.retakeActive;
+      } else if (input.value === 'unlock_focus') {
+        disabled = !pending.focusLocked;
       } else if (pending.status !== 'submitted') {
-        // Adjust/void only apply to submitted attempt rows.
+        // Adjust/void/regrade only apply to submitted attempt rows.
         disabled = true;
-      } else if (pending.voided && input.value === 'adjust_score') {
+      } else if (pending.voided && (input.value === 'adjust_score' || input.value === 'regrade')) {
         disabled = true;
       }
       input.disabled = disabled;
@@ -495,16 +705,41 @@
     }
     statusEl.textContent = 'Saving…';
     try {
-      const res = await fetch(pending.url, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-CSRFToken': getCookie('csrftoken'),
-        },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
+      async function submitAction(synchronizationDecision) {
+        const requestBody = Object.assign({}, body);
+        if (synchronizationDecision) {
+          requestBody.synchronization_decision = synchronizationDecision;
+        }
+        const res = await fetch(pending.url, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken'),
+          },
+          body: JSON.stringify(requestBody),
+        });
+        return { res, data: await res.json() };
+      }
+
+      let result = await submitAction('');
+      if (
+        action === 'open_retake' &&
+        result.res.status === 409 &&
+        result.data.code === 'synchronization_decision_required'
+      ) {
+        const decision = await window.requestAssessmentSynchronizationDecision(
+          result.data
+        );
+        if (!decision) {
+          statusEl.textContent = result.data.settings_hint
+            || 'Retake was not opened. No changes were made.';
+          return;
+        }
+        result = await submitAction(decision);
+      }
+      const res = result.res;
+      const data = result.data;
       if (!res.ok || !data.success) {
         statusEl.textContent = data.error || 'Action failed.';
         return;
@@ -523,13 +758,17 @@
         '/question/0/',
         '/question/__SLOT__/'
       );
+    const questionReturnUrl =
+      "{% url 'course_grades_assessment' course.id assessment.id %}";
     loadBtn.addEventListener('click', () => {
       const slot = String(loadSelect.value || '').trim();
       if (!slot) {
         loadSelect.focus();
         return;
       }
-      window.location.href = questionUrlTemplate.replace('__SLOT__', encodeURIComponent(slot));
+      window.location.href =
+        questionUrlTemplate.replace('__SLOT__', encodeURIComponent(slot))
+        + '?next=' + encodeURIComponent(questionReturnUrl);
     });
   }
 })();

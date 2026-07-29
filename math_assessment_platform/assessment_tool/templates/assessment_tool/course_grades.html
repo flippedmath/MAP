@@ -11,6 +11,7 @@
   .grades-badge.ok { background: #dcfce7; color: #166534; }
   .grades-badge.muted { background: #f1f5f9; color: #475569; }
   a.grades-link { color: #2563eb; font-weight: 600; text-decoration: none; }
+  a.grades-link.manual-required { color: #dc2626; }
   a.grades-link:hover { text-decoration: underline; }
   .btn-release {
     background:#2563eb; color:#fff; border:none; border-radius:6px; padding:0.35rem 0.75rem;
@@ -83,6 +84,69 @@
   }
   .grades-metric-pct { color: #64748b; font-size: 0.85rem; min-width: 3.2rem; }
   .grades-points-total { font-weight: 600; font-size: 0.9rem; color: #334155; }
+  .gradebook-section { margin-top: 2rem; }
+  .gradebook-section h3 { margin-bottom: 0.25rem; }
+  /* Without this the wide tables stretch the flex pane past the viewport
+     instead of scrolling inside their own container. */
+  .course-content-pane { min-width: 0; }
+  .grades-overview-scroll,
+  .gradebook-scroll { overflow-x: auto; overflow-y: visible; }
+  .gradebook-scroll {
+    margin-top: 0.9rem; border: 1px solid #e2e8f0; border-radius: 8px;
+  }
+  #grades-overview-table { min-width: 100%; width: max-content; }
+  #grades-overview-table th:first-child,
+  #grades-overview-table tbody td:first-child:not([colspan]) {
+    position: sticky; left: 0; z-index: 2; background: #fff;
+    width: 170px; min-width: 170px; max-width: 170px;
+    border-right: 1px solid #e2e8f0;
+  }
+  #grades-overview-table th:first-child { z-index: 3; background: #f8fafc; }
+  #grades-overview-table tr:hover td:first-child { background: #f8fafc; }
+  .gradebook-table { min-width: 100%; width: max-content; }
+  .gradebook-table th { min-width: 145px; max-width: 210px; }
+  .gradebook-table td { white-space: nowrap; }
+  .gradebook-table .gradebook-student {
+    position: sticky; left: 0; z-index: 2; min-width: 190px; background: #fff;
+    border-right: 1px solid #e2e8f0;
+  }
+  .gradebook-table th.gradebook-student { z-index: 3; background: #f8fafc; }
+  .gradebook-table tr:hover td.gradebook-student { background: #f8fafc; }
+  .gradebook-table .gradebook-summary {
+    position: sticky; right: 0; z-index: 2; min-width: 145px;
+    background: #eff6ff; font-weight: 700;
+    border-left: 1px solid #e2e8f0;
+  }
+  .gradebook-table th.gradebook-summary { z-index: 3; }
+  .gradebook-table tr:hover td.gradebook-summary { background: #dbeafe; }
+  .gradebook-username { display:block; color:#64748b; font-size:0.78rem; font-weight:400; }
+  .gradebook-score-percent { color:#64748b; font-size:0.8rem; }
+  .gradebook-curve-bonus { color:#166534; font-size:0.72rem; font-weight:600; }
+  .gradebook-manual { color:#b91c1c; font-size:0.72rem; font-weight:700; }
+  .gradebook-excluded { color:#92400e; font-size:0.7rem; font-weight:600; }
+  .gradebook-average-row td {
+    background: #f8fafc; border-top: 2px solid #cbd5e1; font-weight: 700;
+  }
+  .gradebook-average-row td.gradebook-student { background: #f8fafc; }
+  .gradebook-average-row td.gradebook-summary { background: #dbeafe; }
+  .curve-tooltip-trigger {
+    border: 0; background: transparent; color: #64748b; cursor: help;
+    padding: 2px; margin-left: 3px; font-size: 0.78rem; line-height: 1;
+    vertical-align: middle;
+  }
+  .curve-tooltip-trigger:hover,
+  .curve-tooltip-trigger:focus { color: #2563eb; background: transparent; outline: none; }
+  .curve-tooltip-trigger:focus-visible {
+    outline: 2px solid #2563eb; outline-offset: 2px; border-radius: 3px;
+  }
+  .curve-tooltip-popover {
+    display: none; position: fixed; z-index: 3000; width: min(300px, calc(100vw - 24px));
+    padding: 10px 12px; border-radius: 7px; background: #0f172a; color: #fff;
+    font-size: 0.82rem; font-weight: 500; line-height: 1.4; text-transform: none;
+    letter-spacing: normal; box-shadow: 0 8px 24px rgba(15,23,42,0.28);
+    pointer-events: none;
+  }
+  .curve-tooltip-popover.is-visible { display: block; }
 </style>
 {% endblock %}
 
@@ -119,7 +183,7 @@
   </button>
 </div>
 
-<div class="table-responsive-wrapper">
+<div class="table-responsive-wrapper grades-overview-scroll" tabindex="0" aria-label="Assessment settings and averages table">
   <table class="dashboard-data-table" id="grades-overview-table"
     data-course-id="{{ course.id }}">
     <thead>
@@ -127,10 +191,24 @@
         <th>Assessment</th>
         <th>Status</th>
         <th>Submitted</th>
+        <th>Average Score</th>
         {% if show_manual_pending_column %}<th>Manual pending</th>{% endif %}
         {% if show_weight_column %}<th>Weight</th>{% endif %}
         {% if show_points_column %}<th>Points</th>{% endif %}
-        {% if show_curve_column %}<th>Curve Test</th>{% endif %}
+        {% if show_curve_column %}
+        <th>
+          Curve Test
+          <button
+            type="button"
+            class="curve-tooltip-trigger"
+            id="curve-tooltip-trigger"
+            aria-label="Explain curve test bonus points"
+            aria-describedby="curve-tooltip-popover"
+            aria-expanded="false"
+          ><i class="fas fa-info-circle" aria-hidden="true"></i></button>
+        </th>
+        {% endif %}
+        {% if show_release_column %}<th>Release grades</th>{% endif %}
         <th>Student visibility</th>
         <th>Settings</th>
         <th></th>
@@ -142,6 +220,17 @@
         <td>{{ row.name }}</td>
         <td>{{ row.status|default:"—" }}</td>
         <td>{{ row.submitted_count }} / {{ row.attempt_count }}</td>
+        <td>
+          {% if row.average_score_percent is not None %}
+            <a
+              class="grades-link"
+              data-assessment-average="{{ row.assessment_id }}"
+              href="{% url 'course_grades_assessment_performance' course.id row.assessment_id %}?next={{ request.get_full_path|urlencode }}"
+            >{{ row.average_score_percent|floatformat:1 }}%</a>
+          {% else %}
+            —
+          {% endif %}
+        </td>
         {% if show_manual_pending_column %}
         <td>
           {% if row.unfinished_manual_count %}
@@ -183,15 +272,30 @@
               type="number"
               class="grades-curve-input"
               min="0"
-              max="{{ row.curve_live_total }}"
+              max="{{ row.assessment_total_points }}"
               step="any"
-              value="{{ row.curve_max_points }}"
+              value="{{ row.curve_bonus_points }}"
               data-curve-url="{% url 'course_grades_assessment_curve' course.id row.assessment_id %}"
-              data-curve-max="{{ row.curve_live_total }}"
-              aria-label="Curve for {{ row.name }}"
+              data-assessment-id="{{ row.assessment_id }}"
+              data-curve-max="{{ row.assessment_total_points }}"
+              aria-label="Bonus points for {{ row.name }}"
             />
-            <span class="grades-metric-pct">/ {{ row.curve_live_total }}</span>
+            <span class="grades-metric-pct">points</span>
           </div>
+          {% else %}
+            <span class="grades-badge muted">—</span>
+          {% endif %}
+        </td>
+        {% endif %}
+        {% if show_release_column %}
+        <td>
+          {% if row.needs_teacher_release %}
+            <button
+              type="button"
+              class="btn-visibility grades-release-btn"
+              data-release-url="{% url 'course_grades_assessment_release' course.id row.assessment_id %}"
+              data-assessment-id="{{ row.assessment_id }}"
+            >Release grades</button>
           {% else %}
             <span class="grades-badge muted">—</span>
           {% endif %}
@@ -202,6 +306,9 @@
             <span class="grades-badge ok">Student Answers Review Enabled</span>
           {% else %}
             <span class="grades-badge ok">Scores Only</span>
+          {% endif %}
+          {% if row.teacher_release_required and not row.scores_released %}
+            <span class="grades-badge warn">Unreleased</span>
           {% endif %}
           {% if not row.counts_toward_grade %}
             <span class="grades-badge warn" title="Excluded from course totals">Not counted</span>
@@ -220,7 +327,10 @@
           >Change…</button>
         </td>
         <td style="white-space:nowrap;">
-          <a class="grades-link" href="{% url 'course_grades_assessment' course.id row.assessment_id %}">Open</a>
+          <a
+            class="grades-link{% if row.unfinished_manual_count %} manual-required{% endif %}"
+            href="{% url 'course_grades_assessment' course.id row.assessment_id %}"
+          >View Student Assessments</a>
         </td>
       </tr>
       {% empty %}
@@ -229,6 +339,99 @@
     </tbody>
   </table>
 </div>
+<div class="curve-tooltip-popover" id="curve-tooltip-popover" role="tooltip">
+  Enter bonus points to add to every student's recorded score for this assessment.
+  The bonus value itself cannot exceed the assessment's maximum points, but a
+  student's resulting score may exceed the maximum and be greater than 100%.
+</div>
+
+<section class="gradebook-section" aria-labelledby="gradebook-title">
+  <h3 id="gradebook-title">All Student Grades</h3>
+  <p class="subtitle">
+    Each assessment uses the attempt that currently counts toward the student's grade.
+    Voided attempts are excluded.
+  </p>
+  <div class="gradebook-scroll" tabindex="0" aria-label="All student grades table">
+    <table class="dashboard-data-table gradebook-table">
+      <thead>
+        <tr data-gradebook-student-id="{{ student.student_id }}">
+          <th class="gradebook-student">Student</th>
+          {% for assessment in gradebook.assessments %}
+          <th>
+            {{ assessment.name }}
+            {% if not assessment.counts_toward_grade %}
+              <span class="gradebook-excluded">Not counted</span>
+            {% endif %}
+          </th>
+          {% endfor %}
+          <th class="gradebook-summary">Current Grade</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for student in gradebook.students %}
+        <tr>
+          <td class="gradebook-student">
+            <strong>{{ student.formal_name }}</strong>
+            <span class="gradebook-username">{{ student.username }}</span>
+          </td>
+          {% for score in student.scores %}
+          <td
+            data-gradebook-assessment-id="{{ score.assessment_id }}"
+            data-gradebook-student-id="{{ student.student_id }}"
+          >
+            {% if score.earned_points is not None and score.max_points is not None %}
+              {{ score.earned_points|floatformat:2 }} / {{ score.max_points|floatformat:2 }}
+              {% if score.percent is not None %}
+                <span class="gradebook-score-percent">= {{ score.percent|floatformat:1 }}%</span>
+              {% endif %}
+              {% if score.curve_bonus_points %}
+                <span class="gradebook-curve-bonus">(+{{ score.curve_bonus_points|floatformat:2 }} curve)</span>
+              {% endif %}
+              {% if score.manual_pending %}
+                <span class="gradebook-manual">Manual grading</span>
+              {% endif %}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          {% endfor %}
+          <td class="gradebook-summary" data-gradebook-total="{{ student.student_id }}">
+            {% if student.total.aggregation_mode == 'sum_points' and student.total.earned_sum is not None %}
+              {{ student.total.earned_sum|floatformat:2 }} / {{ student.total.max_sum|floatformat:2 }}
+              {% if student.total.percent is not None %}
+                <span class="gradebook-score-percent">= {{ student.total.percent|floatformat:1 }}%</span>
+              {% endif %}
+            {% elif student.total.percent is not None %}
+              {{ student.total.percent|floatformat:1 }}%
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="999">No students are currently enrolled in this course.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="gradebook-average-row">
+          <td class="gradebook-student">Class Average</td>
+          {% for assessment in gradebook.assessments %}
+          <td aria-hidden="true"></td>
+          {% endfor %}
+          <td class="gradebook-summary" data-gradebook-class-average>
+            {% if gradebook.class_average_percent is not None %}
+              {{ gradebook.class_average_percent|floatformat:1 }}%
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
 {% endblock %}
 
 {% block extra_js %}
@@ -252,6 +455,64 @@
     });
     const data = await res.json();
     return { res, data };
+  }
+
+  const curveTooltipTrigger = document.getElementById('curve-tooltip-trigger');
+  const curveTooltip = document.getElementById('curve-tooltip-popover');
+  if (curveTooltipTrigger && curveTooltip) {
+    let tooltipPinned = false;
+
+    function positionCurveTooltip() {
+      if (!curveTooltip.classList.contains('is-visible')) return;
+      const triggerRect = curveTooltipTrigger.getBoundingClientRect();
+      const tipRect = curveTooltip.getBoundingClientRect();
+      const left = Math.max(
+        8,
+        Math.min(
+          window.innerWidth - tipRect.width - 8,
+          triggerRect.left + (triggerRect.width / 2) - (tipRect.width / 2)
+        )
+      );
+      let top = triggerRect.bottom + 8;
+      if (top + tipRect.height > window.innerHeight - 8) {
+        top = Math.max(8, triggerRect.top - tipRect.height - 8);
+      }
+      curveTooltip.style.left = left + 'px';
+      curveTooltip.style.top = top + 'px';
+    }
+
+    function showCurveTooltip() {
+      curveTooltip.classList.add('is-visible');
+      curveTooltipTrigger.setAttribute('aria-expanded', 'true');
+      positionCurveTooltip();
+    }
+
+    function hideCurveTooltip() {
+      tooltipPinned = false;
+      curveTooltip.classList.remove('is-visible');
+      curveTooltipTrigger.setAttribute('aria-expanded', 'false');
+    }
+
+    curveTooltipTrigger.addEventListener('mouseenter', showCurveTooltip);
+    curveTooltipTrigger.addEventListener('mouseleave', () => {
+      if (!tooltipPinned) hideCurveTooltip();
+    });
+    curveTooltipTrigger.addEventListener('focus', showCurveTooltip);
+    curveTooltipTrigger.addEventListener('blur', () => {
+      if (!tooltipPinned) hideCurveTooltip();
+    });
+    curveTooltipTrigger.addEventListener('click', (event) => {
+      event.stopPropagation();
+      tooltipPinned = !tooltipPinned;
+      if (tooltipPinned) showCurveTooltip();
+      else hideCurveTooltip();
+    });
+    document.addEventListener('click', hideCurveTooltip);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') hideCurveTooltip();
+    });
+    window.addEventListener('resize', positionCurveTooltip);
+    window.addEventListener('scroll', positionCurveTooltip, true);
   }
 
   function refreshWeightPercents() {
@@ -285,19 +546,127 @@
     });
   });
 
+  function fixed(value, places) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n.toFixed(places) : '—';
+  }
+
+  function scoreCellHtml(score) {
+    if (!score || score.earned_points == null || score.max_points == null) return '—';
+    let html =
+      fixed(score.earned_points, 2) + ' / ' + fixed(score.max_points, 2);
+    if (score.percent != null) {
+      html += ' <span class="gradebook-score-percent">= ' + fixed(score.percent, 1) + '%</span>';
+    }
+    if (Number(score.curve_bonus_points) > 0) {
+      html += ' <span class="gradebook-curve-bonus">(+' + fixed(score.curve_bonus_points, 2) + ' curve)</span>';
+    }
+    if (score.manual_pending) {
+      html += ' <span class="gradebook-manual">Manual grading</span>';
+    }
+    return html;
+  }
+
+  function totalCellHtml(total) {
+    if (!total || total.percent == null) return '—';
+    if (total.aggregation_mode === 'sum_points' && total.earned_sum != null) {
+      return (
+        fixed(total.earned_sum, 2) + ' / ' + fixed(total.max_sum, 2)
+        + ' <span class="gradebook-score-percent">= ' + fixed(total.percent, 1) + '%</span>'
+      );
+    }
+    return fixed(total.percent, 1) + '%';
+  }
+
+  function applyCurveResults(data, assessmentId) {
+    const overview = data.overview_row || {};
+    const averageLink = document.querySelector(
+      '[data-assessment-average="' + String(assessmentId) + '"]'
+    );
+    if (averageLink && overview.average_score_percent != null) {
+      averageLink.textContent = fixed(overview.average_score_percent, 1) + '%';
+    }
+
+    const gradebook = data.gradebook || {};
+    (gradebook.students || []).forEach((student) => {
+      const score = (student.scores || []).find(
+        (item) => String(item.assessment_id) === String(assessmentId)
+      );
+      const scoreCell = document.querySelector(
+        '[data-gradebook-assessment-id="' + String(assessmentId) + '"]'
+        + '[data-gradebook-student-id="' + String(student.student_id) + '"]'
+      );
+      if (scoreCell) scoreCell.innerHTML = scoreCellHtml(score);
+
+      const totalCell = document.querySelector(
+        '[data-gradebook-total="' + String(student.student_id) + '"]'
+      );
+      if (totalCell) totalCell.innerHTML = totalCellHtml(student.total);
+    });
+
+    const classAverage = document.querySelector('[data-gradebook-class-average]');
+    if (classAverage) {
+      classAverage.textContent =
+        gradebook.class_average_percent == null
+          ? '—'
+          : fixed(gradebook.class_average_percent, 1) + '%';
+    }
+  }
+
   document.querySelectorAll('.grades-curve-input').forEach((input) => {
+    input.dataset.lastValue = input.value;
     input.addEventListener('change', async () => {
       const url = input.getAttribute('data-curve-url');
       if (!url) return;
-      const max = Number(input.getAttribute('data-curve-max'));
-      let val = Number(input.value);
-      if (Number.isFinite(max) && max >= 0 && val > max) {
-        val = max;
-        input.value = String(max);
+      const val = Number(input.value);
+      if (!Number.isFinite(val) || val < 0) {
+        window.alert('Curve bonus must be 0 or greater.');
+        input.value = input.dataset.lastValue || '0';
+        return;
       }
-      const { data } = await postJson(url, { curve_max_points: val });
-      if (!data.success) {
-        window.alert(data.error || 'Could not save curve.');
+      const maxBonus = Number(input.getAttribute('data-curve-max'));
+      if (Number.isFinite(maxBonus) && val > maxBonus) {
+        window.alert('Curve bonus cannot exceed the assessment maximum (' + maxBonus + ' points).');
+        input.value = input.dataset.lastValue || '0';
+        return;
+      }
+      input.disabled = true;
+      try {
+        const { data } = await postJson(url, { curve_bonus_points: val });
+        if (!data.success) {
+          window.alert(data.error || 'Could not save curve.');
+          input.value = input.dataset.lastValue || '0';
+          return;
+        }
+        input.value = String(data.curve_bonus_points);
+        input.dataset.lastValue = input.value;
+        applyCurveResults(data, input.getAttribute('data-assessment-id'));
+      } catch (err) {
+        window.alert(err.message || 'Could not save curve.');
+        input.value = input.dataset.lastValue || '0';
+      } finally {
+        input.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll('.grades-release-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const url = btn.getAttribute('data-release-url');
+      if (!url) return;
+      if (!window.confirm('Release grades for this assessment to students?')) return;
+      btn.disabled = true;
+      try {
+        const { data } = await postJson(url, {});
+        if (!data.success) {
+          window.alert(data.error || 'Could not release grades.');
+          btn.disabled = false;
+          return;
+        }
+        window.location.reload();
+      } catch (err) {
+        window.alert(err.message || 'Could not release grades.');
+        btn.disabled = false;
       }
     });
   });

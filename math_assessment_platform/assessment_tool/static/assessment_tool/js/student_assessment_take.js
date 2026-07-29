@@ -75,10 +75,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const closeTimerValueEl = closeTimerEl
     ? closeTimerEl.querySelector('[data-role="close-timer-value"]')
     : null;
+  const focusLockOverlay = document.getElementById('student-focus-lock-overlay');
+  const focusLockSubmitBtn = document.getElementById('student-focus-lock-submit');
+  const focusLockStatusEl = document.getElementById('student-focus-lock-status');
+  const saveStatusEl = document.getElementById('student-take-save-status');
 
   let problems = [];
   let autosaveTimer = null;
   let saving = false;
+  let autosaveRetryTimer = null;
+  let autosaveFailCount = 0;
   let closedHandling = false;
   let sessionEnded = false;
   let previewApi = null;
@@ -87,12 +93,95 @@ document.addEventListener('DOMContentLoaded', () => {
   let countUpTimer = null;
   let countUpBaseElapsedMs = 0;
   let countUpAnchorMs = null;
-  let windowEndsAtMs = null;
+  let forceSubmitAtMs = null;
+  let countdownEndsAtMs = null;
+  let showCountdownTimer = false;
+  let forceSubmitReason = null;
   let closeCountdownTimer = null;
-  const WINDOW_CLOSE_WARN_SECONDS = 120;
+  let focusLockEnabled = false;
+  let focusLocked = false;
+  let focusLockRequestPending = false;
+  let focusLeaveTimer = null;
+  let internalNavigationPending = false;
+  let focusTrapHandler = null;
+  const focusClientActive = true;
 
   function setStatus(msg) {
     if (statusEl) statusEl.textContent = msg || '';
+  }
+
+  function setSaveStatus(msg, kind) {
+    if (!saveStatusEl) return;
+    saveStatusEl.textContent = msg || '';
+    saveStatusEl.classList.remove('is-saving', 'is-saved', 'is-error');
+    if (kind) saveStatusEl.classList.add(kind);
+  }
+
+  function setFocusLockStatus(msg) {
+    if (focusLockStatusEl) focusLockStatusEl.textContent = msg || '';
+  }
+
+  function trapFocusInOverlay() {
+    if (!focusLockOverlay) return;
+    const focusable = focusLockOverlay.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const list = Array.from(focusable).filter((el) => !el.disabled);
+    if (!list.length) return;
+    const first = list[0];
+    const last = list[list.length - 1];
+    first.focus();
+    if (focusTrapHandler) {
+      focusLockOverlay.removeEventListener('keydown', focusTrapHandler);
+    }
+    focusTrapHandler = (event) => {
+      if (event.key !== 'Tab' || list.length === 0) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    focusLockOverlay.addEventListener('keydown', focusTrapHandler);
+  }
+
+  function showFocusLockOverlay() {
+    focusLocked = true;
+    if (problemsEl) problemsEl.inert = true;
+    if (submitBtn) submitBtn.disabled = true;
+    if (focusLockOverlay) {
+      focusLockOverlay.classList.add('is-visible');
+      focusLockOverlay.setAttribute('aria-hidden', 'false');
+      trapFocusInOverlay();
+    }
+    setFocusLockStatus('Awaiting your teacher’s release.');
+  }
+
+  function hideFocusLockOverlay() {
+    focusLocked = false;
+    if (problemsEl) problemsEl.inert = false;
+    if (focusLockOverlay) {
+      focusLockOverlay.classList.remove('is-visible');
+      focusLockOverlay.setAttribute('aria-hidden', 'true');
+      if (focusTrapHandler) {
+        focusLockOverlay.removeEventListener('keydown', focusTrapHandler);
+        focusTrapHandler = null;
+      }
+    }
+    if (submitBtn && problems.length && !sessionEnded) submitBtn.disabled = false;
+    setFocusLockStatus('');
+  }
+
+  function applyFocusLockState(data) {
+    focusLockEnabled = data?.focus_lock_enabled === true;
+    if (data?.focus_locked === true) {
+      showFocusLockOverlay();
+    } else if (focusLocked) {
+      hideFocusLockOverlay();
+      setStatus('Your teacher unlocked the assessment. You may continue.');
+    }
   }
 
   function formatElapsed(ms) {
@@ -148,37 +237,59 @@ document.addEventListener('DOMContentLoaded', () => {
     return null;
   }
 
-  function tickCloseCountdown(api) {
-    if (sessionEnded || windowEndsAtMs == null || !closeTimerValueEl) return;
-    const remainingMs = windowEndsAtMs - Date.now();
-    const remainingSec = Math.ceil(remainingMs / 1000);
-    if (remainingSec <= 0) {
-      stopCloseCountdown();
-      handleForcedClose(api);
-      return;
+  function formatCountdown(remainingSec) {
+    if (remainingSec >= 60) {
+      const minutes = Math.floor(remainingSec / 60);
+      return `${minutes} min`;
     }
-    if (remainingSec <= WINDOW_CLOSE_WARN_SECONDS) {
-      if (closeTimerEl) {
-        closeTimerEl.hidden = false;
-        closeTimerEl.classList.add('is-visible');
-      }
-      closeTimerValueEl.textContent = formatElapsed(remainingSec * 1000);
-    } else if (closeTimerEl) {
-      closeTimerEl.hidden = true;
-      closeTimerEl.classList.remove('is-visible');
-    }
+    return `${Math.max(0, remainingSec)} sec`;
   }
 
-  function syncWindowCloseCountdown(api, windowEndsAt, remainingSeconds) {
-    const endMs = parseWindowEndMs(windowEndsAt, remainingSeconds);
-    if (endMs == null) {
-      windowEndsAtMs = null;
+  function tickCloseCountdown(api) {
+    if (sessionEnded) return;
+    const nowMs = Date.now();
+    if (forceSubmitAtMs != null && forceSubmitAtMs - nowMs <= 0) {
+      stopCloseCountdown();
+      handleForcedClose(api, { reason: forceSubmitReason });
+      return;
+    }
+
+    if (!showCountdownTimer || countdownEndsAtMs == null || !closeTimerValueEl) {
+      if (closeTimerEl) {
+        closeTimerEl.hidden = true;
+        closeTimerEl.classList.remove('is-visible');
+      }
+      return;
+    }
+
+    const remainingSec = Math.max(0, Math.ceil((countdownEndsAtMs - nowMs) / 1000));
+    if (closeTimerEl) {
+      closeTimerEl.hidden = false;
+      closeTimerEl.classList.add('is-visible');
+    }
+    closeTimerValueEl.textContent = formatCountdown(remainingSec);
+  }
+
+  function syncWindowCloseCountdown(api, data) {
+    const nextForceSubmitAt = parseWindowEndMs(
+      data?.force_submit_at,
+      data?.force_submit_remaining_seconds
+    );
+    const nextCountdownEnd = parseWindowEndMs(
+      data?.countdown_ends_at,
+      data?.countdown_remaining_seconds
+    );
+    forceSubmitAtMs = nextForceSubmitAt;
+    countdownEndsAtMs = nextCountdownEnd;
+    showCountdownTimer = data?.show_countdown_timer === true;
+    forceSubmitReason = data?.force_submit_reason || null;
+
+    if (forceSubmitAtMs == null && countdownEndsAtMs == null) {
       stopCloseCountdown();
       return;
     }
-    windowEndsAtMs = endMs;
     tickCloseCountdown(api);
-    if (!closeCountdownTimer) {
+    if (!closeCountdownTimer && !sessionEnded) {
       closeCountdownTimer = window.setInterval(() => tickCloseCountdown(api), 250);
     }
   }
@@ -212,6 +323,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function collectPayload(api) {
     const cards = Array.from(problemsEl.querySelectorAll('.practice-problem-card'));
     return {
+      focus_client_active: focusClientActive,
       problems: cards.map((card, idx) => {
         const problem = problems[idx] || {};
         const previewRoot = card.querySelector('[data-role="preview"]');
@@ -254,8 +366,9 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function autosave(api) {
-    if (sessionEnded || saving || !cfg.autosaveUrl || !api) return null;
+    if (sessionEnded || focusLocked || saving || !cfg.autosaveUrl || !api) return null;
     saving = true;
+    setSaveStatus('Saving…', 'is-saving');
     try {
       const res = await fetch(cfg.autosaveUrl, {
         method: 'POST',
@@ -271,6 +384,9 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (_) {
         data = {};
       }
+      if (!res.ok && data.code !== 'focus_locked' && data.code !== 'assessment_closed') {
+        throw new Error(data.error || `Autosave failed (${res.status}).`);
+      }
       // Do not key off bare `closed` — class assessments stay closed during retakes.
       // Only end the session when the server says this take was finalized / forbidden.
       if (
@@ -279,11 +395,26 @@ document.addEventListener('DOMContentLoaded', () => {
         || data.submitted === true
         || data.taking_allowed === false
       ) {
-        await handleForcedClose(api, { alreadyFinalized: true });
+        await handleForcedClose(api, {
+          alreadyFinalized: true,
+          reason: data.force_submit_reason || forceSubmitReason,
+        });
+      } else if (data.code === 'focus_locked' || data.focus_locked === true) {
+        showFocusLockOverlay();
       }
+      autosaveFailCount = 0;
+      setSaveStatus('Saved', 'is-saved');
       return data;
     } catch (err) {
       console.warn('autosave failed', err);
+      autosaveFailCount += 1;
+      setSaveStatus(
+        'Not saved — retrying… Tap Submit only after “Saved” appears.',
+        'is-error'
+      );
+      clearTimeout(autosaveRetryTimer);
+      const delay = Math.min(8000, 1000 * autosaveFailCount);
+      autosaveRetryTimer = setTimeout(() => autosave(api), delay);
       return null;
     } finally {
       saving = false;
@@ -291,7 +422,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function scheduleAutosave(api) {
-    if (sessionEnded) return;
+    if (sessionEnded || focusLocked) return;
     clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => autosave(api), 1200);
   }
@@ -300,30 +431,45 @@ document.addEventListener('DOMContentLoaded', () => {
     if (closedHandling || sessionEnded) return;
     closedHandling = true;
     sessionEnded = true;
+    const answerSnapshot = api ? collectPayload(api) : null;
     clearTimeout(autosaveTimer);
     if (statusPollTimer) clearInterval(statusPollTimer);
     if (backupAutosaveTimer) clearInterval(backupAutosaveTimer);
     stopCountUpTimer();
     stopCloseCountdown();
     disableEditing();
-    setStatus('Assessment closed — submitting your answers…');
+    const closeMessage =
+      opts.reason === 'time_limit'
+        ? 'Your time limit has ended.'
+        : 'The assessment window has ended.';
+    setStatus(`${closeMessage} Submitting your answers…`);
 
     if (!opts.alreadyFinalized && api && cfg.submitUrl) {
       try {
-        await fetch(cfg.submitUrl, {
+        const forcedPayload = answerSnapshot || { problems: [] };
+        forcedPayload.force_submit = true;
+        const response = await fetch(cfg.submitUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-CSRFToken': getCookie('csrftoken'),
           },
-          body: JSON.stringify(collectPayload(api)),
+          body: JSON.stringify(forcedPayload),
         });
+        if (!response.ok) {
+          throw new Error(`Forced submission failed (${response.status}).`);
+        }
       } catch (err) {
         console.warn('forced submit failed', err);
+        sessionEnded = false;
+        closedHandling = false;
+        setStatus('Your time ended, but submission failed. Keep this page open while it retries.');
+        window.setTimeout(() => handleForcedClose(api, opts), 1500);
+        return;
       }
     }
 
-    showClosedResult('This assessment has been closed by your teacher.');
+    showClosedResult(closeMessage);
     redirectToAssessmentsSoon();
   }
 
@@ -336,7 +482,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await res.json();
       if (!res.ok || !data.success) return;
-      syncWindowCloseCountdown(api, data.window_ends_at, data.remaining_seconds);
+      applyFocusLockState(data);
       // End only when THIS student may no longer continue. Class `closed` alone
       // must not kill an authorized per-student retake.
       const shouldForceClose =
@@ -346,11 +492,77 @@ document.addEventListener('DOMContentLoaded', () => {
       if (shouldForceClose) {
         await handleForcedClose(api, {
           alreadyFinalized: data.submitted === true,
+          reason: data.force_submit_reason,
         });
+        return;
       }
+      syncWindowCloseCountdown(api, data);
     } catch (err) {
       console.warn('take status poll failed', err);
     }
+  }
+
+  async function requestFocusLock(api) {
+    if (
+      !focusLockEnabled
+      || focusLocked
+      || focusLockRequestPending
+      || sessionEnded
+      || !cfg.focusLockUrl
+      || !api
+    ) {
+      return;
+    }
+    focusLockRequestPending = true;
+    try {
+      const res = await fetch(cfg.focusLockUrl, {
+        method: 'POST',
+        credentials: 'same-origin',
+        keepalive: true,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': getCookie('csrftoken'),
+        },
+        body: JSON.stringify(collectPayload(api)),
+      });
+      const data = await res.json();
+      if (res.ok && data.focus_locked === true) {
+        showFocusLockOverlay();
+      }
+    } catch (err) {
+      console.warn('focus lock request failed', err);
+    } finally {
+      focusLockRequestPending = false;
+    }
+  }
+
+  function showSubmittedResult(submitData) {
+    sessionEnded = true;
+    hideFocusLockOverlay();
+    if (statusPollTimer) clearInterval(statusPollTimer);
+    if (backupAutosaveTimer) clearInterval(backupAutosaveTimer);
+    stopCountUpTimer();
+    stopCloseCountdown();
+    problemsEl.style.display = 'none';
+    const footer = document.querySelector('.student-take-footer');
+    if (footer) footer.style.display = 'none';
+    if (resultSection) resultSection.hidden = false;
+    if (resultBody) {
+      if (submitData.scores_visible) {
+        const earned = submitData.earned_total ?? '—';
+        const max = submitData.max_total ?? '—';
+        const extra = submitData.requires_manual_grading
+          ? '<p style="margin-top:8px;color:#b45309;">Some answers need teacher review before your final score is complete.</p>'
+          : '';
+        resultBody.innerHTML =
+          `<strong>Score: ${escapeHtml(earned)} / ${escapeHtml(max)}</strong>${extra}`;
+      } else {
+        resultBody.innerHTML =
+          '<p>Your assessment was submitted successfully.</p>' +
+          '<p style="margin-top:8px;color:#64748b;">Your score will be available after your teacher finishes grading and releases scores.</p>';
+      }
+    }
+    setStatus('Submitted.');
   }
 
   async function loadAndRender() {
@@ -389,7 +601,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const api = await waitForPreviewApi();
       previewApi = api;
-      syncWindowCloseCountdown(api, data.window_ends_at, data.remaining_seconds);
+      syncWindowCloseCountdown(api, data);
+      if (sessionEnded) return;
       problemsEl.innerHTML = '';
       problems.forEach((problem, idx) => {
         const slot = problem.slot_index || idx + 1;
@@ -437,6 +650,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       setStatus(`${problems.length} question${problems.length === 1 ? '' : 's'} ready.`);
       if (submitBtn) submitBtn.disabled = false;
+      applyFocusLockState(data);
 
       backupAutosaveTimer = setInterval(() => autosave(api), 20000);
       statusPollTimer = setInterval(() => pollTakeStatus(api), 3000);
@@ -466,35 +680,97 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!submitRes.ok || !submitData.success) {
               throw new Error(submitData.error || 'Submit failed.');
             }
-            sessionEnded = true;
-            if (statusPollTimer) clearInterval(statusPollTimer);
-            if (backupAutosaveTimer) clearInterval(backupAutosaveTimer);
-            stopCountUpTimer();
-            problemsEl.style.display = 'none';
-            const footer = document.querySelector('.student-take-footer');
-            if (footer) footer.style.display = 'none';
-            if (resultSection) resultSection.hidden = false;
-            if (resultBody) {
-              if (submitData.scores_visible) {
-                const earned = submitData.earned_total ?? '—';
-                const max = submitData.max_total ?? '—';
-                let extra = '';
-                if (submitData.requires_manual_grading) {
-                  extra =
-                    '<p style="margin-top:8px;color:#b45309;">Some answers need teacher review before your final score is complete.</p>';
-                }
-                resultBody.innerHTML = `<strong>Score: ${escapeHtml(earned)} / ${escapeHtml(max)}</strong>${extra}`;
-              } else {
-                resultBody.innerHTML =
-                  '<p>Your assessment was submitted successfully.</p>' +
-                  '<p style="margin-top:8px;color:#64748b;">Your score will be available after your teacher finishes grading and releases scores.</p>';
-              }
-            }
-            setStatus('Submitted.');
+            showSubmittedResult(submitData);
           } catch (err) {
             console.error(err);
             setStatus(err.message || 'Submit failed.');
             submitBtn.disabled = false;
+          }
+        });
+      }
+
+      document.addEventListener('click', (event) => {
+        const link = event.target.closest('a[href]');
+        if (!link) return;
+        try {
+          const target = new URL(link.href, window.location.href);
+          if (target.origin === window.location.origin) {
+            internalNavigationPending = true;
+          }
+        } catch (_) {
+          // Ignore malformed/non-navigation hrefs.
+        }
+      }, true);
+
+      document.addEventListener('submit', (event) => {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        let target;
+        try {
+          target = new URL(form.action || window.location.href, window.location.href);
+        } catch (_) {
+          return;
+        }
+        if (target.origin !== window.location.origin) return;
+        const isLogout = form.classList.contains('nav-account-logout-form');
+        if (!isLogout) {
+          internalNavigationPending = true;
+          return;
+        }
+        if (!focusLockEnabled || focusLocked || sessionEnded) return;
+        event.preventDefault();
+        requestFocusLock(api).finally(() => {
+          form.submit();
+        });
+      }, true);
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          clearTimeout(focusLeaveTimer);
+          internalNavigationPending = false;
+          return;
+        }
+        if (internalNavigationPending) return;
+        clearTimeout(focusLeaveTimer);
+        focusLeaveTimer = window.setTimeout(() => requestFocusLock(api), 300);
+      });
+
+      window.addEventListener('assessment:focus-leave', () => {
+        if (!internalNavigationPending) requestFocusLock(api);
+      });
+
+      window.addEventListener('pagehide', () => {
+        if (!internalNavigationPending) requestFocusLock(api);
+      });
+
+      if (focusLockSubmitBtn) {
+        focusLockSubmitBtn.addEventListener('click', async () => {
+          if (!focusLocked || !cfg.submitLockedUrl || sessionEnded) return;
+          if (!window.confirm(
+            'Submit your currently saved answers? The assessment cannot be reopened after submission.'
+          )) {
+            return;
+          }
+          focusLockSubmitBtn.disabled = true;
+          setFocusLockStatus('Submitting your saved answers…');
+          try {
+            const res = await fetch(cfg.submitLockedUrl, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+              },
+              body: '{}',
+            });
+            const submitData = await res.json();
+            if (!res.ok || !submitData.success) {
+              throw new Error(submitData.error || 'Submission failed.');
+            }
+            showSubmittedResult(submitData);
+          } catch (err) {
+            setFocusLockStatus(err.message || 'Submission failed.');
+            focusLockSubmitBtn.disabled = false;
           }
         });
       }

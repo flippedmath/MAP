@@ -50,7 +50,13 @@ def clear_student_open_retake(assessment, student) -> None:
     set_student_open_retake(assessment, student, open_flag=False)
 
 
-def open_test_for_retake(assessment, student) -> dict:
+def open_test_for_retake(
+    assessment,
+    student,
+    *,
+    synchronization_decision: str = "",
+    created_by=None,
+) -> dict:
     """
     Teacher opens a one-shot retake window for this student.
     No student request is required — this only arms the override so the
@@ -88,6 +94,17 @@ def open_test_for_retake(assessment, student) -> dict:
             "success": False,
             "error": "Student already has an open attempt in progress.",
         }
+
+    from .assessment_sync import synchronization_preflight
+
+    sync_result = synchronization_preflight(
+        template,
+        student_attempts.count() + 1,
+        decision=synchronization_decision,
+        created_by=created_by,
+    )
+    if not sync_result.get("ready"):
+        return sync_result
 
     set_student_open_retake(template, student, open_flag=True)
     return {
@@ -185,6 +202,36 @@ def adjust_attempt_score(attempt, *, earned_points, max_points) -> dict:
         attempt.original_earned_points = float(attempt.earned_points)
     if attempt.original_max_points is None and attempt.max_points is not None:
         attempt.original_max_points = float(attempt.max_points)
+
+    old_earned = float(attempt.earned_points or 0)
+    old_max = float(attempt.max_points or 0)
+    problems = list(
+        m.StudentAssessmentProblem.objects.filter(attempt=attempt)
+        .select_for_update()
+        .order_by("slot_index", "id")
+    )
+    # Keep question-performance reports aligned with the adjusted attempt totals
+    # by scaling problem scores proportionally (or spreading evenly when zero).
+    if problems:
+        if old_earned > 0:
+            earned_scale = earned / old_earned
+            for problem in problems:
+                problem.earned_points = float(problem.earned_points or 0) * earned_scale
+        else:
+            share = earned / len(problems)
+            for problem in problems:
+                problem.earned_points = share
+        if old_max > 0:
+            max_scale = max_pts / old_max
+            for problem in problems:
+                problem.max_points = float(problem.max_points or 0) * max_scale
+        else:
+            share_max = max_pts / len(problems)
+            for problem in problems:
+                problem.max_points = share_max
+        m.StudentAssessmentProblem.objects.bulk_update(
+            problems, ["earned_points", "max_points"]
+        )
 
     attempt.earned_points = earned
     attempt.max_points = max_pts

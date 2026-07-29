@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
+<style>
+  .assessment-performance-page {
+    max-width: 1000px;
+    margin: 1.5rem auto;
+    padding: 0 1.25rem 2rem;
+  }
+  .assessment-performance-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 0.35rem;
+  }
+  .assessment-performance-back {
+    color: #64748b;
+    text-decoration: none;
+  }
+  .assessment-performance-count {
+    margin: 1rem 0;
+    color: #334155;
+    font-size: 1rem;
+  }
+  .assessment-performance-row {
+    cursor: pointer;
+  }
+  .assessment-performance-row:hover,
+  .assessment-performance-row:focus {
+    background: #eff6ff;
+    outline: none;
+  }
+  .assessment-performance-question {
+    color: #2563eb;
+    font-weight: 600;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="assessment-performance-page">
+  <div class="assessments-pane-header">
+    <div class="header-title-block">
+      <h2 class="assessment-performance-title">
+        <a href="{{ back_url }}" class="assessment-performance-back" title="Back">
+          <i class="fas fa-arrow-left"></i>
+        </a>
+        Assessment Performance: {{ assessment.name }}
+      </h2>
+      <p class="subtitle">
+        Uses the attempt that counts toward each student's grade; voided attempts are excluded.
+        {% if performance.curve_bonus_points %}
+          The assessment average includes {{ performance.curve_bonus_points|floatformat:2 }}
+          curve points per student; question rows show the underlying question scores.
+        {% endif %}
+      </p>
+    </div>
+  </div>
+
+  <p class="assessment-performance-count">
+    <strong>Number of Students: {{ performance.student_count }}</strong>
+  </p>
+
+  <div class="table-responsive-wrapper">
+    <table class="dashboard-data-table">
+      <thead>
+        <tr>
+          <th>Question</th>
+          <th>Average Score</th>
+          <th>Student Left Blank Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in performance.questions %}
+        <tr
+          class="assessment-performance-row"
+          tabindex="0"
+          role="link"
+          data-href="{% url 'course_grades_question_batch' course.id assessment.id row.slot_index %}?next={{ request.get_full_path|urlencode }}"
+          aria-label="View question {{ row.slot_index }} for all students"
+        >
+          <td class="assessment-performance-question">
+            {{ row.slot_index }}. {{ row.title }}
+          </td>
+          <td>
+            {{ row.average_earned|floatformat:2 }} /
+            {{ row.average_max|floatformat:2 }}
+            =
+            {% if row.average_percent is not None %}
+              {{ row.average_percent|floatformat:1 }}%
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ row.blank_count }}</td>
+        </tr>
+        {% empty %}
+        <tr>
+          <td colspan="3">No submitted, non-voided student attempts are available.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</main>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+(function () {
+  document.querySelectorAll('.assessment-performance-row[data-href]').forEach(function (row) {
+    function openQuestion() {
+      window.location.href = row.getAttribute('data-href');
+    }
+    row.addEventListener('click', openQuestion);
+    row.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openQuestion();
+      }
+    });
+  });
+})();
+</script>
+{% endblock %}

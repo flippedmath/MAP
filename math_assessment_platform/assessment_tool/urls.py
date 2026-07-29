@@ -8,6 +8,11 @@ urlpatterns = [
     path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
     path('verify/', views.verify_email, name='verify_email'),
     path('dashboard/', views.HomeDashboardView.as_view(), name='dashboard'),
+    path(
+        'dashboard/teacher-live-attention/',
+        views.teacher_live_attention_ajax,
+        name='teacher_live_attention',
+    ),
     # path('login/', auth_views.LoginView.as_view(
     #     template_name='assessment_tool/login.html',
     #     redirect_authenticated_user=True),
@@ -96,11 +101,26 @@ urlpatterns = [
         views.student_assessment_take_status_ajax,
         name='student_assessment_take_status',
     ),
+    path(
+        'course/<int:course_id>/assessment/<int:assessment_id>/take/focus-lock/',
+        views.student_assessment_focus_lock_ajax,
+        name='student_assessment_focus_lock',
+    ),
+    path(
+        'course/<int:course_id>/assessment/<int:assessment_id>/take/submit-locked/',
+        views.student_assessment_submit_locked_ajax,
+        name='student_assessment_submit_locked',
+    ),
     path('course/<int:course_id>/grades/', views.course_grades_view, name='course_grades'),
     path(
         'course/<int:course_id>/grades/assessment/<int:assessment_id>/',
         views.course_grades_assessment_view,
         name='course_grades_assessment',
+    ),
+    path(
+        'course/<int:course_id>/grades/assessment/<int:assessment_id>/performance/',
+        views.course_grades_assessment_performance_view,
+        name='course_grades_assessment_performance',
     ),
     path(
         'course/<int:course_id>/grades/assessment/<int:assessment_id>/manual/',
@@ -146,6 +166,11 @@ urlpatterns = [
         'course/<int:course_id>/grades/assessment/<int:assessment_id>/curve/',
         views.course_grades_assessment_curve_ajax,
         name='course_grades_assessment_curve',
+    ),
+    path(
+        'course/<int:course_id>/grades/assessment/<int:assessment_id>/release/',
+        views.course_grades_assessment_release_ajax,
+        name='course_grades_assessment_release',
     ),
     path(
         'course/<int:course_id>/grades/assessment/<int:assessment_id>/attempt/<int:attempt_id>/action/',

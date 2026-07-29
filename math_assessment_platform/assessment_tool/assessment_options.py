@@ -6,9 +6,12 @@ assessment_option_group / course_default_assessment_options / assessment_options
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import timedelta
+import math
 from pathlib import Path
 
 from django.db import connection, transaction
+from django.utils import timezone
 
 # Group numbers (stable IDs; removed groups are deprecated in DB)
 GROUP_STUDENT_VIEW = 2
@@ -19,6 +22,7 @@ GROUP_COUNT_DOWN = 7
 GROUP_LOCK_FOCUS = 9
 GROUP_SYNC_TESTS = 12
 GROUP_CURVE = 14
+GROUP_SCORE_RELEASE = 15
 
 # Group 2
 CHOICE_VIEW_SCORES_ONLY = 1
@@ -53,6 +57,10 @@ CHOICE_SYNC_ON = 2
 CHOICE_CURVE_OFF = 1
 CHOICE_CURVE_ON = 2
 
+# Group 15
+CHOICE_RELEASE_AUTO = 1
+CHOICE_RELEASE_TEACHER = 2
+
 GROUP_LABELS = {
     GROUP_STUDENT_VIEW: "Student view of graded assessments",
     GROUP_GRADE_AGGREGATION: "Course total calculation",
@@ -62,6 +70,7 @@ GROUP_LABELS = {
     GROUP_LOCK_FOCUS: "Lock on focus leave",
     GROUP_SYNC_TESTS: "Synchronize tests",
     GROUP_CURVE: "Curve",
+    GROUP_SCORE_RELEASE: "Score release",
 }
 
 # Shown only on the course gear overlay — not per-assessment Settings.
@@ -77,6 +86,7 @@ ASSESSMENT_GRADES_OPTION_GROUPS = frozenset(
     {
         GROUP_STUDENT_VIEW,
         GROUP_RETAKE_SCORING,
+        GROUP_SCORE_RELEASE,
     }
 )
 
@@ -118,6 +128,7 @@ DEFAULT_CHOICES = {
     GROUP_LOCK_FOCUS: CHOICE_LOCK_OFF,
     GROUP_SYNC_TESTS: CHOICE_SYNC_OFF,
     GROUP_CURVE: CHOICE_CURVE_OFF,
+    GROUP_SCORE_RELEASE: CHOICE_RELEASE_AUTO,
 }
 
 
@@ -357,6 +368,25 @@ def save_course_default_options(
                         continue
                     sync_assessment_release_mode_from_options(assessment)
 
+            if group_num == GROUP_SCORE_RELEASE:
+                from .assessment_grades import sync_assessment_release_mode_from_options
+
+                assessments = m.Assessment.objects.filter(
+                    course=course,
+                    parent_assessment__isnull=True,
+                    user__isnull=True,
+                ).exclude(status="deleted")
+                overridden = set(
+                    m.AssessmentOptions.objects.filter(
+                        assessment__in=assessments,
+                        option_type_id=GROUP_SCORE_RELEASE,
+                    ).values_list("assessment_id", flat=True)
+                )
+                for assessment in assessments:
+                    if assessment.id in overridden:
+                        continue
+                    sync_assessment_release_mode_from_options(assessment)
+
         if default_time_limit_minutes is not None and hasattr(
             course, "default_time_limit_minutes"
         ):
@@ -388,6 +418,7 @@ def save_assessment_options(
 
     with transaction.atomic():
         student_view_touched = False
+        score_release_touched = False
         for item in selections:
             if not isinstance(item, dict):
                 continue
@@ -405,6 +436,8 @@ def save_assessment_options(
 
             if group_num == GROUP_STUDENT_VIEW:
                 student_view_touched = True
+            if group_num == GROUP_SCORE_RELEASE:
+                score_release_touched = True
 
             if item.get("clear") or item.get("choice") is None:
                 m.AssessmentOptions.objects.filter(
@@ -454,7 +487,7 @@ def save_assessment_options(
             assessment.time_limit_minutes = mins
             assessment.save(update_fields=["time_limit_minutes"])
 
-        if student_view_touched:
+        if student_view_touched or score_release_touched:
             from .assessment_grades import sync_assessment_release_mode_from_options
 
             sync_assessment_release_mode_from_options(assessment)
@@ -513,6 +546,8 @@ def select_counting_attempt(attempts: list, assessment) -> object | None:
         return max(submitted, key=latest_key)
 
     def highest_key(a):
+        # Curve bonus is applied after selection for display/final grades.
+        # Comparing raw scores keeps "highest attempt" independent of curve.
         earned = a.earned_points
         max_pts = a.max_points
         if earned is None:
@@ -529,6 +564,14 @@ def select_counting_attempt(attempts: list, assessment) -> object | None:
         return (ratio, earned_v, stamp, a.id)
 
     return max(submitted, key=highest_key)
+
+
+def score_release_requires_teacher(assessment) -> bool:
+    """True when grades stay hidden until a teacher explicitly releases them."""
+    return (
+        resolved_assessment_option(assessment, GROUP_SCORE_RELEASE)
+        == CHOICE_RELEASE_TEACHER
+    )
 
 
 def student_may_view_submissions(assessment) -> bool:
@@ -558,6 +601,64 @@ def resolved_time_limit_minutes(assessment) -> int | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def countdown_timer_payload(assessment, attempt, *, window_end=None, now=None) -> dict:
+    """
+    Resolve the visible countdown and client-side forced-submit deadline.
+
+    Assessment overrides take precedence through resolved_assessment_option().
+    The global assessment window still closes a take even when the countdown
+    display is disabled.
+    """
+    now = now or timezone.now()
+    choice = resolved_assessment_option(assessment, GROUP_COUNT_DOWN)
+
+    def aware(value):
+        if value is None:
+            return None
+        if timezone.is_naive(value):
+            return timezone.make_aware(value, timezone.get_current_timezone())
+        return value
+
+    global_end = aware(window_end)
+    time_limit_end = None
+    if choice == CHOICE_COUNTDOWN_TIME_LIMIT and attempt is not None:
+        started_at = aware(getattr(attempt, "started_at", None))
+        minutes = resolved_time_limit_minutes(assessment)
+        if started_at is not None and minutes is not None:
+            time_limit_end = started_at + timedelta(minutes=minutes)
+
+    force_candidates = [
+        (global_end, "assessment_end"),
+        (time_limit_end, "time_limit"),
+    ]
+    force_candidates = [(end, reason) for end, reason in force_candidates if end]
+    force_end = None
+    force_reason = None
+    if force_candidates:
+        force_end, force_reason = min(force_candidates, key=lambda item: item[0])
+
+    visible_end = None
+    if choice == CHOICE_COUNTDOWN_END_TIME:
+        visible_end = global_end
+    elif choice == CHOICE_COUNTDOWN_TIME_LIMIT:
+        # Show the time until the take will actually end, including an earlier
+        # global assessment-window close.
+        visible_end = force_end
+
+    def remaining_seconds(end):
+        return max(0, int((end - now).total_seconds())) if end is not None else None
+
+    return {
+        "countdown_choice": choice,
+        "show_countdown_timer": visible_end is not None,
+        "countdown_ends_at": visible_end.isoformat() if visible_end else None,
+        "countdown_remaining_seconds": remaining_seconds(visible_end),
+        "force_submit_at": force_end.isoformat() if force_end else None,
+        "force_submit_remaining_seconds": remaining_seconds(force_end),
+        "force_submit_reason": force_reason,
+    }
 
 
 def resolved_course_option(course, group_num: int) -> int | None:

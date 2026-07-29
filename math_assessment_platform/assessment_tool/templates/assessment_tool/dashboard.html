@@ -102,6 +102,188 @@
     </div>
     {% endif %}
 
+    {% if active_retake_assessments %}
+    <div class="card dashboard-active-retakes-card">
+        <h2>Active retakes</h2>
+        <div class="dashboard-course-list">
+            {% for row in active_retake_assessments %}
+            <div class="dashboard-course-row">
+                <div class="dashboard-course-main">
+                    <div class="dashboard-course-name">{{ row.assessment_name }}</div>
+                    <div class="dashboard-course-meta">
+                        <span class="dashboard-course-status">{{ row.course_name }}</span>
+                        <span class="dashboard-active-retake-count">
+                            {{ row.student_count }} active retake{{ row.student_count|pluralize }}
+                        </span>
+                        <span>
+                            Student{{ row.student_count|pluralize }}:
+                            {% for student_name in row.student_names %}
+                                {{ student_name }}{% if not forloop.last %}, {% endif %}
+                            {% endfor %}
+                        </span>
+                    </div>
+                </div>
+                <div class="dashboard-course-actions">
+                    <a
+                        href="{% url 'course_grades_assessment' row.course_id row.assessment_id %}"
+                        class="btn dashboard-active-retake-link"
+                    >Manage Retakes</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if user.user_type == "Teacher" or user.user_type == "IT_Support" %}
+    <div
+        class="card dashboard-focus-unlocks-card"
+        id="dashboard-focus-unlocks-card"
+        data-live-url="{% url 'teacher_live_attention' %}"
+        {% if not focus_unlock_requests %}hidden{% endif %}
+    >
+        <h2>Students awaiting assessment unlock</h2>
+        <div class="dashboard-course-list" id="dashboard-focus-unlocks-list">
+            {% for row in focus_unlock_requests %}
+            <div class="dashboard-course-row">
+                <div class="dashboard-course-main">
+                    <div class="dashboard-course-name">{{ row.student_name }}</div>
+                    <div class="dashboard-course-meta">
+                        <span class="dashboard-course-status">{{ row.course_name }}</span>
+                        <span>{{ row.assessment_name }}</span>
+                        <span class="dashboard-focus-unlock-status">
+                            Locked
+                            <time class="local-datetime" datetime="{{ row.locked_at_utc }}">{{ row.locked_at_utc }}</time>
+                        </span>
+                    </div>
+                </div>
+                <div class="dashboard-course-actions">
+                    <a
+                        href="{% url 'course_grades_assessment' row.course_id row.assessment_id %}"
+                        class="btn dashboard-focus-unlock-link"
+                    >Unlock Assessment</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <script>
+    (function () {
+      var card = document.getElementById('dashboard-focus-unlocks-card');
+      var list = document.getElementById('dashboard-focus-unlocks-list');
+      if (!card || !list) return;
+
+      function addText(parent, tag, className, text) {
+        var el = document.createElement(tag);
+        if (className) el.className = className;
+        el.textContent = text || '';
+        parent.appendChild(el);
+        return el;
+      }
+
+      function render(rows) {
+        list.replaceChildren();
+        (rows || []).forEach(function (item) {
+          var row = document.createElement('div');
+          row.className = 'dashboard-course-row';
+          var main = document.createElement('div');
+          main.className = 'dashboard-course-main';
+          addText(main, 'div', 'dashboard-course-name', item.student_name);
+          var meta = document.createElement('div');
+          meta.className = 'dashboard-course-meta';
+          addText(meta, 'span', 'dashboard-course-status', item.course_name);
+          addText(meta, 'span', '', item.assessment_name);
+          var locked = addText(meta, 'span', 'dashboard-focus-unlock-status', 'Locked ');
+          var when = item.locked_at ? new Date(item.locked_at) : null;
+          if (when && !Number.isNaN(when.getTime())) {
+            locked.appendChild(document.createTextNode(when.toLocaleString()));
+          }
+          main.appendChild(meta);
+          var actions = document.createElement('div');
+          actions.className = 'dashboard-course-actions';
+          var link = addText(
+            actions, 'a', 'btn dashboard-focus-unlock-link', 'Unlock Assessment'
+          );
+          link.href = item.manage_url;
+          row.append(main, actions);
+          list.appendChild(row);
+        });
+        card.hidden = !(rows || []).length;
+      }
+
+      async function poll() {
+        try {
+          var response = await fetch(card.getAttribute('data-live-url'), {
+            headers: { Accept: 'application/json' },
+            credentials: 'same-origin'
+          });
+          var data = await response.json();
+          if (response.ok && data.success) render(data.focus_unlock_requests || []);
+        } catch (_) {
+          // Keep the last known state during transient network errors.
+        }
+      }
+      window.setInterval(poll, 2500);
+      poll();
+    })();
+    </script>
+    {% endif %}
+
+    {% if user.user_type == "Teacher" and manual_grading_assessments %}
+    <div class="card dashboard-manual-grading-card">
+        <h2>Manual grading required</h2>
+        <div class="dashboard-course-list">
+            {% for row in manual_grading_assessments %}
+            <div class="dashboard-course-row">
+                <div class="dashboard-course-main">
+                    <div class="dashboard-course-name">{{ row.assessment_name }}</div>
+                    <div class="dashboard-course-meta">
+                        <span class="dashboard-course-status">{{ row.course_name }}</span>
+                        <span class="dashboard-manual-grading-count">
+                            {{ row.student_count }} student{{ row.student_count|pluralize }}
+                            {% if row.student_count == 1 %}requires{% else %}require{% endif %} manual grading
+                        </span>
+                    </div>
+                </div>
+                <div class="dashboard-course-actions">
+                    <a
+                        href="{% url 'course_grades_assessment' row.course_id row.assessment_id %}"
+                        class="btn dashboard-manual-grading-link"
+                    >View Student Assessments</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if grade_release_assessments %}
+    <div class="card dashboard-manual-grading-card dashboard-grade-release-card">
+        <h2>Release grades</h2>
+        <div class="dashboard-course-list">
+            {% for row in grade_release_assessments %}
+            <div class="dashboard-course-row">
+                <div class="dashboard-course-main">
+                    <div class="dashboard-course-name">{{ row.assessment_name }}</div>
+                    <div class="dashboard-course-meta">
+                        <span class="dashboard-course-status">{{ row.course_name }}</span>
+                        <span class="dashboard-manual-grading-count">
+                            Grades are ready and need to be released to students
+                        </span>
+                    </div>
+                </div>
+                <div class="dashboard-course-actions">
+                    <a
+                        href="{% url 'course_grades' row.course_id %}"
+                        class="btn dashboard-manual-grading-link"
+                    >Release on Grades page</a>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
     {% if user.user_type == "Student" and open_assessments %}
     <div class="card dashboard-open-assessments-card">
         <h2>Open assessments</h2>

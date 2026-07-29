@@ -131,7 +131,7 @@
   <div class="manual-batch-toolbar">
     <div>
       <h2 style="display:inline-flex; align-items:center; gap:10px; margin:0;">
-        <a href="{% url 'course_grades_assessment' course.id assessment.id %}" style="color:#64748b;" title="Back">
+        <a href="{{ back_url }}" style="color:#64748b;" title="Back">
           <i class="fas fa-arrow-left"></i>
         </a>
         {{ assessment.name }} — {{ question_title }}
@@ -171,7 +171,7 @@
     payloadUrl: "{% url 'course_grades_question_batch_payload' course.id assessment.id slot_index %}",
     saveUrlTemplate: "{% url 'course_grades_attempt_save' course.id assessment.id 0 %}".replace('/0/save/', '/__ATTEMPT__/save/'),
     hideGroupTitles: true,
-    questionSwitchUrlTemplate: "{% url 'course_grades_question_batch' course.id assessment.id 0 %}".replace('/question/0/', '/question/__SLOT__/')
+    questionSwitchUrlTemplate: "{% url 'course_grades_question_batch' course.id assessment.id 0 %}".replace('/question/0/', '/question/__SLOT__/') + "?next={{ back_url|urlencode }}"
   };
 </script>
 <script type="module" src="{% static 'assessment_tool/js/course_grades_manual_batch.js' %}"></script>

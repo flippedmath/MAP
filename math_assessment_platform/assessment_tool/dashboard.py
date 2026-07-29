@@ -223,3 +223,241 @@ def dashboard_courses_for_user(user):
             )
         )
     return _sort_dashboard_courses(rows)
+
+
+def teacher_manual_grading_for_user(user):
+    """Assessments in the teacher's courses that still require manual grading."""
+    if (
+        user is None
+        or not getattr(user, "is_authenticated", False)
+        or getattr(user, "user_type", None) != "Teacher"
+    ):
+        return []
+
+    from .assessment_grades import unfinished_manual_grading
+    from .models import Assessment, Course
+
+    course_rows = (
+        Course.objects.filter(Q(owner=user) | Q(usersincourse__user=user))
+        .distinct()
+        .order_by("name", "id")
+    )
+    courses = {course.id: course for course in course_rows}
+    if not courses:
+        return []
+
+    assessments = (
+        Assessment.objects.filter(
+            course_id__in=courses,
+            parent_assessment__isnull=True,
+            user__isnull=True,
+        )
+        .exclude(status="deleted")
+        .order_by("course__name", "order", "id")
+    )
+
+    rows = []
+    for assessment in assessments:
+        pending = unfinished_manual_grading(assessment)
+        if not pending:
+            continue
+        rows.append(
+            {
+                "course_id": assessment.course_id,
+                "course_name": courses[assessment.course_id].name or "",
+                "assessment_id": assessment.id,
+                "assessment_name": assessment.name or f"Assessment {assessment.id}",
+                "student_count": len({row["student_id"] for row in pending}),
+            }
+        )
+    return rows
+
+
+def teacher_active_retakes_for_user(user):
+    """Active per-student retake grants grouped by assessment."""
+    if (
+        user is None
+        or not getattr(user, "is_authenticated", False)
+        or getattr(user, "user_type", None) not in ("Teacher", "IT_Support")
+    ):
+        return []
+
+    from .models import (
+        Course,
+        OpenStudentAssessmentOverwrite,
+        UserProfile,
+    )
+
+    course_rows = (
+        Course.objects.filter(Q(owner=user) | Q(usersincourse__user=user))
+        .distinct()
+        .order_by("name", "id")
+    )
+    courses = {course.id: course for course in course_rows}
+    if not courses:
+        return []
+
+    grants = list(
+        OpenStudentAssessmentOverwrite.objects.filter(
+            a__course_id__in=courses,
+            a__parent_assessment__isnull=True,
+            a__user__isnull=True,
+            status_open=True,
+        )
+        .values(
+            "a_id",
+            "a__name",
+            "a__course_id",
+            "u_id",
+        )
+        .order_by("a__course__name", "a__order", "a_id", "u_id")
+    )
+    student_ids = {grant["u_id"] for grant in grants if grant["u_id"]}
+    students = {
+        student.pk: student
+        for student in UserProfile.objects.filter(pk__in=student_ids)
+    }
+
+    grouped = {}
+    for grant in grants:
+        assessment_id = grant["a_id"]
+        course_id = grant["a__course_id"]
+        row = grouped.setdefault(
+            assessment_id,
+            {
+                "course_id": course_id,
+                "course_name": courses[course_id].name or "",
+                "assessment_id": assessment_id,
+                "assessment_name": (
+                    grant["a__name"] or f"Assessment {assessment_id}"
+                ),
+                "student_ids": set(),
+                "student_names": [],
+            },
+        )
+        student_id = grant["u_id"]
+        if not student_id or student_id in row["student_ids"]:
+            continue
+        row["student_ids"].add(student_id)
+        row["student_names"].append(
+            user_roster_formal_name(students.get(student_id))
+        )
+
+    rows = []
+    for row in grouped.values():
+        row["student_names"].sort(key=str.casefold)
+        row["student_count"] = len(row.pop("student_ids"))
+        rows.append(row)
+    rows.sort(
+        key=lambda row: (
+            row["course_name"].casefold(),
+            row["assessment_name"].casefold(),
+            row["assessment_id"],
+        )
+    )
+    return rows
+
+
+def teacher_grade_releases_for_user(user):
+    """Assessments waiting for the teacher to release ready grades."""
+    if (
+        user is None
+        or not getattr(user, "is_authenticated", False)
+        or getattr(user, "user_type", None) not in ("Teacher", "IT_Support")
+    ):
+        return []
+
+    from .assessment_grades import assessment_needs_teacher_release
+    from .models import Assessment, Course
+
+    course_rows = (
+        Course.objects.filter(Q(owner=user) | Q(usersincourse__user=user))
+        .distinct()
+        .order_by("name", "id")
+    )
+    courses = {course.id: course for course in course_rows}
+    if not courses:
+        return []
+
+    assessments = (
+        Assessment.objects.filter(
+            course_id__in=courses,
+            parent_assessment__isnull=True,
+            user__isnull=True,
+        )
+        .exclude(status="deleted")
+        .order_by("course__name", "order", "id")
+    )
+    rows = []
+    for assessment in assessments:
+        if not assessment_needs_teacher_release(assessment):
+            continue
+        rows.append(
+            {
+                "course_id": assessment.course_id,
+                "course_name": courses[assessment.course_id].name or "",
+                "assessment_id": assessment.id,
+                "assessment_name": assessment.name or f"Assessment {assessment.id}",
+            }
+        )
+    return rows
+
+
+def teacher_focus_unlocks_for_user(user):
+    """Currently focus-locked attempts in courses this teacher can manage."""
+    if (
+        user is None
+        or not getattr(user, "is_authenticated", False)
+        or getattr(user, "user_type", None) not in ("Teacher", "IT_Support")
+    ):
+        return []
+
+    from .models import Course, StudentAssessmentFocusLock
+    from .student_attempts import course_template_assessment
+
+    course_rows = (
+        Course.objects.filter(Q(owner=user) | Q(usersincourse__user=user))
+        .distinct()
+        .order_by("name", "id")
+    )
+    courses = {course.id: course for course in course_rows}
+    if not courses:
+        return []
+
+    locks = (
+        StudentAssessmentFocusLock.objects.filter(
+            attempt__course_id__in=courses,
+            attempt__status="in_progress",
+            unlocked_at__isnull=True,
+        )
+        .select_related(
+            "attempt",
+            "attempt__user",
+            "attempt__assessment",
+            "attempt__assessment__parent_assessment",
+        )
+        .order_by("locked_at", "id")
+    )
+    rows = []
+    for focus_lock in locks:
+        attempt = focus_lock.attempt
+        assessment = course_template_assessment(attempt.assessment)
+        if assessment is None or assessment.course_id not in courses:
+            continue
+        rows.append(
+            {
+                "lock_id": focus_lock.id,
+                "locked_at": focus_lock.locked_at,
+                "locked_at_utc": utc_isoformat(focus_lock.locked_at),
+                "attempt_id": attempt.id,
+                "student_id": attempt.user_id,
+                "student_name": user_roster_formal_name(attempt.user),
+                "course_id": assessment.course_id,
+                "course_name": courses[assessment.course_id].name or "",
+                "assessment_id": assessment.id,
+                "assessment_name": (
+                    assessment.name or f"Assessment {assessment.id}"
+                ),
+            }
+        )
+    return rows

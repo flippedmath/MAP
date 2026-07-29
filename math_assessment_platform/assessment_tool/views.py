@@ -13,7 +13,14 @@ from .models import (
     AssessmentGenerationJob, StudentAssessmentAttempt,
     AssessmentOptions,
 )
-from .dashboard import dashboard_courses_for_user, user_display_name
+from .dashboard import (
+    dashboard_courses_for_user,
+    teacher_active_retakes_for_user,
+    teacher_focus_unlocks_for_user,
+    teacher_grade_releases_for_user,
+    teacher_manual_grading_for_user,
+    user_display_name,
+)
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
 import json
@@ -110,6 +117,10 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
             context['open_assessments'] = open_takeable_assessments_for_student(user)
         else:
             context['open_assessments'] = []
+        context['manual_grading_assessments'] = teacher_manual_grading_for_user(user)
+        context['active_retake_assessments'] = teacher_active_retakes_for_user(user)
+        context['focus_unlock_requests'] = teacher_focus_unlocks_for_user(user)
+        context['grade_release_assessments'] = teacher_grade_releases_for_user(user)
 
         unread_rows = []
         for note in unread_notifications_for_user(user, include_content=False):
@@ -126,6 +137,42 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
         context['unread_notifications'] = unread_rows
 
         return context
+
+
+@login_required
+def teacher_live_attention_ajax(request):
+    """Small polling payload for active focus-lock requests."""
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+
+    rows = teacher_focus_unlocks_for_user(request.user)
+    payload = []
+    for row in rows:
+        payload.append(
+            {
+                **row,
+                "locked_at": row["locked_at_utc"],
+                "manage_url": (
+                    reverse(
+                        "course_grades_assessment",
+                        kwargs={
+                            "course_id": row["course_id"],
+                            "assessment_id": row["assessment_id"],
+                        },
+                    )
+                    + f"#attempt-{row['attempt_id']}"
+                ),
+                "action_url": reverse(
+                    "course_grades_attempt_action",
+                    kwargs={
+                        "course_id": row["course_id"],
+                        "assessment_id": row["assessment_id"],
+                        "attempt_id": row["attempt_id"],
+                    },
+                ),
+            }
+        )
+    return JsonResponse({"success": True, "focus_unlock_requests": payload})
 
 
 @login_required
@@ -1969,6 +2016,18 @@ def update_assessment_status_ajax(request, course_id):
             status=400,
         )
 
+    if new_status in ('open', 'upcoming'):
+        from .assessment_sync import synchronization_preflight
+
+        sync_result = synchronization_preflight(
+            assessment,
+            1,
+            decision=data.get('synchronization_decision'),
+            created_by=request.user,
+        )
+        if not sync_result.get('ready'):
+            return JsonResponse(sync_result, status=409)
+
     assessment.status = new_status
     assessment.save(update_fields=['status'])
 
@@ -3230,7 +3289,7 @@ def student_assessment_start_ajax(request, course_id, assessment_id):
 
     attempt = begin_attempt_for_student(attempt)
 
-    from .assessment_options import show_count_up_timer
+    from .assessment_options import countdown_timer_payload, show_count_up_timer
     from .student_attempts import (
         _aware,
         assessment_window_bounds,
@@ -3257,6 +3316,16 @@ def student_assessment_start_ajax(request, course_id, assessment_id):
     ):
         window_ends_at = end.isoformat()
         remaining_seconds = max(0, int((end - now).total_seconds()))
+    countdown = countdown_timer_payload(
+        assessment,
+        attempt,
+        window_end=end if window_ends_at else None,
+        now=now,
+    )
+    from .assessment_focus_lock import (
+        focus_lock_enabled,
+        focus_lock_payload,
+    )
 
     return JsonResponse(
         {
@@ -3268,6 +3337,9 @@ def student_assessment_start_ajax(request, course_id, assessment_id):
             "show_count_up_timer": show_count_up_timer(assessment),
             "window_ends_at": window_ends_at,
             "remaining_seconds": remaining_seconds,
+            **countdown,
+            "focus_lock_enabled": focus_lock_enabled(assessment),
+            **focus_lock_payload(attempt),
             "problems": client_problems_for_attempt(attempt),
         }
     )
@@ -3296,14 +3368,29 @@ def student_assessment_take_status_ajax(request, course_id, assessment_id):
         student_may_start_attempt,
         upcoming_window_contains,
     )
+    from .assessment_options import countdown_timer_payload
 
     now = timezone.now()
     attempt = current_attempt_for_student(assessment, request.user)
+    from .student_attempts import attempt_must_stop_taking
+
     closed = assessment_taking_ended(assessment, now=now)
-    # If the upcoming window just ended, finalize this student's open take so the
+    stop = attempt_must_stop_taking(assessment, attempt, now=now)
+    # If the upcoming window / time limit just ended, finalize this student's open take so the
     # poll kick does not wait on the periodic close job. Never finalize an
     # in-flight retake / open retake grant — those outlive class closed status.
     if (
+        stop.get("must_stop")
+        and attempt is not None
+        and attempt.status
+        in (
+            StudentAssessmentAttempt.STATUS_READY,
+            StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+        )
+    ):
+        finalize_student_attempt_if_open(attempt)
+        attempt.refresh_from_db()
+    elif (
         closed
         and attempt is not None
         and attempt.status
@@ -3343,6 +3430,16 @@ def student_assessment_take_status_ajax(request, course_id, assessment_id):
     ):
         window_ends_at = end.isoformat()
         remaining_seconds = max(0, int((end - now).total_seconds()))
+    countdown = countdown_timer_payload(
+        assessment,
+        attempt,
+        window_end=end if window_ends_at else None,
+        now=now,
+    )
+    from .assessment_focus_lock import (
+        focus_lock_enabled,
+        focus_lock_payload,
+    )
 
     return JsonResponse(
         {
@@ -3357,6 +3454,9 @@ def student_assessment_take_status_ajax(request, course_id, assessment_id):
             "taking_allowed": taking_allowed,
             "window_ends_at": window_ends_at,
             "remaining_seconds": remaining_seconds,
+            **countdown,
+            "focus_lock_enabled": focus_lock_enabled(assessment),
+            **focus_lock_payload(attempt),
         }
     )
 
@@ -3371,6 +3471,7 @@ def student_assessment_autosave_ajax(request, course_id, assessment_id):
     )
     from .student_attempts import (
         assessment_taking_ended,
+        attempt_must_stop_taking,
         begin_attempt_for_student,
         current_attempt_for_student,
         finalize_student_attempt_if_open,
@@ -3395,26 +3496,35 @@ def student_assessment_autosave_ajax(request, course_id, assessment_id):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON."}, status=400)
 
-    # Active ready/in_progress take (including a per-student retake on a closed
-    # assessment) should keep autosaving. Only finalize when the class is closed
-    # and this attempt is somehow still open without retake access — handled by
-    # the close job; here just block new work if already submitted above.
-    if (
-        assessment_taking_ended(assessment)
-        and attempt.status
-        not in (
-            StudentAssessmentAttempt.STATUS_READY,
-            StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+    from .assessment_focus_lock import active_focus_lock
+
+    lock = active_focus_lock(attempt)
+    if lock is not None:
+        return JsonResponse(
+            {
+                "error": "This assessment is locked until your teacher releases it.",
+                "code": "focus_locked",
+                "focus_locked": True,
+                "focus_locked_at": lock.locked_at.isoformat(),
+            },
+            status=423,
         )
-    ):
-        upsert_answers(attempt, data)
+
+    stop = attempt_must_stop_taking(assessment, attempt)
+    if stop.get("must_stop"):
+        # Accept the last payload, then finalize — no further editing.
+        if isinstance(data.get("problems"), list) or data:
+            upsert_answers(attempt, data)
         finalize_student_attempt_if_open(attempt)
         return JsonResponse(
             {
                 "success": True,
                 "closed": True,
+                "force_close": True,
                 "submitted": True,
+                "taking_allowed": False,
                 "code": "assessment_closed",
+                "force_submit_reason": stop.get("reason"),
             }
         )
 
@@ -3456,14 +3566,46 @@ def student_assessment_submit_ajax(request, course_id, assessment_id):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON."}, status=400)
 
-    from .student_attempts import submit_and_grade_attempt, upsert_answers
+    from .assessment_focus_lock import active_focus_lock, focus_lock_enabled
+    from .student_attempts import (
+        attempt_must_stop_taking,
+        notify_teachers_focus_enforcement_bypassed,
+        submit_and_grade_attempt,
+        upsert_answers,
+    )
+
+    stop = attempt_must_stop_taking(assessment, attempt)
+    lock = active_focus_lock(attempt)
+    force_submit = bool(data.pop("force_submit", False))
+    server_forced = bool(stop.get("must_stop"))
+    # Client force_submit may bypass focus lock only when the server deadline expired.
+    if lock is not None and not (force_submit and server_forced):
+        return JsonResponse(
+            {
+                "error": "This assessment is locked until your teacher releases it.",
+                "code": "focus_locked",
+                "focus_locked": True,
+                "focus_locked_at": lock.locked_at.isoformat(),
+            },
+            status=423,
+        )
+
+    focus_client_active = bool(data.pop("focus_client_active", False))
+    if focus_lock_enabled(assessment) and not focus_client_active:
+        notify_teachers_focus_enforcement_bypassed(attempt)
+
     from .assessment_grades import scores_visible_to_student
     from .student_attempts import course_template_assessment
 
     if data:
         upsert_answers(attempt, data)
     try:
-        result = submit_and_grade_attempt(attempt)
+        result = submit_and_grade_attempt(
+            attempt,
+            focus_unlock_reason=(
+                "window_ended" if (force_submit or server_forced) else "submitted"
+            ),
+        )
     except ValueError as exc:
         return JsonResponse(
             {
@@ -3480,7 +3622,7 @@ def student_assessment_submit_ajax(request, course_id, assessment_id):
         "success": True,
         "scores_visible": visible,
         "requires_manual_grading": result.get("requires_manual_grading", False),
-        "closed": False,
+        "closed": bool(server_forced),
     }
     if visible:
         payload["earned_total"] = result.get("earned_total")
@@ -3491,6 +3633,92 @@ def student_assessment_submit_ajax(request, course_id, assessment_id):
             "Submitted. Your score will be available when your teacher "
             "releases grades."
         )
+    return JsonResponse(payload)
+
+
+@login_required
+@require_POST
+def student_assessment_focus_lock_ajax(request, course_id, assessment_id):
+    if getattr(request.user, "user_type", None) != "Student":
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course_id=course_id,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .student_attempts import current_attempt_for_student
+
+    attempt = current_attempt_for_student(assessment, request.user)
+    if attempt is None:
+        return JsonResponse({"error": "No attempt found."}, status=404)
+    try:
+        data = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON."}, status=400)
+
+    from .assessment_focus_lock import lock_attempt_for_focus
+
+    result = lock_attempt_for_focus(attempt, data)
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+@require_POST
+@transaction.atomic
+def student_assessment_submit_locked_ajax(request, course_id, assessment_id):
+    """Submit saved answers and erase only the active lock event by student choice."""
+    if getattr(request.user, "user_type", None) != "Student":
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course_id=course_id,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .student_attempts import (
+        current_attempt_for_student,
+        submit_and_grade_attempt,
+    )
+
+    attempt = current_attempt_for_student(assessment, request.user)
+    if attempt is None:
+        return JsonResponse({"error": "No attempt found."}, status=404)
+    if attempt.status == StudentAssessmentAttempt.STATUS_SUBMITTED:
+        return JsonResponse(
+            {"success": True, "already_submitted": True, "closed": True}
+        )
+
+    from .assessment_focus_lock import active_focus_lock, delete_active_focus_lock
+
+    if active_focus_lock(attempt) is None:
+        return JsonResponse(
+            {"error": "This assessment is no longer locked."},
+            status=409,
+        )
+    delete_active_focus_lock(attempt)
+    result = submit_and_grade_attempt(attempt)
+
+    from .assessment_grades import scores_visible_to_student
+    from .student_attempts import course_template_assessment
+
+    attempt.refresh_from_db()
+    template = course_template_assessment(assessment) or assessment
+    visible = scores_visible_to_student(template, attempt)
+    payload = {
+        "success": True,
+        "scores_visible": visible,
+        "requires_manual_grading": result.get("requires_manual_grading", False),
+        "closed": True,
+    }
+    if visible:
+        payload["earned_total"] = result.get("earned_total")
+        payload["max_total"] = result.get("max_total")
+    else:
+        payload["message"] = "Your saved assessment answers were submitted."
     return JsonResponse(payload)
 
 
@@ -3514,10 +3742,15 @@ def course_grades_view(request, course_id):
 
     user_type = getattr(request.user, "user_type", None)
     if user_type in ("Teacher", "IT_Support"):
-        from .assessment_grades import grades_overview_for_course, grades_overview_meta
+        from .assessment_grades import (
+            grades_overview_for_course,
+            grades_overview_meta,
+            teacher_course_gradebook,
+        )
 
         grade_rows = grades_overview_for_course(course)
         meta = grades_overview_meta(course, grade_rows)
+        gradebook = teacher_course_gradebook(course)
         return render(
             request,
             "assessment_tool/course_grades.html",
@@ -3529,7 +3762,9 @@ def course_grades_view(request, course_id):
                 "show_points_column": meta["show_points_column"],
                 "show_curve_column": meta["show_curve_column"],
                 "show_manual_pending_column": meta["show_manual_pending_column"],
+                "show_release_column": meta["show_release_column"],
                 "grade_aggregation_mode": meta["grade_aggregation_mode"],
+                "gradebook": gradebook,
             },
         )
 
@@ -3587,6 +3822,9 @@ def course_grades_assessment_view(request, course_id, assessment_id):
             "active_tab": "grades",
             "student_rows": student_rows,
             "show_retake_column": assessment_has_retake_attempts(student_rows),
+            "show_focus_lock_column": any(
+                row.get("focus_lock_count") for row in student_rows
+            ),
             "unfinished": unfinished_manual_grading(assessment),
             "question_choices": assessment_grade_question_choices(assessment),
             "scores_visible_to_students": scores_visible_for_assessment(assessment),
@@ -3594,6 +3832,45 @@ def course_grades_assessment_view(request, course_id, assessment_id):
             "counts_toward_grade": assessment_counts_toward_grade(assessment),
             "assessment_is_open": (assessment.status or "").lower()
             in ("open", "upcoming", "active", "retake available"),
+        },
+    )
+
+
+@login_required
+def course_grades_assessment_performance_view(request, course_id, assessment_id):
+    """Per-question averages for each student's grade-counting attempt."""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    course = get_object_or_404(Course, id=course_id)
+    denied = _teacher_grades_access(request, course)
+    if denied:
+        return denied
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .assessment_grades import assessment_performance_summary
+
+    fallback_url = reverse("course_grades", kwargs={"course_id": course.id})
+    back_url = request.GET.get("next") or request.META.get("HTTP_REFERER") or ""
+    if not url_has_allowed_host_and_scheme(
+        back_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        back_url = fallback_url
+
+    return render(
+        request,
+        "assessment_tool/course_grades_assessment_performance.html",
+        {
+            "course": course,
+            "assessment": assessment,
+            "performance": assessment_performance_summary(assessment),
+            "back_url": back_url,
         },
     )
 
@@ -3647,6 +3924,8 @@ def course_grades_manual_batch_payload_ajax(request, course_id, assessment_id):
 @login_required
 def course_grades_question_batch_view(request, course_id, assessment_id, slot_index):
     """One question for all students who have a score on that slot."""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
     course = get_object_or_404(Course, id=course_id)
     denied = _teacher_grades_access(request, course)
     if denied:
@@ -3660,14 +3939,24 @@ def course_grades_question_batch_view(request, course_id, assessment_id, slot_in
     )
     from .assessment_grades import assessment_grade_question_choices
 
+    fallback_url = reverse(
+        "course_grades_assessment",
+        kwargs={"course_id": course.id, "assessment_id": assessment.id},
+    )
+    back_url = request.GET.get("next") or request.META.get("HTTP_REFERER") or ""
+    if not url_has_allowed_host_and_scheme(
+        back_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        back_url = fallback_url
+
     choices = assessment_grade_question_choices(assessment)
     try:
         slot_i = int(slot_index)
     except (TypeError, ValueError):
         messages.error(request, "Invalid question.")
-        return redirect(
-            "course_grades_assessment", course_id=course.id, assessment_id=assessment.id
-        )
+        return redirect(back_url)
     current = next((c for c in choices if c["slot_index"] == slot_i), None)
     other_choices = [c for c in choices if c["slot_index"] != slot_i]
     return render(
@@ -3681,6 +3970,7 @@ def course_grades_question_batch_view(request, course_id, assessment_id, slot_in
             "slot_index": slot_i,
             "question_title": (current or {}).get("title") or f"Question {slot_i}",
             "other_question_choices": other_choices,
+            "back_url": back_url,
         },
     )
 
@@ -3742,7 +4032,12 @@ def course_grades_attempt_action_ajax(request, course_id, assessment_id, attempt
     )
 
     if action == "open_retake":
-        result = open_test_for_retake(assessment, attempt.user)
+        result = open_test_for_retake(
+            assessment,
+            attempt.user,
+            synchronization_decision=body.get("synchronization_decision"),
+            created_by=request.user,
+        )
     elif action == "close_retake":
         result = close_test_for_retake(assessment, attempt.user)
     elif action == "adjust_score":
@@ -3753,10 +4048,26 @@ def course_grades_attempt_action_ajax(request, course_id, assessment_id, attempt
         )
     elif action == "void_score":
         result = void_attempt_score(attempt)
+    elif action == "unlock_focus":
+        from .assessment_focus_lock import release_focus_lock
+
+        result = release_focus_lock(
+            attempt,
+            released_by=request.user,
+            reason="teacher",
+        )
+    elif action == "regrade":
+        from .student_attempts import regrade_attempt
+
+        result = regrade_attempt(attempt, preserve_teacher_scores=True)
     else:
         return JsonResponse({"error": "Unknown action."}, status=400)
 
-    status = 200 if result.get("success") else 400
+    status = (
+        200
+        if result.get("success")
+        else (409 if result.get("code") == "synchronization_decision_required" else 400)
+    )
     return JsonResponse(result, status=status)
 
 
@@ -3882,9 +4193,84 @@ def course_grades_assessment_curve_ajax(request, course_id, assessment_id):
         body = json.loads(request.body) if request.body else {}
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON."}, status=400)
-    from .assessment_grades import set_assessment_curve_max_points
+    from .assessment_grades import (
+        grades_overview_for_course,
+        set_assessment_curve_bonus_points,
+        teacher_course_gradebook,
+    )
 
-    result = set_assessment_curve_max_points(assessment, body.get("curve_max_points"))
+    result = set_assessment_curve_bonus_points(
+        assessment, body.get("curve_bonus_points")
+    )
+    if result.get("success"):
+        overview_rows = grades_overview_for_course(course)
+        result["overview_row"] = next(
+            (row for row in overview_rows if row["assessment_id"] == assessment.id),
+            None,
+        )
+        result["gradebook"] = teacher_course_gradebook(course)
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
+
+
+@login_required
+@require_POST
+def course_grades_assessment_release_ajax(request, course_id, assessment_id):
+    course = get_object_or_404(Course, id=course_id)
+    if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    assessment = get_object_or_404(
+        Assessment,
+        id=assessment_id,
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    from .assessment_grades import (
+        assessment_counts_toward_grade,
+        assessment_needs_teacher_release,
+        assessment_release_mode,
+        apply_assessment_release,
+        scores_ready_for_release,
+    )
+    from .assessment_options import score_release_requires_teacher
+
+    if not score_release_requires_teacher(assessment):
+        return JsonResponse(
+            {
+                "success": False,
+                "error": "This assessment releases grades automatically.",
+            },
+            status=400,
+        )
+    if bool(getattr(assessment, "scores_released", False)):
+        return JsonResponse(
+            {
+                "success": True,
+                "already_released": True,
+                "scores_released": True,
+                "needs_teacher_release": False,
+            }
+        )
+    if not scores_ready_for_release(assessment):
+        return JsonResponse(
+            {
+                "success": False,
+                "error": "No grades are ready to release yet.",
+            },
+            status=400,
+        )
+    mode = assessment_release_mode(assessment)
+    result = apply_assessment_release(
+        assessment,
+        mode=mode,
+        counts_toward_grade=assessment_counts_toward_grade(assessment),
+        force=True,
+    )
+    if result.get("success"):
+        result["needs_teacher_release"] = assessment_needs_teacher_release(assessment)
     status = 200 if result.get("success") else 400
     return JsonResponse(result, status=status)
 
@@ -3996,7 +4382,8 @@ def course_grades_attempt_save_ajax(request, course_id, assessment_id, attempt_i
     from .assessment_grades import apply_teacher_scores
 
     result = apply_teacher_scores(attempt, body.get("updates") or [])
-    return JsonResponse(result)
+    status = 200 if result.get("success") else 400
+    return JsonResponse(result, status=status)
 
 
 # Legacy session stubs retired — use student_assessment_* endpoints above.

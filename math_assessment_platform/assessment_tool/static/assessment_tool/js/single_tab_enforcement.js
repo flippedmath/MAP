@@ -17,6 +17,10 @@
     };
 
     function freezeDuplicateTab() {
+        // The live assessment page listens for this and atomically saves +
+        // focus-locks the current attempt before this stale tab is replaced.
+        window.dispatchEvent(new CustomEvent('assessment:focus-leave'));
+
         // Capture the exact URL path the user is currently on before wiping the DOM
         const currentUrl = window.location.href;
 

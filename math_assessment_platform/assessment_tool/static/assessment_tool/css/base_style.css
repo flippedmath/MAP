@@ -581,7 +581,10 @@ button:hover { background-color: #1d4ed8; }
 
 /* Dashboard: My Courses + unread notifications */
 .dashboard-courses-card,
-.dashboard-notifications-card {
+.dashboard-notifications-card,
+.dashboard-manual-grading-card,
+.dashboard-active-retakes-card,
+.dashboard-focus-unlocks-card {
     grid-column: 1 / -1;
 }
 
@@ -654,6 +657,51 @@ button:hover { background-color: #1d4ed8; }
     text-decoration: none;
     font-size: 0.9rem;
     padding: 8px 14px;
+}
+
+.dashboard-manual-grading-count,
+.dashboard-course-actions .dashboard-manual-grading-link {
+    color: #b91c1c;
+    font-weight: 600;
+}
+
+.dashboard-course-actions .dashboard-manual-grading-link {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.dashboard-course-actions .dashboard-manual-grading-link:hover {
+    background: #fee2e2;
+}
+
+.dashboard-active-retake-count,
+.dashboard-course-actions .dashboard-active-retake-link {
+    color: #92400e;
+    font-weight: 600;
+}
+
+.dashboard-course-actions .dashboard-active-retake-link {
+    border-color: #fde68a;
+    background: #fffbeb;
+}
+
+.dashboard-course-actions .dashboard-active-retake-link:hover {
+    background: #fef3c7;
+}
+
+.dashboard-focus-unlock-status,
+.dashboard-course-actions .dashboard-focus-unlock-link {
+    color: #991b1b;
+    font-weight: 600;
+}
+
+.dashboard-course-actions .dashboard-focus-unlock-link {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.dashboard-course-actions .dashboard-focus-unlock-link:hover {
+    background: #fee2e2;
 }
 
 .dashboard-empty {
