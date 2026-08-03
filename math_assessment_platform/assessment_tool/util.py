@@ -71,6 +71,119 @@ def numeric_match_rounded(student, correct, places):
     return False
 
 
+_PLAIN_NUMBER_RE = re.compile(
+    r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$"
+)
+# Binary float noise / over-precise reprs (e.g. -15.9969999999987).
+_FLOAT_NOISE_RE = re.compile(r"\.\d{5,}")
+
+
+def _is_plain_finite_number_string(text):
+    s = str(text).strip()
+    if not s or not _PLAIN_NUMBER_RE.fullmatch(s):
+        return False
+    try:
+        return math.isfinite(float(s))
+    except (TypeError, ValueError):
+        return False
+
+
+def format_expected_numeric_display(value, places=3, *, only_float_noise=False):
+    """
+    Format a plain numeric expected-answer for UI display using the same rounding
+    as ``numeric_match_rounded`` / numAnswer grading.
+
+    Leaves fractions, expressions, intervals, DNE, etc. unchanged.
+    When ``only_float_noise`` is True, only rewrite strings that look like
+    binary-float precision artifacts (5+ digits after the decimal).
+    """
+    if value is None or isinstance(value, bool):
+        return value
+
+    try:
+        places = int(places)
+    except (TypeError, ValueError):
+        places = 3
+    if places < 0:
+        places = 0
+
+    if isinstance(value, int):
+        return str(value)
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            return str(value)
+        source = repr(value)
+        num = value
+    else:
+        source = str(value).strip()
+        if not _is_plain_finite_number_string(source):
+            return source
+        if only_float_noise and not _FLOAT_NOISE_RE.search(source):
+            return source
+        num = float(source)
+
+    if only_float_noise and isinstance(value, float) and not _FLOAT_NOISE_RE.search(source):
+        # Compact clean floats (e.g. 0.5) without forcing fixed places.
+        if float(num).is_integer():
+            return str(int(num))
+        return source.rstrip("0").rstrip(".") if "." in source else source
+
+    rounded = round(num, places)
+    if places == 0:
+        return str(int(rounded))
+    # Clean integer source → keep integer form (avoid turning "5" into "5.000")
+    if (
+        not isinstance(value, float)
+        and "." not in source
+        and "e" not in source.lower()
+        and float(rounded).is_integer()
+    ):
+        return str(int(rounded))
+    text = f"{rounded:.{places}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _expected_display_places_for_validator(validator, archetype):
+    """Decimal places used when showing expected answers for this answer field."""
+    rv = getattr(validator, "runtime_values", None) or {}
+    archetype = str(archetype or "").strip()
+    if archetype == "numAnswer":
+        try:
+            return max(0, int(rv.get("decimal_places", 3)))
+        except (TypeError, ValueError):
+            return 3
+    return 3
+
+
+def _format_expected_answer_line(line, places=3, *, force_numeric=False):
+    """Format one expected-answer display line (numeric rounding / float-noise scrub)."""
+    if line is None:
+        return line
+    text = str(line).strip()
+    if not text:
+        return text
+    formatted = format_expected_numeric_display(
+        text, places, only_float_noise=not force_numeric
+    )
+    if formatted is None:
+        formatted = text
+    # Also scrub float-noise tokens embedded in intervals / lists, e.g.
+    # "[-15.9969999999987, 2]" → "[-15.997, 2]".
+    if _FLOAT_NOISE_RE.search(formatted):
+        def _repl(match):
+            return format_expected_numeric_display(match.group(0), places)
+
+        formatted = re.sub(
+            r"[+-]?(?:\d+\.\d{5,}|\.\d{5,})(?:[eE][+-]?\d+)?",
+            _repl,
+            formatted,
+        )
+    return formatted
+
+
 def _is_valid_algebraic_variable_name(item):
     """
     Return (ok: bool, error_message: str|None) for a declared variable identifier.
@@ -1304,6 +1417,9 @@ class BaseEntity:
         """
         Remove evaluate=False artifacts like Mul(-1, 1) (-> -1) and other *1 / 1* factors
         without expanding or otherwise rewriting the expression tree.
+
+        Also folds unary-minus·number products (Mul(-1, 5) → -5, Mul(-1, 5, x) → -5*x)
+        so LaTeX shows "-5" instead of "\\left(-1\\right) 5".
         """
         if isinstance(expr, sp.MatrixBase):
             return expr.applyfunc(self.strip_trivial_multiplicative_ones)
@@ -1318,6 +1434,23 @@ class BaseEntity:
         if isinstance(expr, sp.Mul):
             factors = [self.strip_trivial_multiplicative_ones(arg) for arg in expr.args]
             factors = [factor for factor in factors if not _is_one(factor)]
+            if not factors:
+                return sp.Integer(1)
+
+            # Unevaluated unary minus on a constant: -5 inside a sum often stays as
+            # Mul(-1, 5), which sp.latex renders as \left(-1\right) 5.
+            if any(factor == -1 for factor in factors):
+                numeric_parts = []
+                other_parts = []
+                for factor in factors:
+                    if factor.is_number and factor.is_real is True:
+                        numeric_parts.append(factor)
+                    else:
+                        other_parts.append(factor)
+                if len(numeric_parts) >= 2:
+                    coeff = sp.Mul(*numeric_parts)
+                    factors = ([coeff] if coeff != 1 else []) + other_parts
+
             if not factors:
                 return sp.Integer(1)
             if len(factors) == 1:
@@ -4347,7 +4480,16 @@ class ShortAnswerEntity(BaseEntity):
             simplified = self.runtime_values.get("simplified_key")
 
         self.output_types = ["string"]
-        return str(simplified) if simplified is not None else ""
+        if simplified is None:
+            return ""
+        text = str(simplified)
+        places = self.ROUNDED_DECIMAL_PLACES
+        # When rounded grading is on, show the same N-decimal form used for compare.
+        # Otherwise still scrub binary-float noise (e.g. -15.9969999999987 → -15.997).
+        force = bool(self.runtime_values.get("accept_rounded_decimals"))
+        return format_expected_numeric_display(
+            text, places, only_float_noise=not force
+        )
 
     def grade_answer(self, student_input, points_available):
         try:
@@ -5101,19 +5243,47 @@ class AnswersOrDneEntity(BaseEntity):
             # Prefer exact rationals over float noise (e.g. -1.50000000000000 → -3/2)
             if isinstance(value, sp.Float):
                 try:
-                    value = sp.nsimplify(value, rational=True)
+                    value = sp.nsimplify(value, rational=True, tolerance=1e-12)
                 except Exception:
                     pass
             if isinstance(value, sp.Rational) and value.q != 1:
-                return str(value)
+                if value.q <= 1000:
+                    return str(value)
+                # Huge-denominator "rationals" from float noise — fall through to rounding
+                value = float(value)
             if isinstance(value, sp.Integer):
                 return str(int(value))
-            simplified = sp.simplify(value)
+            simplified = sp.simplify(value) if not isinstance(value, (int, float)) else value
             if isinstance(simplified, sp.Rational) and simplified.q != 1:
-                return str(simplified)
+                if simplified.q <= 1000:
+                    return str(simplified)
+                simplified = float(simplified)
+            if isinstance(simplified, sp.Integer):
+                return str(int(simplified))
+            # Real floats / noisy numerics: show the 3-decimal form used by
+            # accept_rounded_decimals grading on virtual shortAnswer slots.
+            try:
+                if isinstance(simplified, (int, float)):
+                    num = float(simplified)
+                elif (
+                    getattr(simplified, "is_number", False)
+                    and simplified.is_real is True
+                    and not simplified.has(sp.I)
+                ):
+                    num = float(simplified)
+                else:
+                    return str(simplified)
+                if math.isfinite(num):
+                    return format_expected_numeric_display(
+                        num, ShortAnswerEntity.ROUNDED_DECIMAL_PLACES
+                    )
+            except Exception:
+                pass
             return str(simplified)
         except Exception:
-            return str(value)
+            return format_expected_numeric_display(
+                str(value), ShortAnswerEntity.ROUNDED_DECIMAL_PLACES, only_float_noise=True
+            )
 
     def _format_interval_slot(self, lo, lo_closed, hi, hi_closed):
         # Unbounded ends conventionally use matching brackets in student entry
@@ -7092,7 +7262,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             elif archetype_name == 'matrix' or archetype_name == 'matrixResultByIndex':
                 # Matrix / cell extract: format SymPy results as LaTeX
                 if hasattr(validator, 'last_computed_sympy_result'):
-                    result_obj = validator.last_computed_sympy_result
+                    result_obj = validator.strip_trivial_multiplicative_ones(
+                        validator.last_computed_sympy_result
+                    )
                     latex_output = sp.latex(result_obj)
                     
                     # Scrape free variables from every calculation cell inside the Matrix frame shape
@@ -7132,7 +7304,9 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
 
                 if hasattr(validator, 'last_computed_sympy_result'):
                     try:
-                        result_obj = validator.last_computed_sympy_result
+                        result_obj = validator.strip_trivial_multiplicative_ones(
+                            validator.last_computed_sympy_result
+                        )
                         # sp.latex(None) → \text{None}; keep evaluated string instead
                         if result_obj is None:
                             latex_output = evaluated_output
@@ -7351,15 +7525,17 @@ def evaluate_and_format_entity(archetype_name, sequence_token, clean_inputs, pat
             if target_entry:
                 target_entry['simulated_value'] = evaluated_output
 
-    # Post-processing string cleanup for evaluate=False *1 artifacts (formula + matrix)
+    # Post-processing string cleanup for evaluate=False *1 / unary-minus artifacts
+    # (formula + matrix). Mul(-1, 5) often survives as "-1*5" / "\left(-1\right) 5".
     if archetype_name.lower().startswith('formula') or archetype_name in ('matrix', 'matrixResultByIndex'):
         if isinstance(evaluated_output, str):
-            evaluated_output = re.sub(r'\b-1\*1\b', '-1', evaluated_output)
+            evaluated_output = re.sub(r'\b-1\*(\d+(?:\.\d+)?)', r'-\1', evaluated_output)
             evaluated_output = re.sub(r'\b1\*', '', evaluated_output)
             evaluated_output = re.sub(r'\*1\b', '', evaluated_output)
 
         if isinstance(latex_output, str):
-            latex_output = re.sub(r'\\left\(-1\\right\)\s+1\b', r'\\left(-1\\right)', latex_output)
+            # "\left(-1\right) 5" / "\left(-1\right) 1" → "-5" / "-1" (not bare "(-1)")
+            latex_output = re.sub(r'\\left\(-1\\right\)\s+(\d+(?:\.\d+)?)', r'-\1', latex_output)
             latex_output = re.sub(r'\b-1\s+\\cdot\s+1\b', '-1', latex_output)
             latex_output = re.sub(r'\s+\\cdot\s+1\b', '', latex_output)
             latex_output = re.sub(r'\\left\(-1\\right\)\s+\\cdot\s+', '-', latex_output)
@@ -7985,7 +8161,17 @@ def _extract_expected_answers(validator, archetype):
                 expected.append(str(val))
                 break
 
-    # Resolve leftover token refs and de-dupe (preserve separate lines)
+    # Resolve leftover token refs, round numeric display to the graded places,
+    # and de-dupe (preserve separate lines).
+    places = _expected_display_places_for_validator(validator, archetype)
+    rv = getattr(validator, "runtime_values", None) or {}
+    force_numeric = (
+        archetype == "numAnswer"
+        or (
+            archetype == "shortAnswer"
+            and bool(rv.get("accept_rounded_decimals"))
+        )
+    )
     seen = set()
     unique = []
     for item in expected:
@@ -7995,6 +8181,11 @@ def _extract_expected_answers(validator, archetype):
         if re.fullmatch(r"(?:&lt;|<)[A-Za-z][A-Za-z0-9_]*(?:&gt;|>)", resolved):
             continue
         if re.fullmatch(r"opt_\d+", resolved, flags=re.IGNORECASE):
+            continue
+        resolved = _format_expected_answer_line(
+            resolved, places, force_numeric=force_numeric
+        )
+        if not resolved or resolved in seen:
             continue
         seen.add(resolved)
         unique.append(resolved)

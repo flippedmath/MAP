@@ -1535,6 +1535,8 @@ def assessment_has_retake_attempts(student_rows: list[dict]) -> bool:
 
 def _segment_display_map(loaded_segments) -> dict:
     """Map sequence_token → display string for resolving <token> refs."""
+    from .util import format_expected_numeric_display
+
     out = {}
     for seg in loaded_segments or []:
         if not isinstance(seg, dict):
@@ -1553,6 +1555,8 @@ def _segment_display_map(loaded_segments) -> dict:
             text = str(val).strip()
             if not text or text == "???" or text.startswith("{"):
                 continue
+            # Scrub binary-float noise (e.g. -15.9969999999987 → -15.997).
+            text = format_expected_numeric_display(text, 3, only_float_noise=True)
             out[token] = text
             break
     return out
@@ -1722,12 +1726,32 @@ def _format_expected_for_teacher(field: dict, display_map: dict | None = None):
     if _field_max_points(field) <= 0:
         return None
 
+    from .util import _format_expected_answer_line
+
     display_map = display_map or {}
     arch = str(field.get("archetype") or field.get("token") or "")
     base_arch = re.sub(r"\d+$", "", arch).strip()
+    inputs = field.get("inputs") if isinstance(field.get("inputs"), dict) else {}
+
+    places = 3
+    force_numeric = False
+    if base_arch == "numAnswer":
+        force_numeric = True
+        try:
+            places = max(0, int(inputs.get("decimal_places", 3)))
+        except (TypeError, ValueError):
+            places = 3
+    elif base_arch == "shortAnswer":
+        raw_flag = inputs.get("accept_rounded_decimals", False)
+        force_numeric = str(raw_flag).lower() in ("true", "1", "yes", "checked", "on") or raw_flag is True
 
     def _resolve_line(line) -> str:
-        return _resolve_angle_tokens(str(line), display_map).strip()
+        text = _resolve_angle_tokens(str(line), display_map).strip()
+        if not text:
+            return text
+        return _format_expected_answer_line(
+            text, places, force_numeric=force_numeric
+        )
 
     # MC: prefer linked latex / graph-aware option display over evaluate_output dumps.
     if base_arch == "multipleChoiceAnswer":
@@ -1764,7 +1788,6 @@ def _format_expected_for_teacher(field: dict, display_map: dict | None = None):
             if lines:
                 return lines
 
-    inputs = field.get("inputs") if isinstance(field.get("inputs"), dict) else {}
     options = inputs.get("options")
     if isinstance(options, list) and options:
         correct = []

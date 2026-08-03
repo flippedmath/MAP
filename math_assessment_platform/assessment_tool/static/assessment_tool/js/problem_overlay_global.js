@@ -922,6 +922,17 @@ document.addEventListener('DOMContentLoaded', function() {
             const label = escapeHtmlText(item.label || item.token || 'Answer field');
             const tokenKey = item.sequence_token || item.token || '';
             const stored = tokenKey ? previewStudentAnswers[tokenKey] : null;
+            const expectedList = Array.isArray(item.expected_answers)
+                ? item.expected_answers.map((x) => String(x ?? '').trim()).filter(Boolean)
+                : [];
+            const expectedHtml = (!item.fully_correct && expectedList.length)
+                ? `<div style="margin-top:6px; font-size:0.78rem; color:#047857;">
+                        <span style="font-weight:700; color:#065f46;">Expected:</span>
+                        ${expectedList.length === 1
+                            ? escapeHtmlText(expectedList[0])
+                            : `<ul style="margin:4px 0 0 1.1rem; padding:0;">${expectedList.map((e) => `<li>${escapeHtmlText(e)}</li>`).join('')}</ul>`}
+                   </div>`
+                : '';
             let canvasVisual = '';
             if (stored && typeof stored === 'object') {
                 const png = stored.format === 'png'
@@ -947,6 +958,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     <div style="min-width:0; flex:1;">
                         <div style="font-size:0.85rem; font-weight:600; color:#0f172a;">${label}</div>
                         ${detail}
+                        ${expectedHtml}
                         ${canvasVisual}
                     </div>
                     <div style="font-size:0.85rem; font-weight:700; color:#166534; white-space:nowrap;">${formatGradeNumber(earned)} / ${formatGradeNumber(max)}</div>
