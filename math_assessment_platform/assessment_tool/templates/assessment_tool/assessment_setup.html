@@ -23,7 +23,7 @@
             <p class="subtitle">Organize question groupings and build structural assessment sections.</p>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-            <a href="{% url 'assessment_practice_test' course.id assessment.id %}" class="btn-create-assessment" style="background: #0f766e; text-decoration: none;">
+            <a href="{% url 'assessment_practice_test' course_url_id assessment.id %}" class="btn-create-assessment" style="background: #0f766e; text-decoration: none;">
                 <i class="fas fa-play"></i> Practice Test
             </a>
             <button id="trigger-create-aqg-modal" class="btn-create-assessment">+ Add Question Group Section</button>
@@ -115,17 +115,17 @@
 <script>
     // 🌐 Restored renameUrl to the global operational configuration object
     window.AQG_CONFIG = {
-        createUrl: "{% url 'create_aqg_ajax' course.id assessment.id %}",
-        renameUrl: "{% url 'rename_aqg_ajax' course.id assessment.id %}",
-        reorderUrl: "{% url 'reorder_aqg_ajax' course.id assessment.id %}",
-        addProblemUrl: "{% url 'add_problem_to_aqg_ajax' course.id assessment.id %}",
-        duplicateProblemUrl: "{% url 'duplicate_problem_in_aqg_ajax' course.id assessment.id %}",
-        moveProblemUrl: "{% url 'move_problem_to_aqg_ajax' course.id assessment.id %}",
-        moveProblemToSetUrl: "{% url 'move_problem_to_cqd_ajax' course.id assessment.id %}",
-        removeProblemFromSetUrl: "{% url 'remove_problem_from_cqd_ajax' course.id assessment.id %}",
-        problemSetProblemsUrlTemplate: "{% url 'cqd_problems_list_ajax' course.id assessment.id 999999 %}".replace("999999", "{cqd_id}"),
+        createUrl: "{% url 'create_aqg_ajax' course_url_id assessment.id %}",
+        renameUrl: "{% url 'rename_aqg_ajax' course_url_id assessment.id %}",
+        reorderUrl: "{% url 'reorder_aqg_ajax' course_url_id assessment.id %}",
+        addProblemUrl: "{% url 'add_problem_to_aqg_ajax' course_url_id assessment.id %}",
+        duplicateProblemUrl: "{% url 'duplicate_problem_in_aqg_ajax' course_url_id assessment.id %}",
+        moveProblemUrl: "{% url 'move_problem_to_aqg_ajax' course_url_id assessment.id %}",
+        moveProblemToSetUrl: "{% url 'move_problem_to_cqd_ajax' course_url_id assessment.id %}",
+        removeProblemFromSetUrl: "{% url 'remove_problem_from_cqd_ajax' course_url_id assessment.id %}",
+        problemSetProblemsUrlTemplate: "{% url 'cqd_problems_list_ajax' course_url_id assessment.id 999999 %}".replace("999999", "{cqd_id}"),
         renameCqdUrl: "{% url 'update_cqd_name_ajax' %}",
-        saveProblemUrl: "{% url 'save_problem_workspace' course.id %}"
+        saveProblemUrl: "{% url 'save_problem_workspace' 0 %}"
     };
 </script>
 <script src="{% static 'assessment_tool/js/assessment_setup.js' %}"></script>

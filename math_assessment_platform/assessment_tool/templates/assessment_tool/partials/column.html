@@ -1,6 +1,6 @@
 {% load custom_tags %}
 
-<div class="column-path-meta" data-path="{{ current_path }}" style="display:none;"></div>
+<div class="column-path-meta" data-path="{{ current_path }}" data-folder-type="{{ parent_folder_type|default:'folder' }}" data-allow-new-folder="{% if allow_new_folder %}1{% else %}0{% endif %}" style="display:none;"></div>
 
 {% if show_manage_groups %}
 <div style="padding: 8px 10px; border-bottom: 1px solid #e5e5e5;">
@@ -98,7 +98,7 @@
 {% endif %}
 
 {% if level > 0 %}
-    {% if not is_protected %}
+    {% if allow_new_folder %}
         <div class="add-folder-container" style="margin-top: auto; padding: 10px; border-top: 1px solid #e5e5e5;">
             <button class="btn-add-folder" onclick="createNewFolder('{{ parent_id }}', {{ level }})"
                     style="width: 100%; text-align: left; background: none; border: none; color: #007aff; cursor: pointer; font-size: 0.9rem;">

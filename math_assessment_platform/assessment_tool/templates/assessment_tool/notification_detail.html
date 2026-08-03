@@ -312,6 +312,160 @@
     {% endif %}
 </div>
 
+{% elif notification.detail_kind == "parent_course_invitation" %}
+
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Parent grade access invitation</h2>
+    {% if notification.course_name %}
+        <p class="notification-summary">
+            Course: <strong>{{ notification.course_name }}</strong>
+        </p>
+    {% endif %}
+    {% if notification.student_name %}
+        <p class="notification-summary">
+            Student: <strong>{{ notification.student_name }}</strong>
+            {% if notification.student_username %} ({{ notification.student_username }}){% endif %}
+        </p>
+    {% endif %}
+    {% if notification.invite_message %}
+        <p class="notification-summary">{{ notification.invite_message }}</p>
+    {% endif %}
+    {% if notification.invite_path %}
+        <p style="margin-top: 16px;">
+            <a href="{{ notification.invite_path }}" class="btn" style="display: inline-block; padding: 10px 16px;">
+                Review and accept invitation
+            </a>
+        </p>
+    {% endif %}
+</div>
+
+{% elif notification.detail_kind == "parent_course_invitation_already_has_access" %}
+
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Parent with access used an invite</h2>
+    {% if notification.invite_message %}
+        <p class="notification-summary">{{ notification.invite_message }}</p>
+    {% endif %}
+    <dl class="notification-meta-grid">
+        {% if notification.course_name %}
+            <div>
+                <dt>Course</dt>
+                <dd>{{ notification.course_name }}</dd>
+            </div>
+        {% endif %}
+        {% if notification.student_name %}
+            <div>
+                <dt>Student</dt>
+                <dd>{{ notification.student_name }}</dd>
+            </div>
+        {% endif %}
+        <div>
+            <dt>Invitation sent to</dt>
+            <dd>{{ notification.invitation_sent_to_email|default:"—" }}</dd>
+        </div>
+        <div>
+            <dt>User who opened the link</dt>
+            <dd>
+                {{ notification.accessor_display_name|default:notification.accessor_username|default:"—" }}
+                {% if notification.accessor_username %} ({{ notification.accessor_username }}){% endif %}
+                {% if notification.accessor_email %} — {{ notification.accessor_email }}{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% if notification.course_management_path %}
+        <p style="margin-top: 16px;">
+            <a href="{{ notification.course_management_path }}" class="btn" style="display: inline-block; padding: 10px 16px;">
+                Open course management
+            </a>
+        </p>
+    {% endif %}
+</div>
+
+{% elif notification.detail_kind == "parent_course_invitation_wrong_account_type" %}
+
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Non-Parent account used a parent invitation</h2>
+    {% if notification.invite_message %}
+        <p class="notification-summary">{{ notification.invite_message }}</p>
+    {% endif %}
+    <dl class="notification-meta-grid">
+        {% if notification.course_name %}
+            <div>
+                <dt>Course</dt>
+                <dd>{{ notification.course_name }}</dd>
+            </div>
+        {% endif %}
+        {% if notification.student_name %}
+            <div>
+                <dt>Student</dt>
+                <dd>{{ notification.student_name }}</dd>
+            </div>
+        {% endif %}
+        <div>
+            <dt>Invitation sent to</dt>
+            <dd>{{ notification.invitation_sent_to_email|default:"—" }}</dd>
+        </div>
+        <div>
+            <dt>User who opened the link</dt>
+            <dd>
+                {{ notification.accessor_display_name|default:notification.accessor_username|default:"—" }}
+                {% if notification.accessor_username %} ({{ notification.accessor_username }}){% endif %}
+                {% if notification.accessor_user_type %} — {{ notification.accessor_user_type }}{% endif %}
+                {% if notification.accessor_email %} — {{ notification.accessor_email }}{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% if notification.course_management_path %}
+        <p style="margin-top: 16px;">
+            <a href="{{ notification.course_management_path }}" class="btn" style="display: inline-block; padding: 10px 16px;">
+                Open course management
+            </a>
+        </p>
+    {% endif %}
+</div>
+
+{% elif notification.detail_kind == "parent_course_invitation_different_account" %}
+
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">Parent invitation accepted with a different account</h2>
+    {% if notification.invite_message %}
+        <p class="notification-summary">{{ notification.invite_message }}</p>
+    {% endif %}
+    <dl class="notification-meta-grid">
+        {% if notification.course_name %}
+            <div>
+                <dt>Course</dt>
+                <dd>{{ notification.course_name }}</dd>
+            </div>
+        {% endif %}
+        {% if notification.student_name %}
+            <div>
+                <dt>Student</dt>
+                <dd>{{ notification.student_name }}</dd>
+            </div>
+        {% endif %}
+        <div>
+            <dt>Invitation sent to</dt>
+            <dd>{{ notification.invitation_sent_to_email|default:"—" }}</dd>
+        </div>
+        <div>
+            <dt>Accepted by</dt>
+            <dd>
+                {{ notification.accepted_display_name|default:notification.accepted_username|default:"—" }}
+                {% if notification.accepted_username %} ({{ notification.accepted_username }}){% endif %}
+                {% if notification.accepted_email %} — {{ notification.accepted_email }}{% endif %}
+            </dd>
+        </div>
+    </dl>
+    {% if notification.invite_path %}
+        <p style="margin-top: 16px;">
+            <a href="{{ notification.invite_path }}" class="btn" style="display: inline-block; padding: 10px 16px;">
+                Open invitation link
+            </a>
+        </p>
+    {% endif %}
+</div>
+
 {% elif notification.detail_kind == "structured" %}
 
 {% for section in notification.generic_sections %}

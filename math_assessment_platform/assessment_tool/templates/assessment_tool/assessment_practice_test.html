@@ -12,7 +12,7 @@
         <div class="practice-test-header">
             <div class="header-title-block">
                 <h2 style="display: inline-flex; align-items: center; gap: 10px;">
-                    <a href="{% url 'assessment_setup' course.id assessment.id %}" class="practice-back-link" title="Back to assessment setup">
+                    <a href="{% url 'assessment_setup' course_url_id assessment.id %}" class="practice-back-link" title="Back to assessment setup">
                         <i class="fas fa-arrow-left"></i>
                     </a>
                     Practice Test: {{ assessment.name }}
@@ -68,9 +68,9 @@
 <script src="{% static 'assessment_tool/js/utils.js' %}"></script>
 <script>
     window.PRACTICE_TEST_CONFIG = {
-        startUrl: "{% url 'assessment_practice_test_start' course.id assessment.id %}",
-        gradeUrl: "{% url 'assessment_practice_test_grade' course.id assessment.id %}",
-        setupUrl: "{% url 'assessment_setup' course.id assessment.id %}",
+        startUrl: "{% url 'assessment_practice_test_start' course_url_id assessment.id %}",
+        gradeUrl: "{% url 'assessment_practice_test_grade' course_url_id assessment.id %}",
+        setupUrl: "{% url 'assessment_setup' course_url_id assessment.id %}",
         assessmentName: "{{ assessment.name|escapejs }}"
     };
 </script>

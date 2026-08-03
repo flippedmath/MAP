@@ -24,6 +24,7 @@ from .folder_roots import (
     WORKSPACE_COURSE_MANAGEMENT_MESSAGE,
     course_is_under_workspace,
 )
+from .dashboard import user_display_name
 
 logger = logging.getLogger(__name__)
 
@@ -321,13 +322,7 @@ def user_matches_invite(user, invite) -> bool:
 
 
 def _display_name_for(user) -> str:
-    return (
-        user.user_display_name
-        or " ".join(
-            part for part in [user.user_first_name, user.user_last_name] if part
-        ).strip()
-        or user.username
-    )
+    return user_display_name(user)
 
 
 def _notify_teacher_already_enrolled(invite, user, *, original_email, original_username):

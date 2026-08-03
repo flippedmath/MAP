@@ -60,7 +60,7 @@ from .collaboration import (
 )
 from .folder_roots import FOLDER_COLLABORATION, FOLDER_WORKSPACE
 from .models import BranchGroup, PermissionGroup, UserProfile
-from .util import clone_node_recursive, get_valid_unique_name
+from .util import clone_node_recursive, get_valid_unique_name, resolve_unique_sibling_name
 
 
 def _require_teacher_or_it(user):
@@ -730,15 +730,12 @@ def move_item(request):
     if not can_edit_branch(request.user, dest) and dest.owner_id != request.user.user_id:
         return JsonResponse({"error": "Need edit access on destination."}, status=403)
 
-    # Hierarchy checks
-    dest_type = dest.folder_type
-    src_type = src.folder_type
-    if dest_type in ("course", "assessment", "aqg", "cqd") and src_type == "folder":
-        return JsonResponse({"error": "Folders cannot be placed inside course/assessment/AQG/CQD nodes."}, status=400)
-    if dest_type == "course" and src_type == "course":
-        return JsonResponse({"error": "A course cannot be placed inside another course."}, status=400)
-    if dest_type == "cqd" and src_type == "assessment":
-        return JsonResponse({"error": "An assessment cannot be placed inside a CQD."}, status=400)
+    # Hierarchy checks — course→assessment→aqg→cqd|problem nesting only.
+    from .branch_hierarchy import branch_placement_error
+
+    placement_err = branch_placement_error(dest.folder_type, src.folder_type)
+    if placement_err:
+        return JsonResponse({"error": placement_err}, status=400)
 
     dest_path = dest.get_parent_path() + dest.name + "/"
     under_collab = f"/{request.user.username}_root/{FOLDER_COLLABORATION}/" in dest_path or (
@@ -866,7 +863,7 @@ def move_item(request):
             restore_branch_acl(src, acl_snap)
             return JsonResponse({"ok": True, "action": "replaced", "id": src.id})
 
-        unique_name, error = get_valid_unique_name(BranchGroup, dest, src.name, exclude_id=src.id)
+        unique_name, error = resolve_unique_sibling_name(dest, src.name, exclude_id=src.id)
         if error:
             return JsonResponse({"error": error}, status=400)
         src.parent = dest

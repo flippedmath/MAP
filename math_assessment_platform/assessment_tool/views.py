@@ -15,6 +15,7 @@ from .models import (
 )
 from .dashboard import (
     dashboard_courses_for_user,
+    dashboard_parent_groups_for_user,
     teacher_active_retakes_for_user,
     teacher_focus_unlocks_for_user,
     teacher_grade_releases_for_user,
@@ -24,11 +25,17 @@ from .dashboard import (
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
 import json
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404
 
 from django.db import transaction
-from .forms import TeacherRegistrationForm, CourseInviteForm, StudentRegistrationForm
-from .models import EmailAuthentication, UserCourseActivation
+from .forms import (
+    TeacherRegistrationForm,
+    CourseInviteForm,
+    ParentCourseInviteForm,
+    ParentRegistrationForm,
+    StudentRegistrationForm,
+)
+from .models import EmailAuthentication, UserCourseActivation, ParentCourseInvitation
 from .course_enrollment import (
     enrollment_within_credit_reimbursement_window,
     ensure_active_enrollment,
@@ -53,6 +60,25 @@ from .course_invites import (
     user_can_manage_course,
     user_matches_invite,
     void_course_invite,
+)
+from .parent_invites import (
+    PARENT_INVITE_SESSION_KEY,
+    accept_parent_invite,
+    claim_parent_invite_for_new_user,
+    complete_parent_invite_if_pending,
+    create_parent_invite,
+    get_parent_invite_by_code,
+    grant_parent_access,
+    handle_non_parent_invite_access,
+    handle_parent_already_has_access,
+    is_unclaimed_parent_email_invite,
+    parent_access_rows_for_course,
+    parent_has_course_access,
+    parent_invite_status_label,
+    parent_redeem_block_reason,
+    parent_user_matches_invite,
+    revoke_parent_access,
+    void_parent_invite,
 )
 import secrets
 import random
@@ -110,6 +136,11 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
         user = self.request.user
 
         context['dashboard_courses'] = dashboard_courses_for_user(user)
+        context['parent_dashboard'] = (
+            dashboard_parent_groups_for_user(user)
+            if user.user_type == 'Parent'
+            else None
+        )
 
         if user.user_type == 'Student':
             context['ongoing_test'] = False
@@ -177,7 +208,7 @@ def teacher_live_attention_ajax(request):
 
 @login_required
 def parent_grade_summary_view(request, student_id, course_id):
-    """Placeholder grade summary for parents linked via parent_user_course."""
+    """Parent-facing grades for a linked student/course (read-only)."""
     if request.user.user_type != 'Parent':
         messages.error(request, "Only parent accounts can view grade summaries.")
         return redirect('dashboard')
@@ -191,13 +222,27 @@ def parent_grade_summary_view(request, student_id, course_id):
         messages.error(request, "Grade summary not found for this student and course.")
         return redirect('dashboard')
 
+    from .assessment_grades import student_grades_for_course
     from .dashboard import user_display_name
 
-    return render(request, 'assessment_tool/grade_summary_placeholder.html', {
-        'student': link.student,
-        'student_name': user_display_name(link.student),
-        'course': link.course,
-    })
+    payload = student_grades_for_course(link.course, link.student)
+    student_name = user_display_name(link.student)
+    return render(
+        request,
+        'assessment_tool/course_grades_student.html',
+        {
+            'course': link.course,
+            'active_tab': 'grades',
+            'grade_rows': payload['rows'],
+            'grade_total': payload['total'],
+            'grade_aggregation_mode': payload['grade_aggregation_mode'],
+            'is_teacher_viewer': False,
+            'parent_viewer': True,
+            'student': link.student,
+            'student_name': student_name,
+            'grades_subtitle': f"Grades for {student_name} in this course.",
+        },
+    )
 
 
 def register_teacher(request):
@@ -313,6 +358,15 @@ def verify_email(request):
                         messages.success(request, invite_msg)
                     else:
                         messages.warning(request, invite_msg)
+                parent_invite_code = request.session.pop(PARENT_INVITE_SESSION_KEY, None)
+                granted, parent_msg = complete_parent_invite_if_pending(
+                    user, parent_invite_code
+                )
+                if parent_msg:
+                    if granted:
+                        messages.success(request, parent_msg)
+                    else:
+                        messages.warning(request, parent_msg)
                 return redirect('dashboard')
             elif is_expired:
                 messages.error(request, "This code has expired. Please resend a new one.")
@@ -350,6 +404,7 @@ def database_viewer(request):
         'user_profile': UserProfile,
         'email_authentication': EmailAuthentication,
         'user_course_activation': UserCourseActivation,
+        'parent_course_invitation': ParentCourseInvitation,
         'student_course_enrollment': StudentCourseEnrollment,
         'final_grade_calculation': FinalGradeCalculation,
         'course': Course,
@@ -383,38 +438,55 @@ def database_viewer(request):
 @login_required
 def notifications_view(request):
     from .notifications import (
+        NOTIFICATIONS_PAGE_SIZE,
+        delete_all_read_notifications_for_user,
         empty_notification_trash_for_user,
-        notifications_for_user,
+        mark_all_active_notifications_read,
+        notifications_page_for_user,
         reason_label_for,
         trashed_notifications_for_user,
+        user_has_read_list_notifications,
         user_has_trashed_notifications,
+        user_has_unread_list_notifications,
         utc_isoformat,
     )
 
-    if request.method == "POST" and request.POST.get("action") == "empty_trash":
-        removed = empty_notification_trash_for_user(request.user)
-        if removed:
-            messages.success(
-                request,
-                f"Emptied trash ({removed} notification{'s' if removed != 1 else ''} permanently removed).",
-            )
-        else:
-            messages.info(request, "Trash was already empty.")
-        return redirect("notifications")
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "empty_trash":
+            removed = empty_notification_trash_for_user(request.user)
+            if removed:
+                messages.success(
+                    request,
+                    f"Emptied trash ({removed} notification{'s' if removed != 1 else ''} permanently removed).",
+                )
+            else:
+                messages.info(request, "Trash was already empty.")
+            return redirect("notifications")
+        if action == "mark_all_read":
+            updated = mark_all_active_notifications_read(request.user)
+            if updated:
+                messages.success(
+                    request,
+                    f"Marked {updated} notification{'s' if updated != 1 else ''} as read.",
+                )
+            else:
+                messages.info(request, "No unread notifications to mark.")
+            return redirect("notifications")
+        if action == "delete_all_read":
+            removed = delete_all_read_notifications_for_user(request.user)
+            if removed:
+                messages.success(
+                    request,
+                    f"Moved {removed} read notification{'s' if removed != 1 else ''} to trash.",
+                )
+            else:
+                messages.info(request, "No read notifications to delete.")
+            return redirect("notifications")
 
-    rows = []
-    for note in notifications_for_user(request.user, include_content=False):
-        rows.append({
-            "id": note.pk,
-            "title": note.title,
-            "reason": note.reason,
-            "reason_label": reason_label_for(note.reason),
-            "creation_date": note.creation_date,
-            "creation_date_utc": (
-                utc_isoformat(note.creation_date) if note.creation_date else None
-            ),
-            "is_read": note.is_read,
-        })
+    rows, _total_count, has_more = notifications_page_for_user(
+        request.user, offset=0, limit=NOTIFICATIONS_PAGE_SIZE
+    )
 
     trash_rows = []
     for note in trashed_notifications_for_user(request.user, include_content=False):
@@ -438,6 +510,35 @@ def notifications_view(request):
         "notifications": rows,
         "trashed_notifications": trash_rows,
         "has_trashed_notifications": user_has_trashed_notifications(request.user),
+        "show_mark_all_read": user_has_unread_list_notifications(request.user),
+        "show_delete_all_read": user_has_read_list_notifications(request.user),
+        "has_more_notifications": has_more,
+        "notifications_page_size": NOTIFICATIONS_PAGE_SIZE,
+        "notifications_loaded_count": len(rows),
+    })
+
+
+@login_required
+@require_GET
+def notifications_load_more_ajax(request):
+    from .notifications import NOTIFICATIONS_PAGE_SIZE, notifications_page_for_user
+
+    try:
+        offset = int(request.GET.get("offset", 0))
+    except (TypeError, ValueError):
+        offset = 0
+    if offset < 0:
+        offset = 0
+
+    rows, total_count, has_more = notifications_page_for_user(
+        request.user, offset=offset, limit=NOTIFICATIONS_PAGE_SIZE
+    )
+    return JsonResponse({
+        "notifications": rows,
+        "total_count": total_count,
+        "next_offset": offset + len(rows),
+        "has_more": has_more,
+        "page_size": NOTIFICATIONS_PAGE_SIZE,
     })
 
 
@@ -828,6 +929,11 @@ def get_folder_contents(request, group_id):
     if owns and group.name in (FOLDER_COLLABORATION, FOLDER_PUBLIC_LIBRARY, FOLDER_TRASH):
         is_protected = True
 
+    from .branch_hierarchy import parent_allows_new_folder
+
+    parent_folder_type = group.folder_type or 'folder'
+    allow_new_folder = (not is_protected) and parent_allows_new_folder(parent_folder_type)
+
     return render(request, 'assessment_tool/partials/column.html', {
         'contents': {
             'folders': folders_list,
@@ -838,6 +944,8 @@ def get_folder_contents(request, group_id):
         'parent_id': group.id,
         'level': int(request.GET.get('level', 1)),
         'is_protected': is_protected,
+        'allow_new_folder': allow_new_folder,
+        'parent_folder_type': parent_folder_type,
         'current_path': current_path,
         'show_manage_groups': show_manage_groups,
     })
@@ -891,6 +999,7 @@ def create_folder(request):
     parent_full_path = parent_folder.get_parent_path() + parent_folder.name + "/"
     
     from .folder_roots import protected_subtree_prefixes, user_root_path
+    from .branch_hierarchy import branch_placement_error
     root = user_root_path(username)
     # Block creation inside Courses / Collaboration / Student Provided / Public Library / Trash.
     # Workspace intentionally allows sub-folders.
@@ -900,6 +1009,10 @@ def create_folder(request):
         return JsonResponse({
             'error': 'This directory is managed by the system. Sub-folders cannot be added here.'
         }, status=403)
+
+    placement_err = branch_placement_error(parent_folder.folder_type, 'folder')
+    if placement_err:
+        return JsonResponse({'error': placement_err}, status=400)
 
     # Use the helper logic
     unique_name, error = get_valid_unique_name(BranchGroup, parent_folder, requested_name)
@@ -912,7 +1025,8 @@ def create_folder(request):
         name=unique_name,
         order=unique_name,
         parent=parent_folder,
-        owner=request.user
+        owner=request.user,
+        folder_type='folder',
     )
 
     return JsonResponse({'status': 'success', 'id': new_folder.id})
@@ -1072,8 +1186,11 @@ def rename_item(request):
             'folder': (BranchGroup, 'name'),
             'course': (Course, 'name'), 
             'assessment': (Assessment, 'name'),
+            'aqg': (AssessmentQuestionGroup, 'name'),
+            'cqd': (CustomQuestionDistribution, 'name'),
             'problem': (Problem, 'title'),
             'assessment_selection': (AssessmentQuestionGroup, 'name'),
+            'question_selection': (CustomQuestionDistribution, 'name'),
         }
 
         if item_type not in model_map:
@@ -1082,7 +1199,7 @@ def rename_item(request):
         model_class, field_name = model_map[item_type]
         
         # --- COMPONENT FETCH AND SECURITY CLEARANCE ---
-        if item_type in ['folder', 'course', 'assessment']:
+        if item_type in ['folder', 'course', 'assessment', 'aqg', 'cqd']:
             obj = get_object_or_404(BranchGroup, id=item_id)
             
             # Since verify_workspace_clearance expects a Problem instance, 
@@ -1094,8 +1211,31 @@ def rename_item(request):
             parent = obj.parent
             exclude_branch_id = obj.id
         else:
-            # 🚀 UPDATED: Fetch independent items and defer to your global clearance engine
-            obj = get_object_or_404(model_class.objects.select_related('branch_location'), id=item_id)
+            # Independent payload rows. Explorer context menu may pass either the
+            # payload id or the linked BranchGroup id for problems / AQG / CQD.
+            if item_type == 'problem':
+                obj = (
+                    Problem.objects.select_related('branch_location')
+                    .filter(id=item_id)
+                    .first()
+                )
+                if obj is None:
+                    obj = get_object_or_404(
+                        Problem.objects.select_related('branch_location'),
+                        branch_location_id=item_id,
+                    )
+            elif item_type in ('assessment_selection', 'question_selection'):
+                obj = get_object_or_404(
+                    model_class.objects.select_related(
+                        'branch_location' if item_type == 'assessment_selection' else 'assigned_folder'
+                    ),
+                    id=item_id,
+                )
+            else:
+                obj = get_object_or_404(
+                    model_class.objects.select_related('branch_location'),
+                    id=item_id,
+                )
             
             if item_type == 'problem':
                 # Pass your problem record straight to your specialized security matrix mapping routine
@@ -1103,16 +1243,18 @@ def rename_item(request):
                     return JsonResponse({'error': 'You do not have workspace clearance to rename this problem.'}, status=403)
             else:
                 # Fallback security check for other independent items (like assessment_selection groups)
-                if request.user.user_type != 'IT_Support' and obj.branch_location and obj.branch_location.owner != request.user:
+                branch = getattr(obj, 'branch_location', None) or getattr(obj, 'assigned_folder', None)
+                if request.user.user_type != 'IT_Support' and branch and branch.owner != request.user:
                     return JsonResponse({'error': 'You do not have permission to rename this resource.'}, status=403)
 
-            if not obj.branch_location:
+            branch = getattr(obj, 'branch_location', None) or getattr(obj, 'assigned_folder', None)
+            if not branch:
                 return JsonResponse({'error': 'Item is missing its linked folder location.'}, status=400)
 
-            item_full_path = obj.branch_location.get_parent_path() + obj.branch_location.name + "/"
+            item_full_path = branch.get_parent_path() + branch.name + "/"
             # Sibling uniqueness is among folders under the same parent (AQG section, etc.)
-            parent = obj.branch_location.parent
-            exclude_branch_id = obj.branch_location_id
+            parent = branch.parent
+            exclude_branch_id = branch.id
 
         # Uniqueness among sibling BranchGroup folders under `parent`, excluding this node
         new_name, error = get_valid_unique_name(
@@ -1134,15 +1276,26 @@ def rename_item(request):
 
         # --- EXECUTE SYNCHRONIZED DATABASE ATOMIC WRITE ---
         with transaction.atomic():
-            if item_type in ['course', 'assessment']:
+            if item_type in ['course', 'assessment', 'aqg']:
                 obj.name = new_name
                 obj.save()
 
-                payload_relation_str = 'course' if item_type == 'course' else 'assessment'
+                payload_relation_str = {
+                    'course': 'course',
+                    'assessment': 'assessment',
+                    'aqg': 'aqg',
+                }[item_type]
                 if hasattr(obj, payload_relation_str):
                     payload_obj = getattr(obj, payload_relation_str)
                     setattr(payload_obj, field_name, new_name)
                     payload_obj.save()
+
+            elif item_type == 'cqd':
+                obj.name = new_name
+                obj.save()
+                if hasattr(obj, 'cqd'):
+                    obj.cqd.name = new_name
+                    obj.cqd.save(update_fields=['name'])
                     
             elif item_type == 'folder':
                 obj.name = new_name
@@ -1166,9 +1319,10 @@ def rename_item(request):
             else:
                 setattr(obj, field_name, new_name)
                 obj.save()
-                if getattr(obj, 'branch_location', None):
-                    obj.branch_location.name = new_name
-                    obj.branch_location.save()
+                branch = getattr(obj, 'branch_location', None) or getattr(obj, 'assigned_folder', None)
+                if branch:
+                    branch.name = new_name
+                    branch.save()
 
         return JsonResponse({'status': 'success', 'new_name': new_name})
     
@@ -1223,6 +1377,9 @@ def login_view(request):
             invite_code = request.session.get(INVITE_SESSION_KEY)
             if invite_code:
                 return redirect('course_invite_redeem', code=invite_code)
+            parent_invite_code = request.session.get(PARENT_INVITE_SESSION_KEY)
+            if parent_invite_code:
+                return redirect('parent_invite_redeem', code=parent_invite_code)
             return redirect('dashboard')
         else:
             messages.error(request, "Invalid username or password. Please try again.")
@@ -1303,6 +1460,7 @@ def course_management_view(request, course_id):
         return redirect('course_detail', course_id=course.id)
 
     invite_form = CourseInviteForm()
+    parent_invite_form = ParentCourseInviteForm()
 
     if request.method == 'POST':
         action = request.POST.get('action') or ''
@@ -1386,6 +1544,106 @@ def course_management_view(request, course_id):
                 messages.success(request, msg)
             except ValueError as exc:
                 messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'grant_parent_access':
+            parent_id = request.POST.get('parent_id')
+            student_id = request.POST.get('student_id')
+            parent = get_object_or_404(UserProfile, pk=parent_id, user_type='Parent')
+            student = get_object_or_404(UserProfile, pk=student_id, user_type='Student')
+            try:
+                grant_parent_access(
+                    course=course,
+                    parent=parent,
+                    student=student,
+                    created_by=request.user,
+                )
+                messages.success(
+                    request,
+                    f"Granted grade access for {parent.username} to view {student.username}.",
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'revoke_parent_access':
+            parent_id = request.POST.get('parent_id')
+            student_id = request.POST.get('student_id')
+            parent = get_object_or_404(UserProfile, pk=parent_id, user_type='Parent')
+            student = get_object_or_404(UserProfile, pk=student_id, user_type='Student')
+            try:
+                removed = revoke_parent_access(
+                    course=course,
+                    parent=parent,
+                    student=student,
+                )
+                if removed:
+                    messages.success(
+                        request,
+                        f"Revoked grade access for {parent.username} "
+                        f"(student {student.username}) in this course.",
+                    )
+                else:
+                    messages.info(request, "That parent did not have access for this course.")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'create_parent_invite':
+            parent_invite_form = ParentCourseInviteForm(request.POST)
+            if parent_invite_form.is_valid():
+                student = get_object_or_404(
+                    UserProfile,
+                    pk=parent_invite_form.cleaned_data['student_id'],
+                    user_type='Student',
+                )
+                try:
+                    invite = create_parent_invite(
+                        course=course,
+                        created_by=request.user,
+                        student=student,
+                        parent_email_raw=parent_invite_form.cleaned_data['parent_email'],
+                    )
+                    redeem_url = request.build_absolute_uri(
+                        reverse('parent_invite_redeem', kwargs={'code': invite.code})
+                    )
+                    if invite.target_user_id:
+                        messages.success(
+                            request,
+                            "Parent invitation created. The parent was notified and must open "
+                            f"the invite link to accept. Link: {redeem_url}",
+                        )
+                    else:
+                        messages.success(
+                            request,
+                            f"Parent invitation created. Share this link: {redeem_url}",
+                        )
+                    return redirect('course_management', course_id=course.id)
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+                except IntegrityError:
+                    messages.error(
+                        request,
+                        "Could not create parent invitation "
+                        "(duplicate pending invite or database conflict).",
+                    )
+        elif action == 'void_parent_invite':
+            invite_id = request.POST.get('invite_id')
+            invite = ParentCourseInvitation.objects.filter(
+                pk=invite_id,
+                course=course,
+            ).first()
+            if invite is None:
+                messages.warning(
+                    request,
+                    "This parent invitation cannot be voided because it was already "
+                    "accepted. Refresh the page, then use Revoke on the parent’s grade "
+                    "access for that student if you no longer want them to view grades "
+                    "for this course.",
+                )
+            else:
+                try:
+                    void_parent_invite(invite)
+                    messages.success(request, "Parent invitation voided and removed.")
+                except ValueError as exc:
+                    messages.error(request, str(exc))
             return redirect('course_management', course_id=course.id)
 
     enrolled_slots = (
@@ -1476,14 +1734,69 @@ def course_management_view(request, course_id):
             'can_void': status == UserCourseActivation.STATUS_PENDING,
         })
 
+    parent_access_rows = parent_access_rows_for_course(course)
+
+    parent_invites = list(
+        ParentCourseInvitation.objects.filter(
+            course=course,
+            status=ParentCourseInvitation.STATUS_PENDING,
+        )
+        .select_related('target_user', 'created_by', 'student')
+        .order_by('-creation_date', '-pk')
+    )
+    parent_emails_to_check = {
+        (inv.temp_email or '').strip().lower()
+        for inv in parent_invites
+        if not inv.target_user_id and inv.temp_email
+    }
+    parent_existing_emails = set()
+    if parent_emails_to_check:
+        parent_existing_emails = {
+            (email or '').strip().lower()
+            for email in UserProfile.objects.filter(
+                user_email__in=parent_emails_to_check
+            ).values_list('user_email', flat=True)
+        }
+
+    parent_invite_rows = []
+    for inv in parent_invites:
+        target = inv.target_user
+        if target:
+            recipient = target.username
+            if target.user_email:
+                recipient = f"{target.username} ({target.user_email})"
+            account_exists = True
+        else:
+            recipient = inv.temp_email or '—'
+            email_key = (inv.temp_email or '').strip().lower()
+            account_exists = bool(email_key and email_key in parent_existing_emails)
+        student = inv.student
+        parent_invite_rows.append({
+            'invite': inv,
+            'recipient': recipient,
+            'student_name': user_display_name(student) if student else '—',
+            'student_username': student.username if student else '—',
+            'status': inv.status,
+            'status_label': parent_invite_status_label(inv.status),
+            'account_exists': account_exists,
+            'redeem_url': request.build_absolute_uri(
+                reverse('parent_invite_redeem', kwargs={'code': inv.code})
+            ),
+            'can_void': inv.status == ParentCourseInvitation.STATUS_PENDING,
+        })
+
     return render(request, 'assessment_tool/course_management.html', {
         'course': course,
         'user_type': request.user.user_type,
         'active_tab': 'management',
         'invite_form': invite_form,
+        'parent_invite_form': parent_invite_form,
         'enrolled_students': enrolled_students,
         'invite_rows': invite_rows,
+        'parent_access_rows': parent_access_rows,
+        'parent_invite_rows': parent_invite_rows,
         'highlight_invite_id': request.GET.get('invite'),
+        'highlight_parent_invite_id': request.GET.get('parent_invite'),
     })
 
 
@@ -1661,6 +1974,189 @@ def course_invite_signup_view(request, code):
         'form': form,
         'invite': invite,
         'course': invite.course,
+        'locked_email': invite.temp_email,
+        'invite_code': code,
+    })
+
+
+def parent_invite_redeem_view(request, code):
+    invite = get_parent_invite_by_code(code)
+    block = parent_redeem_block_reason(invite)
+    if block:
+        return render(request, 'assessment_tool/parent_invite_redeem.html', {
+            'error': block,
+            'invite': invite,
+        })
+
+    student_name = user_display_name(invite.student)
+
+    if is_unclaimed_parent_email_invite(invite) and not request.user.is_authenticated:
+        request.session[PARENT_INVITE_SESSION_KEY] = code
+        return render(request, 'assessment_tool/parent_invite_redeem.html', {
+            'invite': invite,
+            'mode': 'choose',
+            'course': invite.course,
+            'student_name': student_name,
+            'invited_email': invite.temp_email,
+        })
+
+    if request.user.is_authenticated:
+        if request.user.user_type != 'Parent':
+            msg = handle_non_parent_invite_access(invite, request.user)
+            return render(request, 'assessment_tool/parent_invite_redeem.html', {
+                'error': msg,
+                'invite': invite,
+                'mode': 'non_parent',
+            })
+
+        if parent_has_course_access(
+            parent=request.user,
+            student=invite.student,
+            course=invite.course,
+        ):
+            msg = handle_parent_already_has_access(invite, request.user)
+            request.session.pop(PARENT_INVITE_SESSION_KEY, None)
+            return render(request, 'assessment_tool/parent_invite_redeem.html', {
+                'invite': invite,
+                'mode': 'already_has_access',
+                'course': invite.course,
+                'student_name': student_name,
+                'message': msg,
+            })
+
+        matches = parent_user_matches_invite(request.user, invite)
+        alternate_ok = is_unclaimed_parent_email_invite(invite) and not matches
+        if not matches and not alternate_ok:
+            messages.error(
+                request,
+                "This invitation is for a different account. Log out and use the correct account.",
+            )
+            return render(request, 'assessment_tool/parent_invite_redeem.html', {
+                'error': 'Invitation does not match the signed-in account.',
+                'invite': invite,
+            })
+
+        if request.user.unactivated_account:
+            request.session[PARENT_INVITE_SESSION_KEY] = code
+            messages.info(request, "Verify your email before accepting parent grade access.")
+            return redirect('verify_email')
+
+        if request.method == 'POST' and request.POST.get('action') == 'accept':
+            granted, msg = accept_parent_invite(invite, request.user)
+            request.session.pop(PARENT_INVITE_SESSION_KEY, None)
+            if granted:
+                messages.success(request, msg)
+                return redirect('dashboard')
+            if parent_has_course_access(
+                parent=request.user,
+                student=invite.student,
+                course=invite.course,
+            ):
+                return render(request, 'assessment_tool/parent_invite_redeem.html', {
+                    'invite': invite,
+                    'mode': 'already_has_access',
+                    'course': invite.course,
+                    'student_name': student_name,
+                    'message': msg,
+                })
+            messages.warning(request, msg)
+            return redirect('dashboard')
+
+        different_email = bool(
+            alternate_ok
+            or (
+                invite.temp_email
+                and request.user.user_email
+                and invite.temp_email.lower() != request.user.user_email.lower()
+            )
+        )
+        return render(request, 'assessment_tool/parent_invite_redeem.html', {
+            'invite': invite,
+            'mode': 'accept_alternate' if different_email else 'accept',
+            'course': invite.course,
+            'student_name': student_name,
+            'invited_email': invite.temp_email,
+            'account_email': request.user.user_email,
+            'account_username': request.user.username,
+        })
+
+    request.session[PARENT_INVITE_SESSION_KEY] = code
+    messages.info(request, "Log in to accept this parent grade-access invitation.")
+    return redirect('login')
+
+
+def parent_invite_signup_view(request, code):
+    invite = get_parent_invite_by_code(code)
+    block = parent_redeem_block_reason(invite)
+    if block:
+        return render(request, 'assessment_tool/parent_invite_redeem.html', {
+            'error': block,
+            'invite': invite,
+        })
+
+    if invite.target_user_id:
+        return redirect('parent_invite_redeem', code=code)
+
+    if not invite.temp_email:
+        return render(request, 'assessment_tool/parent_invite_redeem.html', {
+            'error': 'This invitation cannot be used for new account signup.',
+            'invite': invite,
+        })
+
+    if UserProfile.objects.filter(user_email__iexact=invite.temp_email).exists():
+        return redirect('parent_invite_redeem', code=code)
+
+    if request.user.is_authenticated:
+        if request.user.user_type == 'Parent' and is_unclaimed_parent_email_invite(invite):
+            return redirect('parent_invite_redeem', code=code)
+        messages.info(request, "Log out before creating a new Parent account from an invitation.")
+        return redirect('dashboard')
+
+    request.session[PARENT_INVITE_SESSION_KEY] = code
+
+    if request.method == 'POST':
+        form = ParentRegistrationForm(request.POST, locked_email=invite.temp_email)
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    user = UserProfile.objects.create_parent_user(
+                        username=form.cleaned_data['username'],
+                        user_email=form.cleaned_data['email'],
+                        password=form.cleaned_data['password'],
+                        user_first_name=form.cleaned_data['first_name'],
+                        user_last_name=form.cleaned_data['last_name'],
+                        gender=form.cleaned_data['gender'],
+                        user_display_name=form.cleaned_data.get('display_name'),
+                        unactivated_account=True,
+                    )
+                    EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                    claim_parent_invite_for_new_user(invite, user)
+                    request.session[PARENT_INVITE_SESSION_KEY] = code
+                    # TODO: send verification email when SMTP is wired.
+                    messages.success(
+                        request,
+                        "Parent account created. Log in, then enter the email verification code "
+                        "(look it up in the database for now).",
+                    )
+                    return redirect('login')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            except IntegrityError as e:
+                err_msg = str(e)
+                if 'user_email' in err_msg:
+                    messages.error(request, "That email is already registered.")
+                elif 'username' in err_msg:
+                    messages.error(request, "That username is already taken.")
+                else:
+                    messages.error(request, "A database error occurred. Please try again.")
+    else:
+        form = ParentRegistrationForm(locked_email=invite.temp_email)
+
+    return render(request, 'assessment_tool/parent_register.html', {
+        'form': form,
+        'invite': invite,
+        'course': invite.course,
+        'student_name': user_display_name(invite.student),
         'locked_email': invite.temp_email,
         'invite_code': code,
     })
@@ -2249,6 +2745,15 @@ def _user_can_open_assessment_setup(user, course, assessment) -> bool:
     branch = getattr(assessment, 'branch_location', None)
     if branch is not None and can_read_branch(user, branch):
         return True
+    # Standalone library assessments: owner may open setup.
+    if (
+        course is None
+        and assessment is not None
+        and getattr(assessment, 'course_id', None) is None
+        and getattr(assessment, 'branch_location', None) is not None
+        and assessment.branch_location.owner_id == getattr(user, 'user_id', None)
+    ):
+        return True
     return False
 
 
@@ -2265,7 +2770,57 @@ def _user_can_mutate_assessment_setup(user, course, assessment) -> bool:
         usersincourse__user__user_type='Teacher',
     ).exists():
         return True
+    if (
+        course is None
+        and assessment is not None
+        and getattr(assessment, 'course_id', None) is None
+        and branch is not None
+        and branch.owner_id == getattr(user, 'user_id', None)
+    ):
+        return True
     return False
+
+
+# URL sentinel for standalone (course_id IS NULL) library assessments.
+STANDALONE_ASSESSMENT_COURSE_URL_ID = 0
+
+
+def resolve_assessment_course_id(course_id):
+    """
+    Map URL course_id to DB course_id.
+
+    ``0`` means a standalone library assessment (``assessment.course_id`` IS NULL).
+    """
+    try:
+        scoped = int(course_id)
+    except (TypeError, ValueError):
+        raise Http404("Invalid course scope.")
+    if scoped == STANDALONE_ASSESSMENT_COURSE_URL_ID:
+        return None
+    return scoped
+
+
+def assessment_course_url_id(assessment_or_course_id) -> int:
+    """Inverse of resolve_assessment_course_id for template/url reverse."""
+    if assessment_or_course_id is None:
+        return STANDALONE_ASSESSMENT_COURSE_URL_ID
+    if hasattr(assessment_or_course_id, 'course_id'):
+        cid = assessment_or_course_id.course_id
+        return STANDALONE_ASSESSMENT_COURSE_URL_ID if cid is None else int(cid)
+    return int(assessment_or_course_id)
+
+
+def get_scoped_assessment(assessment_id, course_id, *, select_related=None):
+    """
+    Load an assessment for course-scoped setup URLs.
+
+    ``course_id=0`` addresses standalone library assessments (``course_id`` NULL).
+    """
+    db_course_id = resolve_assessment_course_id(course_id)
+    qs = Assessment.objects.all()
+    if select_related:
+        qs = qs.select_related(*select_related)
+    return get_object_or_404(qs, id=assessment_id, course_id=db_course_id)
 
 
 def _user_can_access_course_page(user, course) -> bool:
@@ -2303,27 +2858,37 @@ def _render_assessment_setup(request, course, assessment, *, disable_back_to_cou
     aqg_groups = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order')
     context = {
         'course': course,
+        'course_url_id': assessment_course_url_id(assessment),
         'assessment': assessment,
         'aqg_groups': aqg_groups,
         'user_type': user_type if user_type == 'IT_Support' else 'Teacher',
         'load_problem_workspace': True,
         'disable_assessment_back': disable_back_to_course or course is None,
+        'active_tab': 'assessments',
     }
     return render(request, 'assessment_tool/assessment_setup.html', context)
 
 
 @login_required
 def assessment_setup_view(request, course_id, assessment_id):
-    course = get_object_or_404(Course, id=course_id)
+    db_course_id = resolve_assessment_course_id(course_id)
     assessment = get_object_or_404(
-        Assessment.objects.select_related('branch_location'),
+        Assessment.objects.select_related('branch_location', 'course'),
         id=assessment_id,
-        course=course,
+        course_id=db_course_id,
     )
+    course = assessment.course
     if not _user_can_open_assessment_setup(request.user, course, assessment):
         messages.error(request, "You do not have access to manage this assessment configuration.")
-        return redirect('course_detail', course_id=course_id)
-    return _render_assessment_setup(request, course, assessment, disable_back_to_course=False)
+        if course is None:
+            return redirect('file_explorer')
+        return redirect('course_detail', course_id=course.id)
+    return _render_assessment_setup(
+        request,
+        course,
+        assessment,
+        disable_back_to_course=(course is None),
+    )
 
 
 @login_required
@@ -2344,10 +2909,10 @@ def assessment_edit_by_id_view(request, assessment_id):
 @login_required
 @require_POST
 def create_aqg_ajax(request, course_id, assessment_id):
-    assessment = get_object_or_404(
-        Assessment.objects.select_related('branch_location'),
-        id=assessment_id,
-        course_id=course_id,
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
     )
     if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
@@ -2396,14 +2961,12 @@ def create_aqg_ajax(request, course_id, assessment_id):
 @login_required
 @require_POST
 def rename_aqg_ajax(request, course_id, assessment_id):
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-    
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
 
     try:
@@ -2433,14 +2996,12 @@ def rename_aqg_ajax(request, course_id, assessment_id):
 @login_required
 @require_POST
 def reorder_aqg_ajax(request, course_id, assessment_id):
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-    
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
 
     try:
@@ -2481,15 +3042,12 @@ def add_problem_to_aqg_ajax(request, course_id, assessment_id):
     Creates a new sequential Problem child item inside an Assessment Question Group.
     Provisions a companion identity BranchGroup node nested securely within the target location frame.
     """
-    # 1. Authority Guard: Enforce strict role-access permissions
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-    
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'error': 'Unauthorized deployment verification state access failed.'}, status=403)
 
     try:
@@ -2575,16 +3133,15 @@ def duplicate_problem_in_aqg_ajax(request, course_id, assessment_id):
     Duplicate an existing problem inside the same Assessment Question Group section.
     Creates a fully independent copy (question body + entities) titled 'Copy of …'.
     """
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'error': 'Unauthorized.'}, status=403)
 
+    db_course_id = resolve_assessment_course_id(course_id)
     try:
         data = json.loads(request.body)
         problem_id = data.get('problem_id')
@@ -2595,7 +3152,7 @@ def duplicate_problem_in_aqg_ajax(request, course_id, assessment_id):
             Problem.objects.select_related('branch_location', 'aqg', 'aqg__assessment'),
             id=problem_id,
             aqg__assessment_id=assessment_id,
-            aqg__assessment__course_id=course_id,
+            aqg__assessment__course_id=db_course_id,
         )
 
         if not verify_workspace_clearance(request.user, source_problem):
@@ -2630,16 +3187,15 @@ def move_problem_to_aqg_ajax(request, course_id, assessment_id):
     Move an existing problem to another Assessment Question Group section
     within the same assessment, appending it to the end of that section.
     """
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'error': 'Unauthorized.'}, status=403)
 
+    db_course_id = resolve_assessment_course_id(course_id)
     try:
         data = json.loads(request.body)
         problem_id = data.get('problem_id')
@@ -2651,7 +3207,7 @@ def move_problem_to_aqg_ajax(request, course_id, assessment_id):
             Problem.objects.select_related('branch_location', 'aqg', 'aqg__assessment'),
             id=problem_id,
             aqg__assessment_id=assessment_id,
-            aqg__assessment__course_id=course_id,
+            aqg__assessment__course_id=db_course_id,
         )
 
         if not verify_workspace_clearance(request.user, problem):
@@ -2661,7 +3217,7 @@ def move_problem_to_aqg_ajax(request, course_id, assessment_id):
             AssessmentQuestionGroup.objects.select_related('branch_location'),
             id=target_aqg_id,
             assessment_id=assessment_id,
-            assessment__course_id=course_id,
+            assessment__course_id=db_course_id,
         )
 
         moved_problem, err = move_problem_to_aqg(problem, target_aqg)
@@ -2686,16 +3242,15 @@ def move_problem_to_cqd_ajax(request, course_id, assessment_id):
     """
     Move an existing problem into a problem set (CQD) folder within the assessment.
     """
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'error': 'Unauthorized.'}, status=403)
 
+    db_course_id = resolve_assessment_course_id(course_id)
     try:
         data = json.loads(request.body)
         problem_id = data.get('problem_id')
@@ -2733,7 +3288,7 @@ def move_problem_to_cqd_ajax(request, course_id, assessment_id):
         cqd_aqg = AssessmentQuestionGroup.objects.filter(
             branch_location_id=target_cqd.assigned_folder.parent_id,
             assessment_id=assessment_id,
-            assessment__course_id=course_id,
+            assessment__course_id=db_course_id,
         ).first()
         if not cqd_aqg:
             return JsonResponse({'error': 'Problem set is not part of this assessment.'}, status=400)
@@ -2774,16 +3329,15 @@ def remove_problem_from_cqd_ajax(request, course_id, assessment_id):
     Remove a problem from its problem set and place it immediately after that
     set inside the same question group section.
     """
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'error': 'Unauthorized.'}, status=403)
 
+    db_course_id = resolve_assessment_course_id(course_id)
     try:
         data = json.loads(request.body)
         problem_id = data.get('problem_id')
@@ -2817,7 +3371,7 @@ def remove_problem_from_cqd_ajax(request, course_id, assessment_id):
         section_aqg = AssessmentQuestionGroup.objects.filter(
             branch_location_id=cqd.assigned_folder.parent_id,
             assessment_id=assessment_id,
-            assessment__course_id=course_id,
+            assessment__course_id=db_course_id,
         ).first()
         if not section_aqg:
             return JsonResponse({'error': 'Problem set is not part of this assessment.'}, status=400)
@@ -2847,16 +3401,15 @@ def cqd_problems_list_ajax(request, course_id, assessment_id, cqd_id):
     """
     Return rendered problem cards for all problems inside a problem set (CQD).
     """
-    is_teacher = UsersInCourse.objects.filter(
-        course_id=course_id,
-        user=request.user,
-        user__user_type='Teacher'
-    ).exists()
-
-    user_type = getattr(request.user, 'user_type', 'Student')
-    if not is_teacher and user_type != 'IT_Support' and not request.user.is_staff:
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location',),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
         return JsonResponse({'error': 'Unauthorized.'}, status=403)
 
+    db_course_id = resolve_assessment_course_id(course_id)
     try:
         cqd = get_object_or_404(
             CustomQuestionDistribution.objects.select_related('assigned_folder'),
@@ -2865,7 +3418,7 @@ def cqd_problems_list_ajax(request, course_id, assessment_id, cqd_id):
         section_aqg = AssessmentQuestionGroup.objects.filter(
             branch_location_id=cqd.assigned_folder.parent_id,
             assessment_id=assessment_id,
-            assessment__course_id=course_id,
+            assessment__course_id=db_course_id,
         ).first()
         if not section_aqg:
             return JsonResponse({'error': 'Problem set is not part of this assessment.'}, status=404)
@@ -4278,9 +4831,6 @@ def course_grades_assessment_release_ajax(request, course_id, assessment_id):
 @login_required
 def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
     course = get_object_or_404(Course, id=course_id)
-    if not _user_can_access_course_page(request.user, course):
-        messages.error(request, "You do not have access to this course.")
-        return redirect("dashboard")
     assessment = get_object_or_404(
         Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
     )
@@ -4289,7 +4839,7 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
     attempt = get_attempt_for_template(assessment, attempt_id)
     if attempt is None or attempt.course_id != course.id:
         messages.error(request, "Attempt not found.")
-        return redirect("course_grades_assessment", course_id=course.id, assessment_id=assessment.id)
+        return redirect("dashboard")
     from .assessment_grades import (
         scores_visible_for_assessment,
         student_may_review_attempt,
@@ -4297,9 +4847,15 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
 
     user_type = getattr(request.user, "user_type", None)
     student_readonly = False
+    parent_viewer = False
     if user_type in ("Teacher", "IT_Support"):
-        pass
+        if not _user_can_access_course_page(request.user, course):
+            messages.error(request, "You do not have access to this course.")
+            return redirect("dashboard")
     elif user_type == "Student" and attempt.user_id == request.user.user_id:
+        if not _user_can_access_course_page(request.user, course):
+            messages.error(request, "You do not have access to this course.")
+            return redirect("dashboard")
         if not student_may_review_attempt(assessment, attempt):
             messages.error(
                 request,
@@ -4307,6 +4863,23 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
             )
             return redirect("assessment_view", course_id=course.id)
         student_readonly = True
+    elif user_type == "Parent" and parent_has_course_access(
+        parent=request.user,
+        student=attempt.user,
+        course=course,
+    ):
+        if not student_may_review_attempt(assessment, attempt):
+            messages.error(
+                request,
+                "Submission review is not available for this assessment.",
+            )
+            return redirect(
+                "grade_summary",
+                student_id=attempt.user_id,
+                course_id=course.id,
+            )
+        student_readonly = True
+        parent_viewer = True
     else:
         messages.error(request, "Unauthorized.")
         return redirect("dashboard")
@@ -4322,6 +4895,7 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
             "load_problem_workspace": True,
             "scores_visible_to_students": scores_visible_for_assessment(assessment),
             "student_readonly": student_readonly,
+            "parent_viewer": parent_viewer,
         },
     )
 
@@ -4329,8 +4903,6 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
 @login_required
 def course_grades_attempt_payload_ajax(request, course_id, assessment_id, attempt_id):
     course = get_object_or_404(Course, id=course_id)
-    if not _user_can_access_course_page(request.user, course):
-        return JsonResponse({"error": "Unauthorized"}, status=403)
     assessment = get_object_or_404(
         Assessment, id=assessment_id, course=course, parent_assessment__isnull=True
     )
@@ -4342,8 +4914,21 @@ def course_grades_attempt_payload_ajax(request, course_id, assessment_id, attemp
     user_type = getattr(request.user, "user_type", None)
     student_readonly = False
     if user_type in ("Teacher", "IT_Support"):
-        pass
+        if not _user_can_access_course_page(request.user, course):
+            return JsonResponse({"error": "Unauthorized"}, status=403)
     elif user_type == "Student" and attempt.user_id == request.user.user_id:
+        if not _user_can_access_course_page(request.user, course):
+            return JsonResponse({"error": "Unauthorized"}, status=403)
+        from .assessment_grades import student_may_review_attempt
+
+        if not student_may_review_attempt(assessment, attempt):
+            return JsonResponse({"error": "Review not available."}, status=403)
+        student_readonly = True
+    elif user_type == "Parent" and parent_has_course_access(
+        parent=request.user,
+        student=attempt.user,
+        course=course,
+    ):
         from .assessment_grades import student_may_review_attempt
 
         if not student_may_review_attempt(assessment, attempt):
@@ -4542,16 +5127,17 @@ def _user_can_manage_assessment(request, course_id, assessment=None):
     user_type = getattr(user, 'user_type', 'Student')
     if user_type == 'IT_Support' or user.is_staff:
         return True
-    if UsersInCourse.objects.filter(
-        course_id=course_id,
+    db_course_id = resolve_assessment_course_id(course_id)
+    if db_course_id is not None and UsersInCourse.objects.filter(
+        course_id=db_course_id,
         user=user,
         user__user_type='Teacher',
     ).exists():
         return True
     branch = getattr(assessment, 'branch_location', None) if assessment is not None else None
-    if branch is None:
+    if branch is None and db_course_id is not None:
         course = (
-            Course.objects.filter(pk=course_id)
+            Course.objects.filter(pk=db_course_id)
             .select_related('branch_location')
             .first()
         )
@@ -4562,19 +5148,22 @@ def _user_can_manage_assessment(request, course_id, assessment=None):
 @login_required
 def assessment_practice_test_view(request, course_id, assessment_id):
     """Teacher practice-test page for an assessment (ephemeral, not saved)."""
-    course = get_object_or_404(Course, id=course_id)
-    assessment = get_object_or_404(
-        Assessment.objects.select_related('branch_location'),
-        id=assessment_id,
-        course=course,
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location', 'course'),
     )
+    course = assessment.course
     if not _user_can_open_assessment_setup(request.user, course, assessment):
         messages.error(request, "You do not have access to preview this assessment.")
-        return redirect('course_dashboard', course_id=course_id)
+        if course is None:
+            return redirect('file_explorer')
+        return redirect('course_dashboard', course_id=course.id)
 
     user_type = getattr(request.user, 'user_type', 'Student')
     return render(request, 'assessment_tool/assessment_practice_test.html', {
         'course': course,
+        'course_url_id': assessment_course_url_id(assessment),
         'assessment': assessment,
         'user_type': user_type if user_type == 'IT_Support' else 'Teacher',
         'load_problem_workspace': True,
@@ -4586,10 +5175,10 @@ def assessment_practice_test_view(request, course_id, assessment_id):
 @require_POST
 def assessment_practice_test_start_ajax(request, course_id, assessment_id):
     """Assemble fully rendered practice-test instances for this assessment."""
-    assessment = get_object_or_404(
-        Assessment.objects.select_related('branch_location', 'course'),
-        id=assessment_id,
-        course_id=course_id,
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location', 'course'),
     )
     if not _user_can_open_assessment_setup(request.user, assessment.course, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized.'}, status=403)
@@ -4645,10 +5234,10 @@ def assessment_practice_test_start_ajax(request, course_id, assessment_id):
 @require_POST
 def assessment_practice_test_grade_ajax(request, course_id, assessment_id):
     """Batch-grade an ephemeral practice test in one request."""
-    assessment = get_object_or_404(
-        Assessment.objects.select_related('branch_location', 'course'),
-        id=assessment_id,
-        course_id=course_id,
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location', 'course'),
     )
     if not _user_can_open_assessment_setup(request.user, assessment.course, assessment):
         return JsonResponse({'success': False, 'error': 'Unauthorized.'}, status=403)
@@ -4683,8 +5272,8 @@ def assessment_practice_test_grade_ajax(request, course_id, assessment_id):
         max_total += graded['max_total']
         results.append({
             'problem_id': problem_id,
-            'slot_index': slot_index,
             'title': title,
+            'slot_index': slot_index,
             'earned': graded['earned_total'],
             'max': graded['max_total'],
             'fields': graded['items'],

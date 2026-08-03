@@ -145,6 +145,8 @@ async function loadFolder(folderId, level) {
         const pathMeta = newCol.querySelector('.column-path-meta');
         if (pathMeta) {
             newCol.dataset.folderPath = pathMeta.dataset.path;
+            newCol.dataset.folderType = pathMeta.dataset.folderType || 'folder';
+            newCol.dataset.allowNewFolder = pathMeta.dataset.allowNewFolder || '0';
         }
         container.appendChild(newCol);
 
@@ -155,29 +157,10 @@ async function loadFolder(folderId, level) {
         }
 
         // --- 4. DYNAMIC PERMISSION CHECK ---
-        const username = "{{ request.user.username }}";
-        const rootPath = `/Users/${username}_root/`;
-        const firstItem = newCol.querySelector('.item');
-        
-        let isProtected = false;
-        if (folderId === EXPLORER_ROOT_FOLDER_ID) {
-            isProtected = true;
-        } else if (firstItem) {
-            const location = firstItem.getAttribute('data-location') || "";
-            // Workspace intentionally allows "New Folder".
-            if (location.startsWith(`${rootPath}Courses/`) || 
-                location.startsWith(`${rootPath}Collaboration/`) ||
-                location.startsWith(`${rootPath}Student Provided Assessments/`) ||
-                location.startsWith(`${rootPath}Student Generated Assessments by Course/`) ||
-                location.startsWith(`${rootPath}Public Library/`) ||
-                location.startsWith(`${rootPath}Public/`) ||
-                location.startsWith(`${rootPath}Trash/`)) {
-                isProtected = true;
-            }
-        }
+        const allowNewFolder = (newCol.dataset.allowNewFolder === '1');
 
         if (newFolderBtn) {
-            newFolderBtn.style.display = isProtected ? 'none' : 'block';
+            newFolderBtn.style.display = allowNewFolder ? 'block' : 'none';
             newFolderBtn.onclick = () => createNewFolder(folderId, level);
         }
 
@@ -323,13 +306,21 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.addEventListener('keydown', handleExplorerKeydown);
 
-    // Open the user root immediately so Courses / Workspace / … appear as the first column.
+    // Open the user root, then open Workspace as the default location.
     (async () => {
         await loadFolder(EXPLORER_ROOT_FOLDER_ID, EXPLORER_MIN_LEVEL);
         kbFocusLevel = EXPLORER_MIN_LEVEL;
         const col = getExplorerColumn(EXPLORER_MIN_LEVEL);
-        const first = getColumnItems(col)[0];
-        if (first) selectItem(first);
+        const items = getColumnItems(col);
+        const workspace = items.find((el) => {
+            const name = el.querySelector('span')?.textContent?.trim();
+            return name === 'Workspace' && (el.getAttribute('data-type') || 'folder') === 'folder';
+        });
+        if (workspace) {
+            await openExplorerItem(workspace);
+        } else if (items[0]) {
+            selectItem(items[0]);
+        }
         updateColumnFocusUI();
         explorer.focus({ preventScroll: true });
     })();
@@ -339,8 +330,7 @@ async function createNewFolder(parentId, level) {
     // 1. Get the column we are currently looking at
     const currentColumn = document.querySelector(`.finder-column[data-level="${level}"]`);
     const fullPath = currentColumn ? currentColumn.dataset.folderPath : "";
-
-    // console.log("[createNewFolder] Current Folder Path: ", fullPath);
+    const allowNewFolder = currentColumn ? currentColumn.dataset.allowNewFolder === '1' : false;
 
     const username = "{{ request.user.username }}";
     const rootPath = `/Users/${username}_root/`;
@@ -352,8 +342,8 @@ async function createNewFolder(parentId, level) {
                             `${rootPath}Public/`,
                             `${rootPath}Trash/`];
 
-    // 2. Block if inside protected root or it is the root itself
-    if (fullPath === rootPath || protectedPaths.some(p => fullPath.startsWith(p))) {
+    // 2. Block if inside protected root, structural node, or it is the root itself
+    if (!allowNewFolder || fullPath === rootPath || protectedPaths.some(p => fullPath.startsWith(p))) {
         await mapAlert({ title: 'Not allowed', message: 'Adding sub-folders is not permitted here.' });
         return;
     }

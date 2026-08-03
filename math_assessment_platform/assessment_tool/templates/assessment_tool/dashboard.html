@@ -8,6 +8,93 @@
 </div>
 
 <div class="dashboard-grid">
+    {% if parent_dashboard %}
+        {% if not parent_dashboard.has_access %}
+        <div class="card dashboard-courses-card">
+            <h2>Student grades</h2>
+            <p class="dashboard-empty">
+                You do not currently have access to any student’s grades.
+                To view a student’s grades as a parent/guardian, you must receive an
+                invitation link for that student from the active Teacher of a course.
+            </p>
+        </div>
+        {% else %}
+            {% for child in parent_dashboard.children %}
+            <div class="card dashboard-courses-card">
+                <h2>{{ child.child_name }} — Active courses</h2>
+                {% if child.active_courses %}
+                    <div class="dashboard-course-list">
+                        {% for row in child.active_courses %}
+                            <div class="dashboard-course-row">
+                                <div class="dashboard-course-main">
+                                    <div class="dashboard-course-name">
+                                        <span>{{ row.name }}</span>
+                                    </div>
+                                    <div class="dashboard-course-meta">
+                                        <span class="dashboard-course-status">{{ row.status_label }}</span>
+                                        <span class="dashboard-course-teachers">Teachers: {{ row.teachers_display }}</span>
+                                    </div>
+                                </div>
+                                <div class="dashboard-course-actions">
+                                    <a
+                                        href="{% url 'grade_summary' row.child_id row.course_id %}"
+                                        class="btn"
+                                    >View grades</a>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="dashboard-empty">No active courses for this student.</p>
+                {% endif %}
+            </div>
+            <div class="card dashboard-courses-card">
+                <h2>{{ child.child_name }} — Closed courses</h2>
+                {% if child.closed_courses %}
+                    <div class="dashboard-course-list">
+                        {% for row in child.closed_courses %}
+                            <div class="dashboard-course-row dashboard-course-row--closed">
+                                <div class="dashboard-course-main">
+                                    <div class="dashboard-course-name">
+                                        <span>{{ row.name }}</span>
+                                    </div>
+                                    <div class="dashboard-course-meta">
+                                        <span class="dashboard-course-status">{{ row.status_label }}</span>
+                                        <span class="dashboard-course-teachers">Teachers: {{ row.teachers_display }}</span>
+                                        {% if row.show_enrollment_span %}
+                                            <span class="dashboard-course-span">
+                                                Enrolled:
+                                                {% if row.enrolled_at_utc %}
+                                                    <time class="local-datetime" datetime="{{ row.enrolled_at_utc }}">{{ row.enrolled_at_utc }}</time>
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                                –
+                                                {% if row.close_date_utc %}
+                                                    <time class="local-datetime" datetime="{{ row.close_date_utc }}">{{ row.close_date_utc }}</time>
+                                                {% else %}
+                                                    —
+                                                {% endif %}
+                                            </span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="dashboard-course-actions">
+                                    <a
+                                        href="{% url 'grade_summary' row.child_id row.course_id %}"
+                                        class="btn"
+                                    >View grades</a>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="dashboard-empty">No closed courses for this student.</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% endif %}
+    {% else %}
     <div class="card dashboard-courses-card">
         <h2>My Courses</h2>
         {% if dashboard_courses %}
@@ -25,9 +112,6 @@
                             <div class="dashboard-course-meta">
                                 <span class="dashboard-course-status">{{ row.status_label }}</span>
                                 <span class="dashboard-course-teachers">Teachers: {{ row.teachers_display }}</span>
-                                {% if row.is_parent and row.child_name %}
-                                    <span class="dashboard-course-child">Student: {{ row.child_name }}</span>
-                                {% endif %}
                                 {% if row.show_student_count %}
                                     <span class="dashboard-course-students">
                                         Students enrolled: {{ row.student_count }}
@@ -48,22 +132,12 @@
                                             —
                                         {% endif %}
                                     </span>
-                                {% elif row.is_parent and row.enrolled_at_utc %}
-                                    <span class="dashboard-course-enrolled">
-                                        Enrolled:
-                                        <time class="local-datetime" datetime="{{ row.enrolled_at_utc }}">{{ row.enrolled_at_utc }}</time>
-                                    </span>
                                 {% endif %}
                             </div>
                         </div>
                         <div class="dashboard-course-actions">
                             {% if row.has_course_link %}
                                 <a href="{% url 'course_detail' row.course_id %}" class="btn">Open course</a>
-                            {% elif row.is_parent and row.child_id %}
-                                <a
-                                    href="{% url 'grade_summary' row.child_id row.course_id %}"
-                                    class="btn"
-                                >Grade summary</a>
                             {% endif %}
                         </div>
                     </div>
@@ -73,6 +147,7 @@
             <p class="dashboard-empty">No courses assigned yet.</p>
         {% endif %}
     </div>
+    {% endif %}
 
     {% if unread_notifications %}
     <div class="card dashboard-notifications-card">

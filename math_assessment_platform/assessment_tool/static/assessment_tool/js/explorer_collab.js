@@ -824,8 +824,25 @@ async function handleLeaveShare() {
 }
 
 let moveDestParentId = null;
-let movePathStack = []; // [{ id, name }, ...] from root → current folder
+let movePathStack = []; // [{ id, name, type }, ...] from root → current folder
 let moveSourceBranchId = null;
+let moveSourceType = 'folder';
+
+const ALLOWED_BRANCH_CHILDREN = {
+  folder: new Set(['folder', 'course', 'assessment', 'aqg', 'cqd', 'problem']),
+  course: new Set(['assessment']),
+  assessment: new Set(['aqg']),
+  aqg: new Set(['cqd', 'problem']),
+  cqd: new Set(['problem']),
+  problem: new Set(),
+};
+
+function canPlaceBranchUnder(parentType, childType) {
+  const parent = (parentType || 'folder').toLowerCase();
+  const child = (childType || 'folder').toLowerCase();
+  const allowed = ALLOWED_BRANCH_CHILDREN[parent];
+  return !!(allowed && allowed.has(child));
+}
 
 async function fetchMoveFolderItems(folderId) {
   const res = await fetch(`/get-folder-contents/${folderId}/?level=1`);
@@ -886,11 +903,26 @@ async function renderMoveBrowser() {
   const list = document.getElementById('move-list');
   list.innerHTML = '';
 
+  const destAccepts = canPlaceBranchUnder(current.type || 'folder', moveSourceType);
   const hint = document.createElement('div');
   hint.style.cssText = 'padding:10px;background:#f8fafc;border-bottom:1px solid #eee;font-size:0.9rem;color:#475569;';
-  hint.innerHTML =
-    '<em>Destination set to this folder. Open a subfolder to go deeper, or click Move / Copy here.</em>';
+  if (destAccepts) {
+    hint.innerHTML =
+      '<em>Destination set to this folder. Open a subfolder to go deeper, or click Move / Copy here.</em>';
+  } else {
+    hint.style.background = '#fff7ed';
+    hint.style.color = '#9a3412';
+    hint.innerHTML =
+      `<em>This location cannot hold a ${moveSourceType}. Open a valid parent, or cancel.</em>`;
+  }
   list.appendChild(hint);
+
+  const moveBtn = document.getElementById('move-commit-btn');
+  if (moveBtn) {
+    moveBtn.disabled = !destAccepts;
+    moveBtn.style.opacity = destAccepts ? '1' : '0.5';
+    moveBtn.style.cursor = destAccepts ? 'pointer' : 'not-allowed';
+  }
 
   const items = await fetchMoveFolderItems(current.id);
   const navigable = items.filter((it) => {
@@ -898,7 +930,8 @@ async function renderMoveBrowser() {
     if (movePathStack.length === 1) {
       return it.type === 'folder' && ['Workspace', 'Collaboration'].includes(it.name);
     }
-    return true;
+    // Only open containers that can have children in the hierarchy.
+    return it.type !== 'problem';
   });
 
   if (!navigable.length) {
@@ -911,16 +944,26 @@ async function renderMoveBrowser() {
 
   navigable.forEach((it) => {
     const isBlocked = it.id === moveSourceBranchId;
+    const icon =
+      it.type === 'course'
+        ? 'fa-graduation-cap'
+        : it.type === 'assessment'
+          ? 'fa-file-signature'
+          : it.type === 'aqg'
+            ? 'fa-list-ol'
+            : it.type === 'cqd'
+              ? 'fa-random'
+              : 'fa-folder';
     const row = document.createElement('div');
     row.style.cssText = isBlocked
       ? 'padding:10px;border-bottom:1px solid #f3f3f3;display:flex;justify-content:space-between;align-items:center;color:#94a3b8;background:#f1f5f9;cursor:not-allowed;opacity:0.75;'
       : 'padding:10px;border-bottom:1px solid #f3f3f3;cursor:pointer;display:flex;justify-content:space-between;align-items:center;';
     row.innerHTML = isBlocked
-      ? `<span><i class="fas fa-folder"></i> ${it.name}</span><span style="font-size:0.8rem;">Can't move into itself</span>`
-      : `<span><i class="fas fa-folder"></i> ${it.name}</span><span style="color:#007aff;">Open</span>`;
+      ? `<span><i class="fas ${icon}"></i> ${it.name}</span><span style="font-size:0.8rem;">Can't move into itself</span>`
+      : `<span><i class="fas ${icon}"></i> ${it.name}</span><span style="color:#007aff;">Open</span>`;
     if (!isBlocked) {
       row.onclick = async () => {
-        movePathStack.push({ id: it.id, name: it.name });
+        movePathStack.push({ id: it.id, name: it.name, type: it.type || 'folder' });
         await renderMoveBrowser();
       };
     }
@@ -930,6 +973,7 @@ async function renderMoveBrowser() {
 
 async function openMoveOverlay() {
   moveSourceBranchId = parseInt(currentItem.id, 10);
+  moveSourceType = (currentItem.type || 'folder').toLowerCase();
   const rootId = window.MAP_EXPLORER.rootFolderId;
   const rootItems = await fetchMoveFolderItems(rootId);
   const workspace = rootItems.find((it) => it.name === 'Workspace' && it.type === 'folder');
@@ -941,8 +985,8 @@ async function openMoveOverlay() {
   const rootName = window.MAP_EXPLORER.rootFolderName || `${window.MAP_EXPLORER.username}_root`;
 
   movePathStack = [
-    { id: rootId, name: rootName },
-    { id: workspace.id, name: 'Workspace' },
+    { id: rootId, name: rootName, type: 'folder' },
+    { id: workspace.id, name: 'Workspace', type: 'folder' },
   ];
   moveDestParentId = workspace.id;
 
@@ -957,6 +1001,7 @@ async function openMoveOverlay() {
       {
         label: 'Move / Copy here',
         primary: true,
+        id: 'move-commit-btn',
         onClick: async () => {
           if (!moveDestParentId) {
             await mapAlert({ title: 'Select a destination', message: 'Select a destination folder.' });
@@ -964,6 +1009,14 @@ async function openMoveOverlay() {
           }
           if (moveDestParentId === moveSourceBranchId) {
             await mapAlert({ title: 'Invalid move', message: 'Cannot move an item into itself.' });
+            return;
+          }
+          const current = movePathStack[movePathStack.length - 1];
+          if (!canPlaceBranchUnder(current?.type || 'folder', moveSourceType)) {
+            await mapAlert({
+              title: 'Invalid destination',
+              message: `A ${moveSourceType} cannot be placed here.`,
+            });
             return;
           }
           await commitMove(false);
@@ -1146,6 +1199,9 @@ async function openGroupDetail(pgId) {
   const canManage = !g.is_system && !g.is_public && (g.my_role === 'owner' || g.my_role === 'edit');
   const isOwner = g.my_role === 'owner';
   const justSet = justAddedGroupMembers[g.id] || new Set();
+  const deleteNameAttr = JSON.stringify(g.name || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
   const systemNote = g.is_admins
     ? `<div style="margin-bottom:10px;font-size:0.85rem;color:#64748b;">The admins group is system-managed and cannot be deleted. All IT Support users are added automatically; it owns the public group.</div>`
     : g.is_public
@@ -1157,7 +1213,7 @@ async function openGroupDetail(pgId) {
       <h4 style="margin:0;">${g.name}</h4>
       ${
         isOwner && !g.is_system && !g.is_public
-          ? `<button type="button" class="map-dialog-btn map-dialog-btn-danger" style="padding:6px 10px;font-size:0.85rem;" onclick="deleteManagedGroup(${g.id}, ${JSON.stringify(g.name)})">Delete group</button>`
+          ? `<button type="button" class="map-dialog-btn map-dialog-btn-danger" style="padding:6px 10px;font-size:0.85rem;" onclick="deleteManagedGroup(${g.id}, ${deleteNameAttr})">Delete group</button>`
           : ''
       }
     </div>

@@ -781,6 +781,70 @@ button:hover { background-color: #1d4ed8; }
     margin-top: 1.25rem;
 }
 
+.notifications-header-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.notifications-header-row h1 {
+    margin-bottom: 0.35rem;
+}
+
+.notifications-header-row p {
+    margin: 0;
+}
+
+.notifications-mark-all-form {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.notifications-load-more-wrap,
+.notifications-bulk-delete-wrap {
+    display: flex;
+    justify-content: center;
+    margin: 1.25rem 0 0.5rem;
+}
+
+.notification-delete-all-read-btn {
+    background: #b91c1c;
+}
+
+.notification-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    padding: 16px;
+}
+
+.notification-confirm-overlay[hidden] {
+    display: none !important;
+}
+
+.notification-confirm-modal {
+    background: #fff;
+    border-radius: 10px;
+    max-width: 520px;
+    width: 100%;
+    padding: 24px;
+    box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+}
+
+.notification-confirm-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
 .notification-empty-trash-form {
     margin: 0;
 }

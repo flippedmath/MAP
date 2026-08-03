@@ -16,4 +16,6 @@ def define(val=None):
 @register.simple_tag
 def course_allows_management(course):
     """False for courses whose explorer folder lives under Workspace."""
+    if course is None:
+        return False
     return not course_is_under_workspace(course)

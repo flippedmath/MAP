@@ -11,13 +11,17 @@ from .notifications import utc_isoformat
 
 
 def user_display_name(user) -> str:
+    """
+    Informal label: "Display Last" when a display name exists, else "First Last",
+    else username.
+    """
     if user is None:
         return ""
     display = (getattr(user, "user_display_name", None) or "").strip()
-    if display:
-        return display
     first = (getattr(user, "user_first_name", None) or "").strip()
     last = (getattr(user, "user_last_name", None) or "").strip()
+    if display:
+        return f"{display} {last}".strip()
     full = f"{first} {last}".strip()
     if full:
         return full
@@ -26,14 +30,20 @@ def user_display_name(user) -> str:
 
 def user_roster_formal_name(user) -> str:
     """
-    Roster label: "Last, First M" (middle initials from extra first-name tokens).
-    Falls back to username when name fields are empty.
+    Roster label: "Last, Display" when a display name exists, else "Last, First M"
+    (middle initials from extra first-name tokens). Falls back to username when
+    name fields are empty.
     """
     if user is None:
         return "?"
     username = (getattr(user, "username", None) or "").strip() or "?"
+    display = (getattr(user, "user_display_name", None) or "").strip()
     first = (getattr(user, "user_first_name", None) or "").strip()
     last = (getattr(user, "user_last_name", None) or "").strip()
+    if display:
+        if last:
+            return f"{last}, {display}"
+        return display
     if not first and not last:
         return username
     parts = first.split()
@@ -161,6 +171,79 @@ def _build_row(
     }
 
 
+def dashboard_parent_groups_for_user(user):
+    """
+    Group ParentUserCourse links by Student for Active vs Closed course cards.
+
+    Returns:
+      {
+        "has_access": bool,
+        "children": [
+          {
+            "student_id": int,
+            "child_name": str,
+            "active_courses": [row, ...],
+            "closed_courses": [row, ...],
+          },
+          ...
+        ],
+      }
+    """
+    empty = {"has_access": False, "children": []}
+    if user is None or not getattr(user, "is_authenticated", False):
+        return empty
+    if getattr(user, "user_type", None) != "Parent":
+        return empty
+
+    links = list(
+        ParentUserCourse.objects.filter(parent=user).select_related("course", "student")
+    )
+    if not links:
+        return empty
+
+    course_ids = [link.course_id for link in links]
+    teachers_map = _teachers_by_course(course_ids)
+    enroll_map = _enrollment_dates_for_pairs(
+        (link.student_id, link.course_id) for link in links
+    )
+
+    by_student: dict[int, dict] = {}
+    for link in links:
+        course = link.course
+        enrolled_at = enroll_map.get((link.student_id, link.course_id))
+        row = _build_row(
+            course=course,
+            enrolled_at=enrolled_at,
+            teachers=teachers_map.get(course.pk, []),
+            show_student_count=False,
+            student_count=None,
+            is_parent=True,
+            child_name=user_display_name(link.student),
+            child_id=link.student_id,
+        )
+        group = by_student.get(link.student_id)
+        if group is None:
+            group = {
+                "student_id": link.student_id,
+                "child_name": user_display_name(link.student),
+                "active_courses": [],
+                "closed_courses": [],
+            }
+            by_student[link.student_id] = group
+        if row["is_closed"]:
+            group["closed_courses"].append(row)
+        else:
+            group["active_courses"].append(row)
+
+    children = []
+    for student_id, group in by_student.items():
+        group["active_courses"] = _sort_dashboard_courses(group["active_courses"])
+        group["closed_courses"] = _sort_dashboard_courses(group["closed_courses"])
+        children.append(group)
+    children.sort(key=lambda g: ((g["child_name"] or "").casefold(), g["student_id"]))
+    return {"has_access": True, "children": children}
+
+
 def dashboard_courses_for_user(user):
     """Build sorted course rows for the dashboard My Courses card."""
     if user is None or not getattr(user, "is_authenticated", False):
@@ -170,33 +253,8 @@ def dashboard_courses_for_user(user):
     show_student_count = user_type in ("Teacher", "IT_Support")
 
     if user_type == "Parent":
-        links = list(
-            ParentUserCourse.objects.filter(parent=user).select_related(
-                "course", "student"
-            )
-        )
-        course_ids = [link.course_id for link in links]
-        teachers_map = _teachers_by_course(course_ids)
-        enroll_map = _enrollment_dates_for_pairs(
-            (link.student_id, link.course_id) for link in links
-        )
-        rows = []
-        for link in links:
-            course = link.course
-            enrolled_at = enroll_map.get((link.student_id, link.course_id))
-            rows.append(
-                _build_row(
-                    course=course,
-                    enrolled_at=enrolled_at,
-                    teachers=teachers_map.get(course.pk, []),
-                    show_student_count=False,
-                    student_count=None,
-                    is_parent=True,
-                    child_name=user_display_name(link.student),
-                    child_id=link.student_id,
-                )
-            )
-        return _sort_dashboard_courses(rows)
+        # Parent dashboard uses dashboard_parent_groups_for_user instead.
+        return []
 
     enrollments = list(
         UsersInCourse.objects.filter(user=user)

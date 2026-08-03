@@ -26,7 +26,7 @@
 <div class="assessments-pane-header">
   <div class="header-title-block">
     <h2>Grades</h2>
-    <p class="subtitle">Your scores for assessments in this course.</p>
+    <p class="subtitle">{% if grades_subtitle %}{{ grades_subtitle }}{% else %}Your scores for assessments in this course.{% endif %}</p>
   </div>
 </div>
 

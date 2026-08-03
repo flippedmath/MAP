@@ -884,22 +884,15 @@ def collaboration_share_roots_for_user(user):
 
     roots = []
     for branch in m.BranchGroup.objects.filter(id__in=branch_ids).select_related("owner", "share_group"):
+        rows = list_branch_acl(branch.id)
+        # Public Library owns anything granted to the system "public" group.
+        if public_id and any(r.get("permission_group_id") == public_id for r in rows):
+            continue
         if public_id and branch.share_group_id == public_id:
             continue
-        rows = list_branch_acl(branch.id)
         if not share_root_has_non_owner_collaborators(branch):
             continue
         if not can_read_branch(user, branch):
-            continue
-        has_non_public = False
-        for r in rows:
-            if r["user_id"]:
-                has_non_public = True
-                break
-            if r["permission_group_id"] and r["permission_group_id"] != public_id:
-                has_non_public = True
-                break
-        if not has_non_public:
             continue
         roots.append(branch)
     return roots

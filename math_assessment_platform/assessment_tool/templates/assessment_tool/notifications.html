@@ -2,14 +2,33 @@
 
 {% block content %}
 <div class="card">
-    <h1>Notifications</h1>
-    <p>Select a notification to view its details. Newest first.</p>
+    <div class="notifications-header-row">
+        <div>
+            <h1>Notifications</h1>
+            <p>Select a notification to view its details. Newest first.</p>
+        </div>
+        {% if show_mark_all_read %}
+        <form method="post" action="{% url 'notifications' %}" class="notifications-mark-all-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="mark_all_read">
+            <button type="submit" class="btn">Mark all as read</button>
+        </form>
+        {% endif %}
+    </div>
 </div>
 
 {% if notifications %}
-<div class="notifications-list">
+<div
+    class="notifications-list"
+    id="notifications-list"
+    data-loaded-count="{{ notifications_loaded_count }}"
+    data-page-size="{{ notifications_page_size }}"
+    data-load-more-url="{% url 'notifications_load_more' %}"
+    data-detail-url-template="{% url 'notification_detail' 0 %}"
+    data-delete-url-template="{% url 'notification_delete' 0 %}"
+>
     {% for note in notifications %}
-    <article class="notification-item notification-item--list">
+    <article class="notification-item notification-item--list" data-notification-id="{{ note.id }}">
         <div class="notification-list-row">
             <a href="{% url 'notification_detail' note.id %}" class="notification-list-link">
                 <div class="notification-item-header">
@@ -47,9 +66,43 @@
     </article>
     {% endfor %}
 </div>
+
+{% if has_more_notifications %}
+<div class="notifications-load-more-wrap">
+    <button type="button" class="btn" id="notifications-load-more">Load 10 more</button>
+</div>
+{% endif %}
 {% else %}
 <div class="card notifications-empty">
     <p>No notifications yet.</p>
+</div>
+{% endif %}
+
+{% if show_delete_all_read %}
+<div class="notifications-bulk-delete-wrap">
+    <button type="button" class="btn notification-delete-all-read-btn" id="notifications-delete-all-read-open">
+        Delete all read notifications
+    </button>
+</div>
+
+<div id="notifications-delete-all-read-overlay" class="notification-confirm-overlay" hidden aria-hidden="true">
+    <div class="notification-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="notifications-delete-all-read-title">
+        <h3 id="notifications-delete-all-read-title" style="margin-top: 0;">Delete all read notifications?</h3>
+        <p style="color: #334155; line-height: 1.5;">
+            This will move every notification marked <strong>read</strong> into trash.
+            Unread notifications will not be affected.
+        </p>
+        <form
+            method="post"
+            action="{% url 'notifications' %}"
+            class="notification-confirm-actions"
+        >
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete_all_read">
+            <button type="button" class="btn" id="notifications-delete-all-read-cancel" style="background: #64748b;">Cancel</button>
+            <button type="submit" class="btn" style="background: #b91c1c;">Delete all read</button>
+        </form>
+    </div>
 </div>
 {% endif %}
 
@@ -121,29 +174,167 @@
     </div>
     {% endif %}
 </section>
+{% endif %}
 
 <script>
 (function () {
-    var toggle = document.getElementById('notification-trash-toggle');
-    var section = document.getElementById('notification-trash-section');
-    var emptyForm = document.getElementById('notification-empty-trash-form');
-    if (!toggle || !section) return;
+    var csrfToken = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
 
-    toggle.addEventListener('click', function () {
-        var open = section.hasAttribute('hidden');
-        if (open) {
-            section.removeAttribute('hidden');
-            if (emptyForm) emptyForm.removeAttribute('hidden');
-            toggle.textContent = 'Hide Trash';
-            toggle.setAttribute('aria-expanded', 'true');
-        } else {
-            section.setAttribute('hidden', '');
-            if (emptyForm) emptyForm.setAttribute('hidden', '');
-            toggle.textContent = 'Open Trash';
-            toggle.setAttribute('aria-expanded', 'false');
+    var trashToggle = document.getElementById('notification-trash-toggle');
+    var trashSection = document.getElementById('notification-trash-section');
+    var emptyForm = document.getElementById('notification-empty-trash-form');
+    if (trashToggle && trashSection) {
+        trashToggle.addEventListener('click', function () {
+            var open = trashSection.hasAttribute('hidden');
+            if (open) {
+                trashSection.removeAttribute('hidden');
+                if (emptyForm) emptyForm.removeAttribute('hidden');
+                trashToggle.textContent = 'Hide Trash';
+                trashToggle.setAttribute('aria-expanded', 'true');
+            } else {
+                trashSection.setAttribute('hidden', '');
+                if (emptyForm) emptyForm.setAttribute('hidden', '');
+                trashToggle.textContent = 'Open Trash';
+                trashToggle.setAttribute('aria-expanded', 'false');
+            }
+        });
+    }
+
+    var deleteOverlay = document.getElementById('notifications-delete-all-read-overlay');
+    var deleteOpenBtn = document.getElementById('notifications-delete-all-read-open');
+    var deleteCancelBtn = document.getElementById('notifications-delete-all-read-cancel');
+
+    function closeDeleteOverlay() {
+        if (!deleteOverlay) return;
+        deleteOverlay.hidden = true;
+        deleteOverlay.setAttribute('aria-hidden', 'true');
+    }
+
+    function openDeleteOverlay() {
+        if (!deleteOverlay) return;
+        deleteOverlay.hidden = false;
+        deleteOverlay.setAttribute('aria-hidden', 'false');
+    }
+
+    if (deleteOpenBtn) {
+        deleteOpenBtn.addEventListener('click', openDeleteOverlay);
+    }
+    if (deleteCancelBtn) {
+        deleteCancelBtn.addEventListener('click', closeDeleteOverlay);
+    }
+    if (deleteOverlay) {
+        deleteOverlay.addEventListener('click', function (evt) {
+            if (evt.target === deleteOverlay) closeDeleteOverlay();
+        });
+    }
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && deleteOverlay && !deleteOverlay.hidden) {
+            closeDeleteOverlay();
         }
+    });
+
+    var listEl = document.getElementById('notifications-list');
+    var loadMoreBtn = document.getElementById('notifications-load-more');
+    if (!listEl || !loadMoreBtn) return;
+
+    function escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function urlForId(template, id) {
+        return String(template || '').replace(/\/0(\/|$)/, '/' + id + '$1');
+    }
+
+    function buildNotificationArticle(note) {
+        var detailUrl = urlForId(listEl.getAttribute('data-detail-url-template'), note.id);
+        var deleteUrl = urlForId(listEl.getAttribute('data-delete-url-template'), note.id);
+        var reason = note.reason_label || note.reason || '';
+        var dateHtml = note.creation_date_utc
+            ? '<time class="local-datetime" datetime="' + escapeHtml(note.creation_date_utc) + '">' +
+                escapeHtml(note.creation_date_utc) +
+              '</time>'
+            : 'Unknown date';
+        var statusClass = note.is_read
+            ? 'notification-status-tag notification-status-tag--read'
+            : 'notification-status-tag notification-status-tag--unread';
+        var statusText = note.is_read ? 'read' : 'unread';
+        var reasonHtml = reason
+            ? '<span class="notification-item-reason">' + escapeHtml(reason) + '</span>'
+            : '';
+
+        var article = document.createElement('article');
+        article.className = 'notification-item notification-item--list';
+        article.setAttribute('data-notification-id', String(note.id));
+        article.innerHTML =
+            '<div class="notification-list-row">' +
+                '<a href="' + escapeHtml(detailUrl) + '" class="notification-list-link">' +
+                    '<div class="notification-item-header">' +
+                        '<h2 class="notification-item-title">' + escapeHtml(note.title) + '</h2>' +
+                        '<div class="notification-item-meta">' + dateHtml + '</div>' +
+                    '</div>' +
+                    reasonHtml +
+                '</a>' +
+                '<form method="post" action="' + escapeHtml(deleteUrl) + '" class="notification-delete-form">' +
+                    '<input type="hidden" name="csrfmiddlewaretoken" value="' + escapeHtml(csrfToken) + '">' +
+                    '<button type="submit" class="notification-delete-btn" title="Move notification to trash">Delete</button>' +
+                '</form>' +
+            '</div>' +
+            '<span class="' + statusClass + '">' + statusText + '</span>';
+        return article;
+    }
+
+    var loading = false;
+    loadMoreBtn.addEventListener('click', function () {
+        if (loading) return;
+        var offset = parseInt(listEl.getAttribute('data-loaded-count') || '0', 10) || 0;
+        var url = listEl.getAttribute('data-load-more-url') + '?offset=' + encodeURIComponent(offset);
+        loading = true;
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.textContent = 'Loading…';
+
+        fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+            credentials: 'same-origin'
+        })
+            .then(function (response) {
+                if (!response.ok) throw new Error('Failed to load notifications');
+                return response.json();
+            })
+            .then(function (data) {
+                var notes = data.notifications || [];
+                notes.forEach(function (note) {
+                    listEl.appendChild(buildNotificationArticle(note));
+                });
+                if (window.MAPHydrateLocalDatetimes) {
+                    window.MAPHydrateLocalDatetimes(listEl);
+                }
+                var nextOffset = typeof data.next_offset === 'number'
+                    ? data.next_offset
+                    : offset + notes.length;
+                listEl.setAttribute('data-loaded-count', String(nextOffset));
+                if (data.has_more) {
+                    loadMoreBtn.disabled = false;
+                    loadMoreBtn.textContent = 'Load 10 more';
+                } else {
+                    var wrap = loadMoreBtn.closest('.notifications-load-more-wrap');
+                    if (wrap) wrap.remove();
+                    else loadMoreBtn.remove();
+                }
+            })
+            .catch(function () {
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.textContent = 'Load 10 more';
+            })
+            .finally(function () {
+                loading = false;
+            });
     });
 })();
 </script>
-{% endif %}
 {% endblock %}

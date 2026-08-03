@@ -141,17 +141,21 @@
     <div class="grade-review-toolbar">
       <div>
         <h2 style="display:inline-flex; align-items:center; gap:10px; margin:0;">
-          <a href="{% if student_readonly %}{% url 'assessment_view' course.id %}{% else %}{% url 'course_grades_assessment' course.id assessment.id %}{% endif %}" style="color:#64748b;" title="Back">
+          <a href="{% if parent_viewer %}{% url 'grade_summary' attempt.user_id course.id %}{% elif student_readonly %}{% url 'assessment_view' course.id %}{% else %}{% url 'course_grades_assessment' course.id assessment.id %}{% endif %}" style="color:#64748b;" title="Back">
             <i class="fas fa-arrow-left"></i>
           </a>
-          {% if student_readonly %}
+          {% if parent_viewer %}
+            {{ assessment.name }} — {{ attempt.user.username }}
+          {% elif student_readonly %}
             {{ assessment.name }} — Your submission
           {% else %}
             {{ assessment.name }} — {{ attempt.user.username }}
           {% endif %}
         </h2>
         <p class="subtitle" style="margin:6px 0 0;">
-          {% if student_readonly %}
+          {% if parent_viewer %}
+            Review this student’s submitted answers. Scores and answers cannot be edited.
+          {% elif student_readonly %}
             Review your submitted answers. Scores and answers cannot be edited.
           {% else %}
             Score edits save automatically. Manual items are flagged until you set points.

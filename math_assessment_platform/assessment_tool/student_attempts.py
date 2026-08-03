@@ -1854,14 +1854,11 @@ def notify_teachers_focus_enforcement_bypassed(attempt) -> None:
     ).exists():
         return
 
-    student_name = " ".join(
-        part
-        for part in (
-            (getattr(student, "user_first_name", None) or "").strip(),
-            (getattr(student, "user_last_name", None) or "").strip(),
-        )
-        if part
-    ) or (getattr(student, "username", None) or "Unknown student")
+    from .dashboard import user_display_name
+
+    student_name = user_display_name(student) or (
+        getattr(student, "username", None) or "Unknown student"
+    )
     username = getattr(student, "username", None) or "—"
     assessment_name = (
         (template.name if template is not None else None)

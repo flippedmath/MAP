@@ -22,8 +22,19 @@ REASON_COMPLETE_PROBLEM_RENDER_FAILURE = "complete_problem_render_failure"
 REASON_COURSE_INVITATION = "course_invitation"
 REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT = "course_invitation_different_account"
 REASON_COURSE_INVITATION_ALREADY_ENROLLED = "course_invitation_already_enrolled"
+REASON_PARENT_COURSE_INVITATION = "parent_course_invitation"
+REASON_PARENT_COURSE_INVITATION_DIFFERENT_ACCOUNT = (
+    "parent_course_invitation_different_account"
+)
+REASON_PARENT_COURSE_INVITATION_ALREADY_HAS_ACCESS = (
+    "parent_course_invitation_already_has_access"
+)
+REASON_PARENT_COURSE_INVITATION_WRONG_ACCOUNT_TYPE = (
+    "parent_course_invitation_wrong_account_type"
+)
 
 NOTIFICATION_TRASH_RETENTION = timedelta(days=30)
+NOTIFICATIONS_PAGE_SIZE = 10
 
 
 def _as_utc(value=None):
@@ -168,6 +179,88 @@ def mark_user_notifications_read(user) -> int:
     return Notification.objects.filter(
         receiver=user,
     ).filter(_attention_worthy_filter()).update(is_read=True)
+
+
+def mark_all_active_notifications_read(user) -> int:
+    """Mark every active (non-trashed) unread notification as read. Returns count."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return 0
+    Notification = _notification_model()
+    return (
+        Notification.objects.filter(receiver=user, is_read=False)
+        .filter(_sent_filter())
+        .filter(_active_filter())
+        .update(is_read=True)
+    )
+
+
+def user_has_unread_list_notifications(user) -> bool:
+    """True if the user has any unread notification that appears on the list page."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    Notification = _notification_model()
+    return (
+        Notification.objects.filter(receiver=user, is_read=False)
+        .filter(_sent_filter())
+        .filter(_active_filter())
+        .exists()
+    )
+
+
+def user_has_read_list_notifications(user) -> bool:
+    """True if the user has any read (active) notification that can be bulk-deleted."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    Notification = _notification_model()
+    return (
+        Notification.objects.filter(receiver=user, is_read=True)
+        .filter(_sent_filter())
+        .filter(_active_filter())
+        .exists()
+    )
+
+
+def delete_all_read_notifications_for_user(user) -> int:
+    """Move all active read notifications into trash. Returns rows updated."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return 0
+    Notification = _notification_model()
+    return (
+        Notification.objects.filter(receiver=user, is_read=True)
+        .filter(_sent_filter())
+        .filter(_active_filter())
+        .update(deleted_at=timezone.now())
+    )
+
+
+def serialize_notification_list_item(note):
+    """Template/JSON-friendly dict for one notifications-list row."""
+    return {
+        "id": note.pk,
+        "title": note.title,
+        "reason": note.reason,
+        "reason_label": reason_label_for(note.reason),
+        "creation_date_utc": (
+            _utc_isoformat(note.creation_date) if note.creation_date else None
+        ),
+        "is_read": bool(note.is_read),
+    }
+
+
+def notifications_page_for_user(user, *, offset=0, limit=NOTIFICATIONS_PAGE_SIZE):
+    """
+    Return (rows, total_count, has_more) for the active notifications list.
+
+    ``rows`` are serialized list items; ``offset``/``limit`` slice newest-first.
+    """
+    qs = notifications_for_user(user, include_content=False)
+    total_count = qs.count()
+    offset = max(0, int(offset or 0))
+    limit = max(1, int(limit or NOTIFICATIONS_PAGE_SIZE))
+    page = list(qs[offset : offset + limit])
+    rows = [serialize_notification_list_item(note) for note in page]
+    has_more = (offset + len(rows)) < total_count
+    return rows, total_count, has_more
 
 
 def notifications_for_user(user, *, include_content=False):
@@ -375,6 +468,16 @@ def _humanize_reason(reason):
         REASON_COURSE_INVITATION: "Course invitation",
         REASON_COURSE_INVITATION_DIFFERENT_ACCOUNT: "Invitation accepted with different account",
         REASON_COURSE_INVITATION_ALREADY_ENROLLED: "Invite used by already-enrolled student",
+        REASON_PARENT_COURSE_INVITATION: "Parent grade access invitation",
+        REASON_PARENT_COURSE_INVITATION_DIFFERENT_ACCOUNT: (
+            "Parent invitation accepted with different account"
+        ),
+        REASON_PARENT_COURSE_INVITATION_ALREADY_HAS_ACCESS: (
+            "Parent invite used by parent who already has access"
+        ),
+        REASON_PARENT_COURSE_INVITATION_WRONG_ACCOUNT_TYPE: (
+            "Non-Parent account used a parent invitation"
+        ),
     }
     if not reason:
         return None
@@ -658,6 +761,119 @@ def build_notification_detail(note):
                 "invite_path": invite_path,
                 "invitation_sent_to_email": parsed.get("invitation_sent_to_email"),
                 "invitation_sent_to_username": parsed.get("invitation_sent_to_username"),
+                "accepted_username": parsed.get("accepted_username"),
+                "accepted_display_name": parsed.get("accepted_display_name"),
+                "accepted_email": parsed.get("accepted_email"),
+            }
+        )
+        return base
+
+    if reason == REASON_PARENT_COURSE_INVITATION and isinstance(parsed, dict):
+        from django.urls import reverse
+
+        invite_path = parsed.get("invite_path") or ""
+        if not invite_path and parsed.get("invite_code"):
+            invite_path = reverse(
+                "parent_invite_redeem",
+                kwargs={"code": parsed.get("invite_code")},
+            )
+        base.update(
+            {
+                "detail_kind": REASON_PARENT_COURSE_INVITATION,
+                "course_name": parsed.get("course_name") or "",
+                "student_name": parsed.get("student_name") or "",
+                "student_username": parsed.get("student_username") or "",
+                "invite_path": invite_path,
+                "invite_message": parsed.get("message")
+                or (
+                    "You have been invited to view a student's grades. "
+                    "Open the invitation link and accept to activate access."
+                ),
+            }
+        )
+        return base
+
+    if reason == REASON_PARENT_COURSE_INVITATION_ALREADY_HAS_ACCESS and isinstance(
+        parsed, dict
+    ):
+        from django.urls import reverse
+
+        management_path = parsed.get("course_management_path") or ""
+        if not management_path and parsed.get("course_id") and parsed.get("invite_id"):
+            management_path = (
+                reverse("course_management", kwargs={"course_id": parsed["course_id"]})
+                + f"?parent_invite={parsed['invite_id']}"
+            )
+        elif not management_path and parsed.get("course_id"):
+            management_path = reverse(
+                "course_management", kwargs={"course_id": parsed["course_id"]}
+            )
+        base.update(
+            {
+                "detail_kind": REASON_PARENT_COURSE_INVITATION_ALREADY_HAS_ACCESS,
+                "course_name": parsed.get("course_name") or "",
+                "student_name": parsed.get("student_name") or "",
+                "invite_message": parsed.get("message") or "",
+                "invitation_sent_to_email": parsed.get("invitation_sent_to_email"),
+                "accessor_username": parsed.get("accessor_username"),
+                "accessor_display_name": parsed.get("accessor_display_name"),
+                "accessor_email": parsed.get("accessor_email"),
+                "course_management_path": management_path,
+            }
+        )
+        return base
+
+    if reason == REASON_PARENT_COURSE_INVITATION_WRONG_ACCOUNT_TYPE and isinstance(
+        parsed, dict
+    ):
+        from django.urls import reverse
+
+        management_path = parsed.get("course_management_path") or ""
+        if not management_path and parsed.get("course_id") and parsed.get("invite_id"):
+            management_path = (
+                reverse("course_management", kwargs={"course_id": parsed["course_id"]})
+                + f"?parent_invite={parsed['invite_id']}"
+            )
+        elif not management_path and parsed.get("course_id"):
+            management_path = reverse(
+                "course_management", kwargs={"course_id": parsed["course_id"]}
+            )
+        base.update(
+            {
+                "detail_kind": REASON_PARENT_COURSE_INVITATION_WRONG_ACCOUNT_TYPE,
+                "course_name": parsed.get("course_name") or "",
+                "student_name": parsed.get("student_name") or "",
+                "invite_message": parsed.get("message") or "",
+                "invitation_sent_to_email": parsed.get("invitation_sent_to_email"),
+                "accessor_username": parsed.get("accessor_username"),
+                "accessor_display_name": parsed.get("accessor_display_name"),
+                "accessor_email": parsed.get("accessor_email"),
+                "accessor_user_type": parsed.get("accessor_user_type"),
+                "course_management_path": management_path,
+            }
+        )
+        return base
+
+    if reason == REASON_PARENT_COURSE_INVITATION_DIFFERENT_ACCOUNT and isinstance(
+        parsed, dict
+    ):
+        from django.urls import reverse
+
+        invite_path = parsed.get("invite_path") or ""
+        if not invite_path and parsed.get("invite_code"):
+            invite_path = reverse(
+                "parent_invite_redeem",
+                kwargs={"code": parsed.get("invite_code")},
+            )
+        base.update(
+            {
+                "detail_kind": REASON_PARENT_COURSE_INVITATION_DIFFERENT_ACCOUNT,
+                "course_name": parsed.get("course_name") or "",
+                "student_name": parsed.get("student_name") or "",
+                "invite_message": parsed.get("message") or "",
+                "invite_code": parsed.get("invite_code") or "",
+                "invite_path": invite_path,
+                "invitation_sent_to_email": parsed.get("invitation_sent_to_email"),
                 "accepted_username": parsed.get("accepted_username"),
                 "accepted_display_name": parsed.get("accepted_display_name"),
                 "accepted_email": parsed.get("accepted_email"),

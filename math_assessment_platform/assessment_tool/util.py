@@ -247,6 +247,35 @@ def get_valid_unique_name(model_class, parent_obj, requested_name, field_name='n
     
     return new_name, None
 
+
+def resolve_unique_sibling_name(parent_obj, requested_name, exclude_id=None):
+    """
+    Pick a sibling BranchGroup name for move/clone.
+
+    Keeps the existing name (including a prior `` (N)`` uniquifier) when it is
+    free under ``parent_obj``. On collision, strips a trailing uniquifier and
+    allocates via ``get_valid_unique_name`` (which may add `` (1)``, `` (2)``, …).
+    """
+    BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
+    clean_name = (requested_name or "").strip()
+    if not clean_name:
+        return None, "Name cannot be blank."
+
+    qs = BranchGroup.objects.filter(parent=parent_obj, name=clean_name)
+    if exclude_id is not None:
+        qs = qs.exclude(id=exclude_id)
+    if not qs.exists():
+        return clean_name, None
+
+    base_name = _strip_name_uniquifier(clean_name) or clean_name
+    return get_valid_unique_name(
+        BranchGroup,
+        parent_obj,
+        base_name,
+        exclude_id=exclude_id,
+    )
+
+
 def get_course_image_path(instance, filename):
     """
     Generates a unique path: media/course_images/user_<id>/<uuid>_<filename>
@@ -287,14 +316,31 @@ def clone_course_payload(old_course, new_folder, new_owner, context):
     return new_course
 
 def clone_assessment_payload(old_assessment, new_folder, new_owner, context):
+    """
+    Clone an assessment row onto ``new_folder``.
+
+    When cloning inside a course tree, ``context['course']`` is the new course.
+    When copying an assessment alone into Workspace / Collaboration, course stays
+    NULL — a standalone library assessment (not student-facing until attached).
+    """
     new_asm = copy.deepcopy(old_assessment)
     new_asm.pk = None
+    new_asm.id = None
     new_asm.owner = new_owner
     new_asm.branch_location = new_folder
-    # Link to the course currently being cloned in this tree (may be None for standalone)
-    new_asm.course = context.get('course')
+    # Never keep student take metadata on a workspace/course tree clone.
+    new_asm.user = None
+    new_asm.parent_assessment = None
+    new_asm.is_historic = False
+    new_asm.start_time = None
+    new_asm.end_time = None
+    # Draft copies are never live for students until the teacher opens them.
+    new_asm.status = "hidden"
+    # Only attach to a course when this clone is nested under a course copy.
+    # Standalone library copies deliberately leave course_id NULL.
+    new_asm.course = context.get("course")
     new_asm.save()
-    context['assessment'] = new_asm
+    context["assessment"] = new_asm
     return new_asm
 
 def clone_aqg_payload(old_aqg, new_folder, new_owner, context):
@@ -766,6 +812,16 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
     # I have circular imports unless I import BranchGroup later. So this resolves my problem:
     BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
 
+    if starter_node and new_parent is not None:
+        from .branch_hierarchy import branch_placement_error
+
+        placement_err = branch_placement_error(
+            getattr(new_parent, 'folder_type', None),
+            getattr(old_folder, 'folder_type', None),
+        )
+        if placement_err:
+            return JsonResponse({'error': placement_err}, status=400)
+
     t_name = old_folder.name
     # if it's the first node, change the name, otherwise keep the name the same
     if starter_node:
@@ -775,12 +831,8 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
             # Duplicate the BranchGroup (Folder)
             # We need a NEW folder for the NEW course to satisfy the OneToOne constraint
             t_name = f"{old_folder.name}"
-            # This means the name has a (1) or some other number at the end (#).
-            #  So crop it out since 'get_valid_unique_name' will add a unique combination back in
-            if '(' in t_name:
-                split_name = t_name.split()
-                t_name = " ".join(split_name[:len(split_name) - 1])
-            t_name, error = get_valid_unique_name(BranchGroup, new_parent, t_name)
+            # Keep exact name when free under dest; otherwise strip (N) and re-uniquify.
+            t_name, error = resolve_unique_sibling_name(new_parent, t_name)
             if error:
                 return JsonResponse({'error': error}, status=400)
 

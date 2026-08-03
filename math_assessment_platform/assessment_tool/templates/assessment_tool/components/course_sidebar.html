@@ -11,11 +11,22 @@
 <div class="course-layout-container">
     <aside class="course-sidebar">
         <div class="sidebar-header">
+            {% if course %}
             <h3>{{ course.name }}</h3>
             <span class="course-code">version {{ course.code|default:course.version }}</span>
+            {% else %}
+            <h3>Library assessment</h3>
+            <span class="course-code">standalone (not in a course)</span>
+            {% endif %}
         </div>
         
         <nav class="sidebar-nav">
+            {% if parent_viewer and course and student %}
+            <a href="{% url 'grade_summary' student.user_id course.id %}" class="nav-item {% if active_tab == 'grades' %}active{% endif %}">
+                <span class="nav-icon">📈</span>
+                <span class="nav-label">Grades</span>
+            </a>
+            {% elif course %}
             <a href="{% url 'course_detail' course.id %}" class="nav-item {% if active_tab == 'introduction' %}active{% endif %}">
                 <span class="nav-icon">📖</span>
                 <span class="nav-label">Introduction</span>
@@ -39,9 +50,15 @@
                 <span class="nav-label">Course Management</span>
             </a>
             {% endif %}
-            <a href="#" class="nav-item {% if active_tab == 'settings' %}active{% endif %} disabled-placeholder">
-                <span class="nav-icon">⚙️</span>
-                <span class="nav-label">Course Settings</span>
+            {% endif %}
+            {% else %}
+            <a href="{% url 'file_explorer' %}" class="nav-item">
+                <span class="nav-icon">📁</span>
+                <span class="nav-label">Explorer</span>
+            </a>
+            <a href="{% url 'assessment_edit_by_id' assessment.id %}" class="nav-item {% if active_tab == 'assessments' %}active{% endif %}">
+                <span class="nav-icon">📝</span>
+                <span class="nav-label">Assessment setup</span>
             </a>
             {% endif %}
         </nav>

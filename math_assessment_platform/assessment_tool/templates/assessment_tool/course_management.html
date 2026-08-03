@@ -160,9 +160,163 @@
         {% endif %}
     </section>
 
-    <section class="card" style="padding: 20px; opacity: 0.75;">
-        <h3 style="margin-top: 0;">Other management tools</h3>
-        <p style="color: #64748b; margin-bottom: 0;">Credits, roster tools, and parent links — coming soon.</p>
+    <section class="card" style="margin-bottom: 24px; padding: 20px;">
+        <h3 style="margin-top: 0;">Parents with grade access</h3>
+        <p style="color: #64748b;">
+            Parents who already have grade access for an enrolled student (in any course) appear here.
+            Grant or revoke access for this course.
+        </p>
+        {% if parent_access_rows %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                    <thead>
+                        <tr style="text-align: left; border-bottom: 2px solid #e2e8f0;">
+                            <th style="padding: 8px;">Parent</th>
+                            <th style="padding: 8px;">Student</th>
+                            <th style="padding: 8px;">Access</th>
+                            <th style="padding: 8px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in parent_access_rows %}
+                            <tr style="border-bottom: 1px solid #f1f5f9;">
+                                <td style="padding: 8px;">
+                                    {{ row.parent_name }}
+                                    <span style="color: #94a3b8;">({{ row.parent_username }})</span>
+                                </td>
+                                <td style="padding: 8px;">
+                                    {{ row.student_name }}
+                                    <span style="color: #94a3b8;">({{ row.student_username }})</span>
+                                </td>
+                                <td style="padding: 8px;">
+                                    {% if row.has_access %}
+                                        Has access
+                                    {% else %}
+                                        No access for this course
+                                    {% endif %}
+                                </td>
+                                <td style="padding: 8px;">
+                                    {% if row.has_access %}
+                                        <form method="post" style="display: inline;"
+                                              onsubmit="return confirm('Revoke grade access for this parent in this course?');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="revoke_parent_access">
+                                            <input type="hidden" name="parent_id" value="{{ row.parent_id }}">
+                                            <input type="hidden" name="student_id" value="{{ row.student_id }}">
+                                            <button type="submit" class="btn" style="background: #b91c1c; padding: 4px 10px; font-size: 0.8rem;">Revoke</button>
+                                        </form>
+                                    {% else %}
+                                        <form method="post" style="display: inline;">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="grant_parent_access">
+                                            <input type="hidden" name="parent_id" value="{{ row.parent_id }}">
+                                            <input type="hidden" name="student_id" value="{{ row.student_id }}">
+                                            <button type="submit" class="btn" style="padding: 4px 10px; font-size: 0.8rem;">Grant access</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p style="color: #94a3b8; margin-bottom: 0;">
+                No parents with grade access for enrolled students yet. Invite a parent below.
+            </p>
+        {% endif %}
+    </section>
+
+    <section class="card" style="padding: 20px;">
+        <h3 style="margin-top: 0;">Invite a parent</h3>
+        <p style="color: #64748b;">
+            Invite a parent/guardian by email to view an enrolled student’s grades for this course.
+            New parents create a Parent account from the invite link.
+        </p>
+        <form method="post" style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create_parent_invite">
+            <div style="flex: 1; min-width: 200px;">
+                <label style="display: block; font-weight: 600; margin-bottom: 6px;">Student</label>
+                <select name="student_id" required style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+                    <option value="">Select enrolled student…</option>
+                    {% for row in enrolled_students %}
+                        <option value="{{ row.user_id }}"
+                            {% if parent_invite_form.student_id.value|stringformat:"s" == row.user_id|stringformat:"s" %}selected{% endif %}>
+                            {{ row.username }} — {{ row.display_name }}
+                        </option>
+                    {% endfor %}
+                </select>
+                {% for error in parent_invite_form.student_id.errors %}
+                    <small style="color: #991b1b; display: block;">{{ error }}</small>
+                {% endfor %}
+            </div>
+            <div style="flex: 1; min-width: 220px;">
+                <label style="display: block; font-weight: 600; margin-bottom: 6px;">{{ parent_invite_form.parent_email.label }}</label>
+                {{ parent_invite_form.parent_email }}
+                {% for error in parent_invite_form.parent_email.errors %}
+                    <small style="color: #991b1b; display: block;">{{ error }}</small>
+                {% endfor %}
+            </div>
+            <button type="submit" class="btn">Create parent invitation</button>
+        </form>
+
+        <h4 style="margin: 24px 0 12px;">Pending parent invitations</h4>
+        {% if parent_invite_rows %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                    <thead>
+                        <tr style="text-align: left; border-bottom: 2px solid #e2e8f0;">
+                            <th style="padding: 8px;">Parent</th>
+                            <th style="padding: 8px;">Student</th>
+                            <th style="padding: 8px;">Status</th>
+                            <th style="padding: 8px;">Account</th>
+                            <th style="padding: 8px;"></th>
+                            <th style="padding: 8px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in parent_invite_rows %}
+                            <tr class="{% if highlight_parent_invite_id and highlight_parent_invite_id == row.invite.id|stringformat:'s' %}invite-row-highlight{% endif %}"
+                                style="border-bottom: 1px solid #f1f5f9;">
+                                <td style="padding: 8px;">{{ row.recipient }}</td>
+                                <td style="padding: 8px;">
+                                    {{ row.student_name }}
+                                    <span style="color: #94a3b8;">({{ row.student_username }})</span>
+                                </td>
+                                <td style="padding: 8px;">{{ row.status_label }}</td>
+                                <td style="padding: 8px;">
+                                    {% if row.account_exists %}Exists{% else %}New email{% endif %}
+                                </td>
+                                <td style="padding: 8px;">
+                                    <button type="button"
+                                            class="btn copy-invite-link-btn"
+                                            style="padding: 4px 10px; font-size: 0.8rem; background: #2563eb;"
+                                            data-invite-url="{{ row.redeem_url }}">
+                                        Copy invite link
+                                    </button>
+                                </td>
+                                <td style="padding: 8px;">
+                                    {% if row.can_void %}
+                                        <form method="post" style="display: inline;"
+                                              onsubmit="return confirm('Void and delete this parent invitation? The link will no longer work.');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="void_parent_invite">
+                                            <input type="hidden" name="invite_id" value="{{ row.invite.id }}">
+                                            <button type="submit" class="btn" style="background: #64748b; padding: 4px 10px; font-size: 0.8rem;">Void</button>
+                                        </form>
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p style="color: #94a3b8; margin-bottom: 0;">No pending parent invitations.</p>
+        {% endif %}
     </section>
 </div>
 
@@ -193,7 +347,8 @@
 </div>
 
 <style>
-    .course-management input[type="text"] {
+    .course-management input[type="text"],
+    .course-management input[type="email"] {
         width: 100%;
         padding: 10px;
         border: 1px solid #cbd5e1;

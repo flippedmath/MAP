@@ -73,6 +73,13 @@ class MyUserManager(BaseUserManager):
         fields.setdefault('ongoing_assessment', False)
         fields.setdefault('ban_account', False)
         return self.create_user(**fields)
+
+    def create_parent_user(self, **fields):
+        fields.setdefault('user_type', 'Parent')
+        fields.setdefault('unactivated_account', True)
+        fields.setdefault('ongoing_assessment', False)
+        fields.setdefault('ban_account', False)
+        return self.create_user(**fields)
     
     def create_teacher_user(self, **fields):
         fields.setdefault('user_type', 'Teacher')
@@ -188,7 +195,18 @@ class QA(models.Model):
 
 
 class Assessment(models.Model):
-    course = models.ForeignKey('Course', models.DO_NOTHING, related_name='assessments')
+    course = models.ForeignKey(
+        'Course',
+        models.DO_NOTHING,
+        related_name='assessments',
+        blank=True,
+        null=True,
+        db_comment=(
+            'Course this assessment belongs to. NULL for standalone library '
+            'assessments (Workspace / shared) that are not student-facing until '
+            'attached to a course.'
+        ),
+    )
     name = models.CharField(max_length=255)
     order = models.CharField(max_length=100, blank=True, null=True, db_comment="Will only be 'null' if it's the copied version assigned to a student for test taking")
     parent_assessment = models.ForeignKey('self', models.DO_NOTHING, blank=True, null=True, db_comment="Will only exist if it's a version being taken for a student")
@@ -962,8 +980,17 @@ class OpenStudentAssessmentOverwrite(models.Model):
 
 
 class ParentUserCourse(models.Model):
-    student = models.OneToOneField(UserProfile, models.DO_NOTHING, primary_key=True)  # The composite primary key (student_id, parent_id, course_id) found, that is not supported. The first column is selected.
-    parent = models.ForeignKey(UserProfile, models.DO_NOTHING, related_name='parentusercourse_parent_set')
+    id = models.AutoField(primary_key=True)
+    student = models.ForeignKey(
+        UserProfile,
+        models.DO_NOTHING,
+        related_name='parent_course_links_as_student',
+    )
+    parent = models.ForeignKey(
+        UserProfile,
+        models.DO_NOTHING,
+        related_name='parentusercourse_parent_set',
+    )
     course = models.ForeignKey(Course, models.DO_NOTHING)
 
     class Meta:
@@ -971,6 +998,44 @@ class ParentUserCourse(models.Model):
         db_table = 'parent_user_course'
         unique_together = (('student', 'parent', 'course'),)
         db_table_comment = "Table used to identify that a parent can see their kid's grades for a particular course"
+
+
+class ParentCourseInvitation(models.Model):
+    STATUS_PENDING = 'pending'
+
+    course = models.ForeignKey(Course, models.DO_NOTHING)
+    student = models.ForeignKey(
+        UserProfile,
+        models.DO_NOTHING,
+        related_name='parent_invitations_as_student',
+    )
+    temp_email = models.CharField(max_length=255)
+    code = models.CharField(unique=True, max_length=255)
+    timeout = models.DateTimeField()
+    status = models.CharField(max_length=32, default=STATUS_PENDING)
+    target_user = models.ForeignKey(
+        UserProfile,
+        models.DO_NOTHING,
+        blank=True,
+        null=True,
+        related_name='parent_course_invitations',
+    )
+    created_by = models.ForeignKey(
+        UserProfile,
+        models.DO_NOTHING,
+        blank=True,
+        null=True,
+        related_name='created_parent_course_invitations',
+    )
+    creation_date = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'parent_course_invitation'
+        db_table_comment = (
+            'Pending Parent invites for grade access to a Student in a Course. '
+            'Void and accept delete the row.'
+        )
 
 
 class PermissionGroup(models.Model):
