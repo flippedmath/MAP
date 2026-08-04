@@ -488,8 +488,6 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
         const userType = "{{ request.user.user_type }}";
         const isStaffUser = userType === 'Teacher' || userType === 'IT_Support';
         const inCourses = location.startsWith(coursesFolder);
-        const inCollab = location.startsWith(sharedForCollab);
-        const contentTypes = ['course', 'assessment', 'aqg', 'cqd', 'problem', 'folder'];
 
         // Collaboration is a virtual listing — item paths still live under Workspace.
         const inCollabListing = !!(
@@ -499,10 +497,18 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
         );
         const isCollabOwnedShare = !!(targetEl && targetEl.classList.contains('item-collab-owned'));
 
-        if (isStaffUser && contentTypes.includes(type) && (inWorkspace || inCourses || inCollab || inCollabListing)) {
-            if (['course', 'assessment', 'aqg', 'cqd', 'problem'].includes(type) && copyOption) {
-                copyOption.style.display = 'block';
-            }
+        const perm = (targetEl && targetEl.getAttribute('data-perm')) || '';
+        const canEditContent = perm === 'owner' || perm === 'edit';
+        // Read ACL (incl. Public Library / nested foreign shares) can view and copy.
+        const canViewContent = canEditContent || perm === 'read_only';
+
+        if (
+            isStaffUser &&
+            canViewContent &&
+            ['course', 'assessment', 'aqg', 'cqd', 'problem'].includes(type) &&
+            copyOption
+        ) {
+            copyOption.style.display = 'block';
         }
         if (isStaffUser && inWorkspace && !isCoreFolder && shareOption) {
             shareOption.style.display = 'block';
@@ -520,18 +526,13 @@ function showContextMenu(e, id, type, name, owner, location, hasItems, linkedId)
             unshareOption.style.display = 'block';
         }
 
-        const perm = (targetEl && targetEl.getAttribute('data-perm')) || '';
-        const canEditContent = perm === 'owner' || perm === 'edit';
-        const canViewContent = canEditContent || perm === 'read_only';
-
         // Courses folder: view-only open + normal Go to course (edit via normal course access)
         if (type === 'course' && inCourses && linkedId) {
             if (viewOption) viewOption.style.display = 'block';
             if (gotoCourseOption) gotoCourseOption.style.display = 'block';
-        }
-
-        if (['course', 'assessment', 'problem'].includes(type) && (inWorkspace || inCollab || inCollabListing)) {
-            if (canViewContent && viewOption) viewOption.style.display = 'block';
+        } else if (['course', 'assessment', 'problem'].includes(type) && canViewContent) {
+            // Workspace, Collaboration, Public Library, and any other readable share.
+            if (viewOption) viewOption.style.display = 'block';
             if (canEditContent && editOption) editOption.style.display = 'block';
         }
     }

@@ -844,6 +844,33 @@ function canPlaceBranchUnder(parentType, childType) {
   return !!(allowed && allowed.has(child));
 }
 
+function movePathIncludesCourses() {
+  return movePathStack.some((seg) => seg.name === 'Courses' && (seg.type || 'folder') === 'folder');
+}
+
+function isMoveCoursesRoot() {
+  const current = movePathStack[movePathStack.length - 1];
+  return !!(
+    current &&
+    current.name === 'Courses' &&
+    (current.type || 'folder') === 'folder' &&
+    movePathStack.length >= 2
+  );
+}
+
+/** Extra Courses rules beyond hierarchy: no plain folders; Courses root = courses only. */
+function canMoveIntoCurrentDestination(sourceType) {
+  const child = (sourceType || 'folder').toLowerCase();
+  const current = movePathStack[movePathStack.length - 1];
+  if (!current) return false;
+  if (!canPlaceBranchUnder(current.type || 'folder', child)) return false;
+  if (movePathIncludesCourses()) {
+    if (child === 'folder') return false;
+    if (isMoveCoursesRoot() && child !== 'course') return false;
+  }
+  return true;
+}
+
 async function fetchMoveFolderItems(folderId) {
   const res = await fetch(`/get-folder-contents/${folderId}/?level=1`);
   const html = await res.text();
@@ -903,17 +930,33 @@ async function renderMoveBrowser() {
   const list = document.getElementById('move-list');
   list.innerHTML = '';
 
-  const destAccepts = canPlaceBranchUnder(current.type || 'folder', moveSourceType);
+  const destAccepts = canMoveIntoCurrentDestination(moveSourceType);
   const hint = document.createElement('div');
   hint.style.cssText = 'padding:10px;background:#f8fafc;border-bottom:1px solid #eee;font-size:0.9rem;color:#475569;';
   if (destAccepts) {
-    hint.innerHTML =
-      '<em>Destination set to this folder. Open a subfolder to go deeper, or click Move / Copy here.</em>';
+    if (isMoveCoursesRoot() && moveSourceType === 'course') {
+      hint.innerHTML =
+        '<em>Moving a course here sets it to <strong>Closed</strong>. Reactivate it later from the Courses page. Nested assessments stay with the course.</em>';
+    } else if (movePathIncludesCourses()) {
+      hint.innerHTML =
+        '<em>Destination is inside Courses. Nested content under the moved item stays intact.</em>';
+    } else {
+      hint.innerHTML =
+        '<em>Destination set to this folder. Open a subfolder to go deeper, or click Move / Copy here.</em>';
+    }
   } else {
     hint.style.background = '#fff7ed';
     hint.style.color = '#9a3412';
-    hint.innerHTML =
-      `<em>This location cannot hold a ${moveSourceType}. Open a valid parent, or cancel.</em>`;
+    if (movePathIncludesCourses() && moveSourceType === 'folder') {
+      hint.innerHTML =
+        '<em>Plain folders cannot be moved into Courses. Choose Workspace or Collaboration, or cancel.</em>';
+    } else if (isMoveCoursesRoot()) {
+      hint.innerHTML =
+        '<em>Only courses can sit directly in Courses. Open a course you own to place assessments or problems.</em>';
+    } else {
+      hint.innerHTML =
+        `<em>This location cannot hold a ${moveSourceType}. Open a valid parent, or cancel.</em>`;
+    }
   }
   list.appendChild(hint);
 
@@ -928,7 +971,11 @@ async function renderMoveBrowser() {
   const navigable = items.filter((it) => {
     // At user root, only show top destinations used for moves.
     if (movePathStack.length === 1) {
-      return it.type === 'folder' && ['Workspace', 'Collaboration'].includes(it.name);
+      return it.type === 'folder' && ['Workspace', 'Collaboration', 'Courses'].includes(it.name);
+    }
+    // Under Courses, skip plain folders (not a valid course-tree container).
+    if (movePathIncludesCourses() && it.type === 'folder') {
+      return false;
     }
     // Only open containers that can have children in the hierarchy.
     return it.type !== 'problem';
@@ -1011,8 +1058,7 @@ async function openMoveOverlay() {
             await mapAlert({ title: 'Invalid move', message: 'Cannot move an item into itself.' });
             return;
           }
-          const current = movePathStack[movePathStack.length - 1];
-          if (!canPlaceBranchUnder(current?.type || 'folder', moveSourceType)) {
+          if (!canMoveIntoCurrentDestination(moveSourceType)) {
             await mapAlert({
               title: 'Invalid destination',
               message: `A ${moveSourceType} cannot be placed here.`,
@@ -1041,12 +1087,15 @@ async function commitMove(confirmed, replaceConfirmed = false) {
   const d = await r.json().catch(() => ({}));
   if (d.needs_confirm) {
     const isReplace = !!d.replace;
+    const title = isReplace
+      ? 'Replace existing item?'
+      : d.copy
+        ? 'Copy into Collaboration?'
+        : d.close_course
+          ? 'Move course into Courses?'
+          : 'Add to shared folder?';
     showMapOverlay({
-      title: isReplace
-        ? 'Replace existing item?'
-        : d.copy
-          ? 'Copy into Collaboration?'
-          : 'Add to shared folder?',
+      title,
       bodyHtml: `<p>${d.message || ''}</p>`,
       actions: [
         { label: 'Cancel', onClick: hideMapOverlay },

@@ -1107,6 +1107,7 @@ def get_folder_contents(request, group_id):
         or (owns and group.name == FOLDER_WORKSPACE)
     )
     under_collaboration = owns and group.name == FOLDER_COLLABORATION
+    under_public_library = owns and group.name == FOLDER_PUBLIC_LIBRARY
     if under_workspace and folders_list:
         shared_ids = shared_branch_id_set([f.id for f in folders_list])
         for f in folders_list:
@@ -1124,7 +1125,11 @@ def get_folder_contents(request, group_id):
         if f.owner_id == request.user.user_id:
             f.viewer_perm = 'owner'
         else:
+            # Public Library / Collaboration shares: effective ACL (often read_only).
             f.viewer_perm = effective_permission(request.user, f) or ''
+        # Ensure Public Library roots always expose at least read when listed here.
+        if under_public_library and not f.viewer_perm:
+            f.viewer_perm = 'read_only'
 
     problems_qs = Problem.objects.none()
     has_items = bool(folders_list) or bool(trash_folder)
@@ -1172,9 +1177,22 @@ def get_item_preview(request, item_type, item_id):
     
     model = model_map.get(item_type)
     item = get_object_or_404(model, id=item_id)
-    
-    # Permissions check: IT_Support sees all, Teachers see owned
-    if request.user.user_type != 'IT_Support' and item.owner != request.user:
+
+    # IT sees all; owners see their items; collaborators with read ACL may preview.
+    from .collaboration import can_read_branch
+
+    if request.user.user_type == 'IT_Support':
+        allowed = True
+    elif getattr(item, 'owner', None) == request.user:
+        allowed = True
+    else:
+        branch = None
+        if item_type in ('course', 'assessment', 'problem', 'assessment_selection'):
+            branch = getattr(item, 'branch_location', None)
+        elif item_type == 'question_selection':
+            branch = getattr(item, 'assigned_folder', None)
+        allowed = bool(branch and can_read_branch(request.user, branch))
+    if not allowed:
         return HttpResponseForbidden()
 
     return render(request, 'assessment_tool/partials/preview.html', {
@@ -3004,6 +3022,74 @@ def assessment_view(request, course_id):
     return render(request, 'assessment_tool/assessments.html', context)
 
 
+
+
+@login_required
+@require_POST
+def rename_assessment_ajax(request, course_id):
+    """Rename a course assessment and keep its explorer folder name in sync."""
+    course = get_object_or_404(Course, id=course_id)
+    if not _user_can_mutate_course_content(request.user, course):
+        return JsonResponse(
+            {'success': False, 'error': 'You do not have permission to rename assessments in this course.'},
+            status=403,
+        )
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid payload.'}, status=400)
+
+    assessment_id = data.get('assessment_id')
+    new_name = (data.get('name') or '').strip()
+    new_name = re.sub(r'\s+', ' ', new_name)
+    if not assessment_id:
+        return JsonResponse({'success': False, 'error': 'Assessment id is required.'}, status=400)
+    if not new_name:
+        return JsonResponse({'success': False, 'error': 'Assessment name cannot be blank.'}, status=400)
+
+    assessment = get_object_or_404(
+        Assessment.objects.select_related('branch_location', 'branch_location__parent'),
+        id=assessment_id,
+        course_id=course_id,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    )
+    if (assessment.status or '') == 'deleted':
+        return JsonResponse({'success': False, 'error': 'Cannot rename a deleted assessment.'}, status=400)
+
+    from .student_attempts import generation_job_blocks_edits
+
+    if generation_job_blocks_edits(assessment):
+        return JsonResponse(
+            {'success': False, 'error': 'Cannot rename while unique assessments are still generating.'},
+            status=400,
+        )
+
+    branch = assessment.branch_location
+    parent = branch.parent if branch is not None else None
+    if branch is not None and parent is not None:
+        unique_name, error = get_valid_unique_name(
+            BranchGroup, parent, new_name, exclude_id=branch.id
+        )
+        if error:
+            return JsonResponse({'success': False, 'error': error}, status=400)
+        new_name = unique_name
+
+    try:
+        with transaction.atomic():
+            assessment.name = new_name
+            assessment.save(update_fields=['name'])
+            if branch is not None and branch.name != new_name:
+                branch.name = new_name
+                branch.save(update_fields=['name'])
+    except Exception as exc:
+        return JsonResponse(
+            {'success': False, 'error': f'Rename failed: {exc}'},
+            status=500,
+        )
+
+    return JsonResponse({'success': True, 'name': new_name})
 
 
 @login_required

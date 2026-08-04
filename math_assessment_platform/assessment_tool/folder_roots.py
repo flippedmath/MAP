@@ -109,6 +109,11 @@ _WORKSPACE_PATH_RE = re.compile(
     rf"/Users/[^/]+_root/{re.escape(FOLDER_WORKSPACE)}/"
 )
 
+# Match /Users/<username>_root/Courses/ anywhere in a branch path.
+_COURSES_PATH_RE = re.compile(
+    rf"/Users/[^/]+_root/{re.escape(FOLDER_COURSES)}/"
+)
+
 WORKSPACE_COURSE_MANAGEMENT_MESSAGE = (
     "Course Management is not available for courses stored under Workspace. "
     "Move or publish the course under Courses before inviting students or teachers."
@@ -143,3 +148,28 @@ def course_is_under_workspace(course) -> bool:
 
         branch = BranchGroup.objects.filter(pk=branch_id).first()
     return branch_is_under_workspace(branch)
+
+
+def branch_path_is_under_courses(full_path: str | None) -> bool:
+    """True when ``full_path`` is under a user-root Courses folder."""
+    if not full_path:
+        return False
+    return bool(_COURSES_PATH_RE.search(full_path))
+
+
+def branch_is_under_courses(branch) -> bool:
+    """True when ``branch`` is the Courses folder or a descendant of it."""
+    if branch is None:
+        return False
+    full_path = branch.get_parent_path() + branch.name + "/"
+    return branch_path_is_under_courses(full_path)
+
+
+def is_courses_root_folder(branch) -> bool:
+    """True when ``branch`` is a user's top-level Courses folder."""
+    if branch is None:
+        return False
+    if (branch.name or "") != FOLDER_COURSES:
+        return False
+    parent = getattr(branch, "parent", None)
+    return parent is not None and parent.parent_id is None

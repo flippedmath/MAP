@@ -247,6 +247,97 @@ document.addEventListener('DOMContentLoaded', function() {
         return cookieValue;
     }
 
+    function normalizeAssessmentName(value) {
+        return String(value || '').trim().replace(/\s+/g, ' ');
+    }
+
+    function autosizeAssessmentTitle(input) {
+        input.style.height = 'auto';
+        input.style.height = `${input.scrollHeight}px`;
+    }
+
+    document.querySelectorAll('.assessment-title-input').forEach((input) => {
+        const savedBadge = input.parentElement?.querySelector('.assessment-name-saved');
+        autosizeAssessmentTitle(input);
+
+        const saveName = async () => {
+            const cleanValue = normalizeAssessmentName(input.value);
+            const previous = input.getAttribute('data-previous') || '';
+            if (!cleanValue) {
+                input.value = previous;
+                autosizeAssessmentTitle(input);
+                return;
+            }
+            if (cleanValue === previous) {
+                input.value = cleanValue;
+                autosizeAssessmentTitle(input);
+                return;
+            }
+
+            const renameUrl = input.getAttribute('data-rename-url');
+            const assessmentId = input.getAttribute('data-assessment-id');
+            if (!renameUrl || !assessmentId) return;
+
+            input.disabled = true;
+            try {
+                const response = await fetch(renameUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken'),
+                    },
+                    body: JSON.stringify({
+                        assessment_id: assessmentId,
+                        name: cleanValue,
+                    }),
+                });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok && data.success) {
+                    const savedName = data.name || cleanValue;
+                    input.value = savedName;
+                    input.setAttribute('data-previous', savedName);
+                    const optionsBtn = input.closest('tr')?.querySelector('[data-assessment-options]');
+                    if (optionsBtn) optionsBtn.setAttribute('data-assessment-name', savedName);
+                    if (savedBadge) {
+                        savedBadge.hidden = false;
+                        window.clearTimeout(savedBadge._hideTimer);
+                        savedBadge._hideTimer = window.setTimeout(() => {
+                            savedBadge.hidden = true;
+                        }, 1600);
+                    }
+                } else {
+                    alert(data.error || 'Failed to rename assessment.');
+                    input.value = previous;
+                }
+            } catch (err) {
+                console.error('Assessment rename failed:', err);
+                alert('Connection error while renaming assessment.');
+                input.value = previous;
+            } finally {
+                input.disabled = false;
+                autosizeAssessmentTitle(input);
+            }
+        };
+
+        input.addEventListener('input', () => autosizeAssessmentTitle(input));
+        input.addEventListener('blur', saveName);
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                input.blur();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                input.value = input.getAttribute('data-previous') || '';
+                autosizeAssessmentTitle(input);
+                input.blur();
+            }
+        });
+    });
+
+    window.addEventListener('resize', () => {
+        document.querySelectorAll('.assessment-title-input').forEach(autosizeAssessmentTitle);
+    });
+
     document.querySelectorAll('.btn-trash-assessment').forEach(button => {
         button.addEventListener('click', async function(e) {
             e.preventDefault();

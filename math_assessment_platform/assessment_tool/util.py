@@ -805,6 +805,91 @@ def remove_problem_from_cqd(problem):
     return problem, None
 
 
+def get_branch_related(branch, related_name):
+    """Return a OneToOne reverse relation or None when missing."""
+    from django.core.exceptions import ObjectDoesNotExist
+
+    if branch is None:
+        return None
+    try:
+        return getattr(branch, related_name)
+    except ObjectDoesNotExist:
+        return None
+
+
+def sync_branch_payload_parent_links(src, dest):
+    """
+    After reparenting ``src`` under ``dest``, align payload FKs with the new parent.
+
+    BranchGroup children stay attached automatically; this only updates Assessment /
+    AQG / Problem foreign keys so course trees remain consistent.
+    """
+    from .branch_hierarchy import normalize_folder_type
+
+    src_type = normalize_folder_type(getattr(src, "folder_type", None))
+    dest_type = normalize_folder_type(getattr(dest, "folder_type", None))
+
+    if src_type == "assessment":
+        assessment = get_branch_related(src, "assessment")
+        if assessment is None:
+            return
+        new_course = (
+            get_branch_related(dest, "course") if dest_type == "course" else None
+        )
+        new_course_id = getattr(new_course, "id", None)
+        if assessment.course_id != new_course_id:
+            assessment.course = new_course
+            assessment.save(update_fields=["course"])
+        return
+
+    if src_type == "aqg":
+        aqg = get_branch_related(src, "aqg")
+        if aqg is None or dest_type != "assessment":
+            return
+        new_assessment = get_branch_related(dest, "assessment")
+        if new_assessment is None:
+            return
+        if aqg.assessment_id != new_assessment.id:
+            aqg.assessment = new_assessment
+            aqg.save(update_fields=["assessment"])
+        return
+
+    if src_type == "problem":
+        problem = get_branch_related(src, "problem")
+        if problem is None:
+            return
+        if dest_type == "aqg":
+            new_aqg = get_branch_related(dest, "aqg")
+            update_fields = []
+            if problem.aqg_id != getattr(new_aqg, "id", None):
+                problem.aqg = new_aqg
+                update_fields.append("aqg")
+            if problem.cqd_id is not None:
+                problem.cqd = None
+                update_fields.append("cqd")
+            if update_fields:
+                problem.save(update_fields=update_fields)
+            return
+        if dest_type == "cqd":
+            new_cqd = get_branch_related(dest, "cqd")
+            parent = getattr(dest, "parent", None)
+            new_aqg = (
+                get_branch_related(parent, "aqg")
+                if parent is not None
+                and normalize_folder_type(getattr(parent, "folder_type", None)) == "aqg"
+                else None
+            )
+            update_fields = []
+            if problem.cqd_id != getattr(new_cqd, "id", None):
+                problem.cqd = new_cqd
+                update_fields.append("cqd")
+            if problem.aqg_id != getattr(new_aqg, "id", None):
+                problem.aqg = new_aqg
+                update_fields.append("aqg")
+            if update_fields:
+                problem.save(update_fields=update_fields)
+
+
 def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starter_node=False, force_name=None):
     if context is None:
         context = {'course': None, 'assessment': None, 'aqg': None, 'cqd': None}

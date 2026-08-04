@@ -58,9 +58,20 @@ from .collaboration import (
     would_create_subgroup_cycle,
     revoke_branch_collaborator,
 )
-from .folder_roots import FOLDER_COLLABORATION, FOLDER_WORKSPACE
+from .course_lifecycle import apply_course_status
+from .folder_roots import (
+    FOLDER_COLLABORATION,
+    branch_is_under_courses,
+    is_courses_root_folder,
+)
 from .models import BranchGroup, PermissionGroup, UserProfile
-from .util import clone_node_recursive, get_valid_unique_name, resolve_unique_sibling_name
+from .util import (
+    clone_node_recursive,
+    get_branch_related,
+    get_valid_unique_name,
+    resolve_unique_sibling_name,
+    sync_branch_payload_parent_links,
+)
 
 
 def _require_teacher_or_it(user):
@@ -729,10 +740,15 @@ def copy_to_workspace(request):
 @login_required
 @require_POST
 def move_item(request):
-    """Move within Workspace, or deep-copy into a Collaboration destination.
+    """Move within Workspace / into owned Courses, or deep-copy into Collaboration.
 
     Same name + same type under a shared / Collaboration destination prompts
     delete-and-replace (ACL on the replaced node is preserved).
+
+    Courses rules:
+    - Plain folders cannot be moved into the Courses subtree.
+    - The Courses root accepts only course nodes (set to closed on arrival).
+    - Content may be moved into an owned course tree; child structure is kept.
     """
     if not _require_teacher_or_it(request.user):
         return JsonResponse({"error": "Unauthorized"}, status=403)
@@ -741,8 +757,18 @@ def move_item(request):
     dest_id = data.get("dest_parent_id")
     confirmed = bool(data.get("confirmed"))
     replace_confirmed = bool(data.get("replace_confirmed"))
-    src = get_object_or_404(BranchGroup, id=branch_id)
-    dest = get_object_or_404(BranchGroup, id=dest_id)
+    src = get_object_or_404(
+        BranchGroup.objects.select_related(
+            "parent", "course", "assessment", "aqg", "cqd", "problem"
+        ),
+        id=branch_id,
+    )
+    dest = get_object_or_404(
+        BranchGroup.objects.select_related(
+            "parent", "course", "assessment", "aqg", "cqd", "problem"
+        ),
+        id=dest_id,
+    )
 
     if src.owner_id != request.user.user_id:
         return JsonResponse({"error": "You can only move items you own."}, status=403)
@@ -750,11 +776,60 @@ def move_item(request):
         return JsonResponse({"error": "Need edit access on destination."}, status=403)
 
     # Hierarchy checks — course→assessment→aqg→cqd|problem nesting only.
-    from .branch_hierarchy import branch_placement_error
+    from .branch_hierarchy import branch_placement_error, normalize_folder_type
 
     placement_err = branch_placement_error(dest.folder_type, src.folder_type)
     if placement_err:
         return JsonResponse({"error": placement_err}, status=400)
+
+    dest_under_courses = branch_is_under_courses(dest)
+    dest_is_courses_root = is_courses_root_folder(dest)
+    src_type = normalize_folder_type(src.folder_type)
+
+    if dest_under_courses or dest_is_courses_root:
+        if src_type == "folder":
+            return JsonResponse(
+                {
+                    "error": (
+                        "Plain folders cannot be moved into Courses. "
+                        "Move a course, or place content inside a course you own."
+                    )
+                },
+                status=400,
+            )
+        if dest_is_courses_root and src_type != "course":
+            return JsonResponse(
+                {
+                    "error": (
+                        "Only courses can be placed directly in the Courses folder. "
+                        "Open a course you own to move assessments or problems into it."
+                    )
+                },
+                status=400,
+            )
+        # Content into a course tree must target a course the user owns (IT may assist).
+        if not dest_is_courses_root:
+            course_owner_id = None
+            walker = dest
+            seen = set()
+            while walker is not None and walker.id not in seen:
+                seen.add(walker.id)
+                if normalize_folder_type(walker.folder_type) == "course":
+                    course = get_branch_related(walker, "course")
+                    course_owner_id = getattr(course, "owner_id", None)
+                    break
+                walker = walker.parent
+            is_it = getattr(request.user, "user_type", None) == "IT_Support"
+            if course_owner_id is None:
+                return JsonResponse(
+                    {"error": "Destination is not inside a course you own."},
+                    status=400,
+                )
+            if course_owner_id != request.user.user_id and not is_it:
+                return JsonResponse(
+                    {"error": "You can only move content into courses you own."},
+                    status=403,
+                )
 
     dest_path = dest.get_parent_path() + dest.name + "/"
     under_collab = f"/{request.user.username}_root/{FOLDER_COLLABORATION}/" in dest_path or (
@@ -855,6 +930,25 @@ def move_item(request):
                 }
             )
 
+    # Moving a course into Courses parks it as closed (reactivate from the Courses page).
+    moving_course_into_courses = dest_is_courses_root and src_type == "course"
+    if moving_course_into_courses and not confirmed and not replace_confirmed:
+        return JsonResponse(
+            {
+                "ok": False,
+                "needs_confirm": True,
+                "copy": False,
+                "replace": False,
+                "close_course": True,
+                "message": (
+                    "Move this course into Courses? It will be set to Closed. "
+                    "Reactivate it from the Courses page when you are ready. "
+                    "Assessments and nested content stay with the course; this is a move, "
+                    "not a copy, so existing enrollments are unchanged."
+                ),
+            }
+        )
+
     # Reject moves into self or into a descendant (would create an unreachable cycle).
     if dest.id == src.id:
         return JsonResponse({"error": "Cannot move an item into itself."}, status=400)
@@ -880,6 +974,11 @@ def move_item(request):
             src.save(update_fields=["parent", "name", "order"])
             # If the conflict carried share-root ACL, reattach it to the moved item.
             restore_branch_acl(src, acl_snap)
+            sync_branch_payload_parent_links(src, dest)
+            if moving_course_into_courses:
+                course = get_branch_related(src, "course")
+                if course is not None:
+                    apply_course_status(course, "closed")
             return JsonResponse({"ok": True, "action": "replaced", "id": src.id})
 
         unique_name, error = resolve_unique_sibling_name(dest, src.name, exclude_id=src.id)
@@ -892,6 +991,11 @@ def move_item(request):
             src.save(update_fields=["parent", "name", "order"])
         else:
             src.save(update_fields=["parent"])
+        sync_branch_payload_parent_links(src, dest)
+        if moving_course_into_courses:
+            course = get_branch_related(src, "course")
+            if course is not None:
+                apply_course_status(course, "closed")
     return JsonResponse({"ok": True, "action": "moved"})
 
 

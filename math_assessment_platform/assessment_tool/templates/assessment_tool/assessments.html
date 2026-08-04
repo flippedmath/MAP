@@ -176,7 +176,23 @@
                 </td>
                 {% endif %}
                 <td class="font-semibold text-slate-900">
+                    {% if is_student %}
                     <span class="assessment-display-title">{{ assessment.name }}</span>
+                    {% else %}
+                    <div class="assessment-title-edit">
+                        <textarea
+                            class="assessment-title-input"
+                            rows="1"
+                            data-previous="{{ assessment.name|escape }}"
+                            data-assessment-id="{{ assessment.id }}"
+                            data-rename-url="{% url 'rename_assessment_ajax' course.id %}"
+                            aria-label="Assessment name"
+                            title="Click to edit name"
+                            {% if row.generating %}disabled{% endif %}
+                        >{{ assessment.name }}</textarea>
+                        <span class="assessment-name-saved" hidden><i class="fas fa-check"></i> Saved</span>
+                    </div>
+                    {% endif %}
                     {% if row.generating %}
                       <div class="gen-banner" data-gen-banner="{{ assessment.id }}">
                         Generating unique assessments…

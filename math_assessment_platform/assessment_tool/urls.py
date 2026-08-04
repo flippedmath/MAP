@@ -165,6 +165,7 @@ urlpatterns = [
     ),
     path('course/<int:course_id>/assessments/', views.assessment_view, name='assessment_view'),
     path('course/<int:course_id>/assessments/create/', views.create_assessment_ajax, name='create_assessment_ajax'),
+    path('course/<int:course_id>/assessments/rename/', views.rename_assessment_ajax, name='rename_assessment_ajax'),
     path('course/<int:course_id>/assessments/update-status/', views.update_assessment_status_ajax, name='update_assessment_status_ajax'),
     path(
         'course/<int:course_id>/assessment/<int:assessment_id>/generation-status/',
