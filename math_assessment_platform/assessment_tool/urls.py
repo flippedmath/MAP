@@ -7,9 +7,11 @@ from . import collaboration_views
 from . import content_image_views
 from . import credit_views
 from . import assessment_print
+from . import about as about_views
 
 urlpatterns = [
     path('', views.under_construction_view, name='home'),
+    path('about/', about_views.about_view, name='about'),
     path('verify/', views.verify_email, name='verify_email'),
     path('dashboard/', views.HomeDashboardView.as_view(), name='dashboard'),
     path(

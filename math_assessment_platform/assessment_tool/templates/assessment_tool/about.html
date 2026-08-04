@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+  .about-wrap {
+    max-width: 800px;
+    margin: 2rem auto 3rem;
+  }
+  .about-brand {
+    margin: 0 0 0.5rem;
+    font-size: clamp(1.75rem, 4vw, 2.25rem);
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .about-lead {
+    margin: 0 0 1rem;
+    font-size: 1.05rem;
+    line-height: 1.55;
+    color: #334155;
+  }
+  .about-lead a {
+    color: #1e40af;
+    font-weight: 600;
+  }
+  .about-note {
+    margin: 0 0 1.75rem;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    color: #64748b;
+  }
+  .about-claim {
+    margin: 0 0 1.25rem;
+    padding: 1rem 1.15rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    background: #fff;
+  }
+  .about-claim h2 {
+    margin: 0 0 0.4rem;
+    font-size: 1.1rem;
+    color: #0f172a;
+  }
+  .about-claim p {
+    margin: 0 0 0.65rem;
+    color: #475569;
+    line-height: 1.5;
+    font-size: 0.95rem;
+  }
+  .about-claim a {
+    font-weight: 600;
+    color: #1e40af;
+    text-decoration: none;
+  }
+  .about-claim a:hover {
+    text-decoration: underline;
+  }
+  .about-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+  }
+  .about-actions a {
+    display: inline-block;
+    padding: 0.65rem 1.1rem;
+    border-radius: 6px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .about-actions .btn-primary {
+    background: #1e40af;
+    color: #fff;
+  }
+  .about-actions .btn-secondary {
+    background: #e2e8f0;
+    color: #0f172a;
+  }
+  .about-help {
+    margin-top: 2rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid #e2e8f0;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="about-wrap">
+  <h1 class="about-brand">About MAP</h1>
+  <p class="about-lead">
+    The <strong>Math Assessment Platform (MAP)</strong> helps teachers build, deliver,
+    and grade math assessments with structured problem types, course management,
+    and student workflows.
+  </p>
+  <p class="about-lead">
+    Assessments created here are part of
+    <a href="https://flippedmath.com" target="_blank" rel="noopener noreferrer">flippedmath.com</a>—
+    the same instructional ecosystem, with MAP as the assessment engine.
+    <a href="{{ flippedmath_article_url }}">Learn more about MAP and flippedmath.com</a>.
+  </p>
+  <p class="about-note">
+    The site is live for early testing while we finish remaining features.
+    The summaries below link to public Q&amp;A articles with fuller detail—readable
+    without signing in.
+  </p>
+
+  {% for claim in about_claims %}
+  <section class="about-claim">
+    <h2>{{ claim.title }}</h2>
+    <p>{{ claim.body }}</p>
+    <a href="{{ claim.learn_more_url }}">Learn more</a>
+  </section>
+  {% endfor %}
+
+  <section class="about-help">
+    <p class="about-lead">
+      Prefer browsing everything? Open the searchable
+      <a href="{{ qa_index_url }}">Q&amp;A help center</a>,
+      or <a href="{% url 'contact_us' %}">contact us</a> if you need direct support.
+    </p>
+  </section>
+
+  <div class="about-actions">
+    <a class="btn-primary" href="{% url 'login' %}">Sign in</a>
+    <a class="btn-secondary" href="{% url 'register' %}">Teacher register</a>
+    <a class="btn-secondary" href="{{ qa_index_url }}">Browse all Q&amp;A</a>
+    <a class="btn-secondary" href="{% url 'contact_us' %}">Contact us</a>
+    {% if user.is_authenticated %}
+    <a class="btn-secondary" href="{% url 'dashboard' %}">Dashboard</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

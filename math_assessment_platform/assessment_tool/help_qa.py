@@ -40,7 +40,24 @@ RESTRICTION_CHOICES = (
 PAGE_SIZE = 10
 
 _ALLOWED_TAGS = frozenset(
-    {"p", "br", "strong", "b", "em", "i", "u", "ul", "ol", "li", "a", "iframe", "div"}
+    {
+        "p",
+        "br",
+        "strong",
+        "b",
+        "em",
+        "i",
+        "u",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "iframe",
+        "div",
+        "h2",
+        "h3",
+        "h4",
+    }
 )
 _ALLOWED_ATTRS = {
     "a": {"href", "title", "rel", "target"},
