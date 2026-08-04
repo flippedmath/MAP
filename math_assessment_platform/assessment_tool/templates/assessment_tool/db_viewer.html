@@ -1,39 +1,38 @@
+{% extends "base.html" %}
 {% load db_extras %}
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Internal DB Viewer</title>
-    <style>
-        body { font-family: sans-serif; padding: 20px; color: #334155; background: #f8fafc; }
-        .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; }
-        table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
-        th { background: #64748b; color: white; text-align: left; padding: 12px; font-size: 0.85rem; text-transform: uppercase; }
-        td { padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 0.9rem; vertical-align: top; max-width: 28rem; }
-        tr:hover { background-color: #f1f5f9; }
-        select, button { padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1; cursor: pointer; }
-        .btn-refresh { background: #3b82f6; color: white; border: none; font-weight: 600; }
-        .cell-scroll {
-            max-height: 220px;
-            overflow: auto;
-            white-space: pre-wrap;
-            word-break: break-word;
-            line-height: 1.35;
-        }
-        .cell-scroll.mono {
-            font-family: monospace;
-            font-size: 0.8rem;
-            background: #f8fafc;
-            color: #0f172a;
-            padding: 6px;
-            border: 1px solid #e2e8f0;
-            border-radius: 4px;
-            line-height: 1.2;
-        }
-    </style>
-</head>
-<body>
 
-    <h2>Database Table Viewer</h2>
+{% block extra_css %}
+<style>
+    .db-viewer .controls { margin-bottom: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .db-viewer table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    .db-viewer th { background: #64748b; color: white; text-align: left; padding: 12px; font-size: 0.85rem; text-transform: uppercase; }
+    .db-viewer td { padding: 12px; border-bottom: 1px solid #e2e8f0; font-size: 0.9rem; vertical-align: top; max-width: 28rem; }
+    .db-viewer tr:hover { background-color: #f1f5f9; }
+    .db-viewer select, .db-viewer button { padding: 8px 12px; border-radius: 6px; border: 1px solid #cbd5e1; cursor: pointer; }
+    .db-viewer .btn-refresh { background: #3b82f6; color: white; border: none; font-weight: 600; }
+    .db-viewer .cell-scroll {
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.35;
+    }
+    .db-viewer .cell-scroll.mono {
+        font-family: monospace;
+        font-size: 0.8rem;
+        background: #f8fafc;
+        color: #0f172a;
+        padding: 6px;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px;
+        line-height: 1.2;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="db-viewer">
+    <h2 style="margin-top: 0;">Database Table Viewer</h2>
 
     <div class="controls">
         <form method="GET" id="tableForm">
@@ -41,8 +40,13 @@
             <select name="table" onchange="document.getElementById('tableForm').submit()">
                 <option value="user_profile" {% if selected_table == 'user_profile' %}selected{% endif %}>User Profiles</option>
                 <option value="email_authentication" {% if selected_table == 'email_authentication' %}selected{% endif %}>Email Authentications</option>
+                <option value="password_reset_request" {% if selected_table == 'password_reset_request' %}selected{% endif %}>Password Reset Request</option>
+                <option value="Q_A" {% if selected_table == 'Q_A' %}selected{% endif %}>Q&amp;A Articles</option>
+                <option value="qa_tag" {% if selected_table == 'qa_tag' %}selected{% endif %}>Q&amp;A Tags</option>
+                <option value="qa_tag_assignment" {% if selected_table == 'qa_tag_assignment' %}selected{% endif %}>Q&amp;A Tag Assignments</option>
                 <option value="user_course_activation" {% if selected_table == 'user_course_activation' %}selected{% endif %}>User Course Activation</option>
                 <option value="parent_course_invitation" {% if selected_table == 'parent_course_invitation' %}selected{% endif %}>Parent Course Invitation</option>
+                <option value="teacher_course_invitation" {% if selected_table == 'teacher_course_invitation' %}selected{% endif %}>Teacher Course Invitation</option>
                 <option value="student_course_enrollment" {% if selected_table == 'student_course_enrollment' %}selected{% endif %}>Student Course Enrollment</option>
                 <option value="final_grade_calculation" {% if selected_table == 'final_grade_calculation' %}selected{% endif %}>Final Grade Calculation</option>
                 <option value="course" {% if selected_table == 'course' %}selected{% endif %}>Courses</option>
@@ -58,10 +62,14 @@
                 <option value="student_assessment_attempt" {% if selected_table == 'student_assessment_attempt' %}selected{% endif %}>Student Assessment Attempt</option>
                 <option value="assessment_generation_job" {% if selected_table == 'assessment_generation_job' %}selected{% endif %}>Assessment Generation Job</option>
                 <option value="notification" {% if selected_table == 'notification' %}selected{% endif %}>Notification</option>
+                <option value="contact_us" {% if selected_table == 'contact_us' %}selected{% endif %}>Contact Us</option>
+                <option value="ticket" {% if selected_table == 'ticket' %}selected{% endif %}>Ticket</option>
+                <option value="ticket_discussion" {% if selected_table == 'ticket_discussion' %}selected{% endif %}>Ticket Discussion</option>
+                <option value="ticket_admin_filter_pref" {% if selected_table == 'ticket_admin_filter_pref' %}selected{% endif %}>Ticket Admin Filter Pref</option>
             </select>
         </form>
 
-        <button class="btn-refresh" onclick="window.location.reload()">Refresh Data</button>
+        <button type="button" class="btn-refresh" onclick="window.location.reload()">Refresh Data</button>
     </div>
 
     <table>
@@ -94,6 +102,5 @@
             {% endfor %}
         </tbody>
     </table>
-
-</body>
-</html>
+</div>
+{% endblock %}

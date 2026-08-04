@@ -2,6 +2,8 @@ from django.urls import path
 from django.contrib.auth import views as auth_views
 from django.views.generic import RedirectView
 from . import views
+from . import help_views
+from . import ticket_views
 from . import collaboration_views
 
 urlpatterns = [
@@ -19,6 +21,54 @@ urlpatterns = [
     #     name='login'),
     path('login/', views.login_view, name='login'),
     path('logout/', auth_views.LogoutView.as_view(), name='logout'),
+    path('forgot-password/', views.forgot_password_view, name='forgot_password'),
+    path(
+        'reset-password/<str:code>/',
+        views.password_reset_confirm_view,
+        name='password_reset_confirm',
+    ),
+    path('qa/', help_views.help_view, name='qa'),
+    path('qa/api/search/', help_views.help_search_api, name='qa_search_api'),
+    path('qa/admin/', help_views.help_admin_view, name='qa_admin'),
+    path(
+        'qa/admin/api/search/',
+        help_views.help_admin_search_api,
+        name='qa_admin_search_api',
+    ),
+    path(
+        'qa/admin/<int:article_id>/edit/',
+        help_views.help_admin_edit_view,
+        name='qa_admin_edit',
+    ),
+    path('qa/<int:article_id>/', help_views.help_detail_view, name='qa_detail'),
+    path('contact-us/', ticket_views.contact_us_view, name='contact_us'),
+    path('tickets/', ticket_views.tickets_admin_view, name='tickets_admin'),
+    path('tickets/new/', ticket_views.ticket_create_view, name='ticket_create'),
+    path(
+        'tickets/contact/<int:contact_id>/convert/',
+        ticket_views.contact_convert_view,
+        name='contact_convert',
+    ),
+    path(
+        'tickets/contact/<int:contact_id>/delete/',
+        ticket_views.contact_delete_view,
+        name='contact_delete',
+    ),
+    path(
+        'tickets/api/qa-search/',
+        ticket_views.ticket_qa_search_api,
+        name='ticket_qa_search_api',
+    ),
+    path(
+        'tickets/t/<str:access_token>/',
+        ticket_views.ticket_client_view,
+        name='ticket_client',
+    ),
+    path(
+        'tickets/<int:ticket_id>/',
+        ticket_views.ticket_admin_detail_view,
+        name='ticket_admin_detail',
+    ),
     path('notifications/', views.notifications_view, name='notifications'),
     path(
         'notifications/load-more/',
@@ -28,6 +78,7 @@ urlpatterns = [
     path('notifications/<int:notification_id>/', views.notification_detail_view, name='notification_detail'),
     path('notifications/<int:notification_id>/delete/', views.notification_delete_view, name='notification_delete'),
     path('notifications/<int:notification_id>/restore/', views.notification_restore_view, name='notification_restore'),
+    path('account/', views.account_settings_view, name='account_settings'),
     path(
         'parent/grade-summary/<int:student_id>/<int:course_id>/',
         views.parent_grade_summary_view,
@@ -71,6 +122,16 @@ urlpatterns = [
     path('courses/<int:course_id>/', views.course_detail_view, name='course_detail'),
     path('assessments/<int:assessment_id>/edit/', views.assessment_edit_by_id_view, name='assessment_edit_by_id'),
     path('course/<int:course_id>/management/', views.course_management_view, name='course_management'),
+    path(
+        'course/<int:course_id>/management/teacher-lookup/',
+        views.course_teacher_lookup_api,
+        name='course_teacher_lookup',
+    ),
+    path(
+        'teacher-invite/<str:code>/',
+        views.teacher_invite_redeem_view,
+        name='teacher_invite_redeem',
+    ),
     path('invite/<str:code>/', views.course_invite_redeem_view, name='course_invite_redeem'),
     path('invite/<str:code>/signup/', views.course_invite_signup_view, name='course_invite_signup'),
     path('parent-invite/<str:code>/', views.parent_invite_redeem_view, name='parent_invite_redeem'),

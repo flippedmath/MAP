@@ -1,0 +1,465 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card account-settings" style="max-width: 720px; margin: 0 auto;">
+    <h1 style="margin-top: 0;">Account Settings</h1>
+    <p style="color: #64748b;">Review your account details. Display name, email, and password can be updated here.</p>
+
+    <section style="margin-top: 24px;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Profile</h2>
+        <dl class="account-settings-meta">
+            <div>
+                <dt>Username</dt>
+                <dd>{{ profile.username }}</dd>
+            </div>
+            <div>
+                <dt>Account type</dt>
+                <dd>{{ profile.user_type }}</dd>
+            </div>
+            <div>
+                <dt>First name</dt>
+                <dd>{{ profile.user_first_name|default:"—" }}</dd>
+            </div>
+            <div>
+                <dt>Last name</dt>
+                <dd>{{ profile.user_last_name|default:"—" }}</dd>
+            </div>
+            <div>
+                <dt>Display name</dt>
+                <dd>{{ profile.user_display_name|default:"—" }}</dd>
+            </div>
+            <div>
+                <dt>Email</dt>
+                <dd>{{ profile.user_email|default:"—" }}</dd>
+            </div>
+            <div>
+                <dt>Gender</dt>
+                <dd>{{ gender_label }}</dd>
+            </div>
+            {% if show_organization %}
+            <div>
+                <dt>Organization</dt>
+                <dd>{{ profile.organization|default:"—" }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+    </section>
+
+    <section style="margin-top: 28px;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Display name</h2>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="update_display_name">
+            <label for="id_display_name" style="display: block; font-weight: 600; margin-bottom: 6px;">
+                Display name
+            </label>
+            <input
+                id="id_display_name"
+                type="text"
+                name="display_name"
+                maxlength="255"
+                value="{{ display_name_value }}"
+                placeholder="Optional — leave blank to clear"
+                style="width: 100%; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+            >
+            <p style="color: #64748b; font-size: 0.9rem; margin: 8px 0 12px;">
+                Shown in the account menu and in places that prefer a preferred name.
+            </p>
+            <button type="submit" class="btn">Save display name</button>
+        </form>
+    </section>
+
+    {% if show_organization %}
+    <section style="margin-top: 28px;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Organization</h2>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="update_organization">
+            <label for="id_organization" style="display: block; font-weight: 600; margin-bottom: 6px;">
+                Organization name
+            </label>
+            <input
+                id="id_organization"
+                type="text"
+                name="organization"
+                maxlength="255"
+                value="{{ organization_value }}"
+                placeholder="Optional — leave blank to clear"
+                style="width: 100%; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+            >
+            <p style="color: #64748b; font-size: 0.9rem; margin: 8px 0 12px;">
+                Your school, district, or organization.
+            </p>
+            <button type="submit" class="btn">Save organization</button>
+        </form>
+    </section>
+    {% endif %}
+
+    <section style="margin-top: 28px;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Email</h2>
+
+        {% if pending_email %}
+            <div style="background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; padding: 14px; border-radius: 8px; margin: 0 0 12px;">
+                A new email is pending verification:
+                <strong>{{ pending_email }}</strong>.
+                Enter the verification code to finish, or cancel to keep your current email.
+            </div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <a href="{% url 'verify_email' %}" class="btn" style="display: inline-block; padding: 10px 16px;">
+                    Continue verification
+                </a>
+                <form method="post" style="display: inline;"
+                      onsubmit="return confirm('Cancel the pending email change and keep {{ profile.user_email }}?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="cancel_email_change">
+                    <button type="submit" class="btn" style="background: #64748b;">Cancel email change</button>
+                </form>
+            </div>
+        {% else %}
+            <form id="email-change-form" method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="start_email_change">
+                <input type="hidden" name="password" id="email-change-password" value="">
+                <label for="id_new_email" style="display: block; font-weight: 600; margin-bottom: 6px;">
+                    New email
+                </label>
+                <div class="account-field-row">
+                    <input
+                        id="id_new_email"
+                        type="email"
+                        name="new_email"
+                        required
+                        autocomplete="email"
+                        placeholder="new@example.com"
+                        data-current-email="{{ current_email }}"
+                        style="flex: 1; min-width: 0; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                    >
+                    <small id="email-same-hint" class="account-inline-error" hidden>
+                        Matches your current email
+                    </small>
+                </div>
+                <p style="color: #64748b; font-size: 0.9rem; margin: 8px 0 12px;">
+                    Changing email requires your password, then verification of the new address.
+                    Your current email stays active until verification succeeds.
+                </p>
+                <button type="button" class="btn" id="email-change-open">Change email</button>
+            </form>
+        {% endif %}
+    </section>
+
+    <section style="margin-top: 28px;">
+        <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Reset password</h2>
+        <form id="password-reset-form" method="post" novalidate>
+            {% csrf_token %}
+            <input type="hidden" name="action" value="reset_password">
+            <input type="hidden" name="password" id="password-reset-current" value="">
+            <label for="id_new_password" style="display: block; font-weight: 600; margin-bottom: 6px;">
+                New password
+            </label>
+            <input
+                id="id_new_password"
+                type="password"
+                name="new_password"
+                required
+                autocomplete="new-password"
+                style="width: 100%; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+            >
+            <label for="id_confirm_password" style="display: block; font-weight: 600; margin: 12px 0 6px;">
+                Confirm new password
+            </label>
+            <div class="account-field-row">
+                <input
+                    id="id_confirm_password"
+                    type="password"
+                    name="confirm_password"
+                    required
+                    autocomplete="new-password"
+                    style="flex: 1; min-width: 0; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                >
+                <small id="password-match-hint" class="account-inline-error" hidden>
+                    Passwords do not match
+                </small>
+            </div>
+            <p style="color: #64748b; font-size: 0.9rem; margin: 8px 0 12px;">
+                Passwords must be at least 8 characters, not entirely numeric, and not a commonly used password.
+                Updating your password requires confirming your current password.
+            </p>
+            <small id="password-rules-hint" class="account-inline-error" style="display: block; margin-bottom: 10px;" hidden></small>
+            <button type="button" class="btn" id="password-reset-open">Update password</button>
+        </form>
+    </section>
+
+    <p style="margin-top: 36px; padding-top: 16px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 0.9rem; line-height: 1.5;">
+        If a first name or last name needs to be changed (for example to fix a typo or after a legal name change),
+        <a href="{% url 'contact_us' %}" style="color: #2563eb; font-weight: 600;">submit a formal IT ticket</a>
+        so support can update it.
+    </p>
+</div>
+
+<div id="password-confirm-overlay" class="account-modal-overlay" hidden aria-hidden="true"
+     data-mode="">
+    <div class="account-modal" role="dialog" aria-modal="true" aria-labelledby="password-confirm-title">
+        <h3 id="password-confirm-title" style="margin-top: 0;">Confirm password</h3>
+        <p id="password-confirm-message" style="color: #334155; line-height: 1.5;">
+            Enter your current password to continue.
+        </p>
+        <label for="password-confirm-input" style="display: block; font-weight: 600; margin: 14px 0 6px;">
+            Current password
+        </label>
+        <input
+            id="password-confirm-input"
+            type="password"
+            autocomplete="current-password"
+            style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+        >
+        <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; margin-top: 20px;">
+            <button type="button" class="btn" id="password-confirm-cancel" style="background: #64748b;">Cancel</button>
+            <button type="button" class="btn" id="password-confirm-submit">Confirm and continue</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    .account-settings-meta {
+        display: grid;
+        gap: 10px 24px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        margin: 0;
+    }
+    .account-settings-meta > div {
+        margin: 0;
+    }
+    .account-settings-meta dt {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #64748b;
+        margin: 0 0 2px;
+    }
+    .account-settings-meta dd {
+        margin: 0;
+        font-size: 1rem;
+        color: #0f172a;
+    }
+    .account-field-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .account-inline-error {
+        color: #b91c1c;
+        font-size: 0.85rem;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .account-modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        padding: 16px;
+    }
+    .account-modal-overlay[hidden] {
+        display: none !important;
+    }
+    .account-modal {
+        background: #fff;
+        border-radius: 10px;
+        max-width: 420px;
+        width: 100%;
+        padding: 24px;
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+    }
+</style>
+
+<script>
+(function () {
+    var overlay = document.getElementById('password-confirm-overlay');
+    var passwordInput = document.getElementById('password-confirm-input');
+    var cancelBtn = document.getElementById('password-confirm-cancel');
+    var submitBtn = document.getElementById('password-confirm-submit');
+    var confirmMessage = document.getElementById('password-confirm-message');
+    var overlayMode = '';
+
+    function closeOverlay() {
+        if (!overlay) return;
+        overlay.hidden = true;
+        overlay.setAttribute('aria-hidden', 'true');
+        overlay.setAttribute('data-mode', '');
+        overlayMode = '';
+        if (passwordInput) passwordInput.value = '';
+    }
+
+    function openOverlay(mode, messageHtml) {
+        if (!overlay) return;
+        overlayMode = mode || '';
+        overlay.setAttribute('data-mode', overlayMode);
+        if (confirmMessage) confirmMessage.innerHTML = messageHtml || 'Enter your current password to continue.';
+        overlay.hidden = false;
+        overlay.setAttribute('aria-hidden', 'false');
+        if (passwordInput) {
+            passwordInput.value = '';
+            passwordInput.focus();
+        }
+    }
+
+    if (cancelBtn) cancelBtn.addEventListener('click', closeOverlay);
+    if (overlay) {
+        overlay.addEventListener('click', function (evt) {
+            if (evt.target === overlay) closeOverlay();
+        });
+    }
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && overlay && !overlay.hidden) closeOverlay();
+    });
+
+    {% if not pending_email %}
+    var emailForm = document.getElementById('email-change-form');
+    var emailOpenBtn = document.getElementById('email-change-open');
+    var emailInput = document.getElementById('id_new_email');
+    var emailSameHint = document.getElementById('email-same-hint');
+    var emailPasswordHidden = document.getElementById('email-change-password');
+
+    function emailsMatchCurrent() {
+        if (!emailInput) return false;
+        var current = (emailInput.getAttribute('data-current-email') || '').trim().toLowerCase();
+        var next = (emailInput.value || '').trim().toLowerCase();
+        return !!current && !!next && current === next;
+    }
+
+    function updateEmailSameHint() {
+        if (!emailSameHint || !emailOpenBtn) return;
+        var same = emailsMatchCurrent();
+        emailSameHint.hidden = !same;
+        emailOpenBtn.disabled = same;
+        if (same) emailOpenBtn.setAttribute('aria-disabled', 'true');
+        else emailOpenBtn.removeAttribute('aria-disabled');
+    }
+
+    function openEmailOverlay() {
+        if (!emailForm || !emailInput) return;
+        updateEmailSameHint();
+        if (emailsMatchCurrent()) return;
+        if (!emailInput.reportValidity()) return;
+        var nextEmail = emailInput.value.trim() || 'the new address';
+        openOverlay(
+            'email',
+            'Enter your current password to start changing your email to <strong>' +
+                nextEmail.replace(/</g, '&lt;') +
+                '</strong>.'
+        );
+    }
+
+    if (emailInput) {
+        emailInput.addEventListener('input', updateEmailSameHint);
+        emailInput.addEventListener('change', updateEmailSameHint);
+        updateEmailSameHint();
+    }
+    if (emailOpenBtn) emailOpenBtn.addEventListener('click', openEmailOverlay);
+    {% endif %}
+
+    var resetForm = document.getElementById('password-reset-form');
+    var resetOpenBtn = document.getElementById('password-reset-open');
+    var resetCurrentHidden = document.getElementById('password-reset-current');
+    var newPw = document.getElementById('id_new_password');
+    var confirmPw = document.getElementById('id_confirm_password');
+    var matchHint = document.getElementById('password-match-hint');
+    var rulesHint = document.getElementById('password-rules-hint');
+
+    function passwordClientIssues(password, confirm) {
+        var issues = [];
+        if (!password) {
+            issues.push('Enter a new password.');
+            return issues;
+        }
+        if (password !== confirm) {
+            issues.push('Passwords do not match.');
+        }
+        if (password.length < 8) {
+            issues.push('Password must be at least 8 characters.');
+        }
+        if (/^\d+$/.test(password)) {
+            issues.push('Password cannot be entirely numeric.');
+        }
+        return issues;
+    }
+
+    function updatePasswordHints() {
+        if (!newPw || !confirmPw) return true;
+        var password = newPw.value || '';
+        var confirm = confirmPw.value || '';
+        var mismatch = !!password && !!confirm && password !== confirm;
+        if (matchHint) matchHint.hidden = !mismatch;
+        var issues = passwordClientIssues(password, confirm);
+        var other = issues.filter(function (msg) {
+            return msg !== 'Passwords do not match.';
+        });
+        if (rulesHint) {
+            if (other.length) {
+                rulesHint.hidden = false;
+                rulesHint.textContent = other.join(' ');
+            } else {
+                rulesHint.hidden = true;
+                rulesHint.textContent = '';
+            }
+        }
+        return issues.length === 0;
+    }
+
+    function openPasswordResetOverlay() {
+        if (!resetForm) return;
+        if (!updatePasswordHints()) return;
+        if (newPw && !newPw.reportValidity()) return;
+        if (confirmPw && !confirmPw.reportValidity()) return;
+        openOverlay(
+            'password_reset',
+            'Enter your current password to update your account password.'
+        );
+    }
+
+    if (newPw) newPw.addEventListener('input', updatePasswordHints);
+    if (confirmPw) confirmPw.addEventListener('input', updatePasswordHints);
+    if (resetOpenBtn) resetOpenBtn.addEventListener('click', openPasswordResetOverlay);
+
+    if (submitBtn) {
+        submitBtn.addEventListener('click', function () {
+            if (!passwordInput || !passwordInput.value) {
+                if (passwordInput) passwordInput.focus();
+                return;
+            }
+            if (overlayMode === 'email') {
+                {% if not pending_email %}
+                if (emailsMatchCurrent()) {
+                    closeOverlay();
+                    updateEmailSameHint();
+                    return;
+                }
+                if (emailPasswordHidden) emailPasswordHidden.value = passwordInput.value;
+                if (emailForm) emailForm.submit();
+                {% endif %}
+                return;
+            }
+            if (overlayMode === 'password_reset') {
+                if (!updatePasswordHints()) {
+                    closeOverlay();
+                    return;
+                }
+                if (resetCurrentHidden) resetCurrentHidden.value = passwordInput.value;
+                if (resetForm) resetForm.submit();
+            }
+        });
+    }
+    if (passwordInput) {
+        passwordInput.addEventListener('keydown', function (evt) {
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                if (submitBtn) submitBtn.click();
+            }
+        });
+    }
+})();
+</script>
+{% endblock %}

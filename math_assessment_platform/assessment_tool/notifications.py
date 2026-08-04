@@ -32,6 +32,15 @@ REASON_PARENT_COURSE_INVITATION_ALREADY_HAS_ACCESS = (
 REASON_PARENT_COURSE_INVITATION_WRONG_ACCOUNT_TYPE = (
     "parent_course_invitation_wrong_account_type"
 )
+REASON_ACCOUNT_DISPLAY_NAME_CHANGED = "account_display_name_changed"
+REASON_ACCOUNT_EMAIL_CHANGE_STARTED = "account_email_change_started"
+REASON_ACCOUNT_EMAIL_UPDATED = "account_email_updated"
+REASON_ACCOUNT_PASSWORD_UPDATED = "account_password_updated"
+REASON_ACCOUNT_PASSWORD_RESET_REQUESTED = "account_password_reset_requested"
+REASON_ACCOUNT_PASSWORD_RESET_NULLIFIED = "account_password_reset_nullified"
+REASON_TICKET_CREATED = "ticket_created"
+REASON_TICKET_UPDATED = "ticket_updated"
+REASON_TEACHER_COURSE_INVITATION = "teacher_course_invitation"
 
 NOTIFICATION_TRASH_RETENTION = timedelta(days=30)
 NOTIFICATIONS_PAGE_SIZE = 10
@@ -478,6 +487,15 @@ def _humanize_reason(reason):
         REASON_PARENT_COURSE_INVITATION_WRONG_ACCOUNT_TYPE: (
             "Non-Parent account used a parent invitation"
         ),
+        REASON_ACCOUNT_DISPLAY_NAME_CHANGED: "Display name updated",
+        REASON_ACCOUNT_EMAIL_CHANGE_STARTED: "Email change started",
+        REASON_ACCOUNT_EMAIL_UPDATED: "Email address updated",
+        REASON_ACCOUNT_PASSWORD_UPDATED: "Password updated",
+        REASON_ACCOUNT_PASSWORD_RESET_REQUESTED: "Password reset requested",
+        REASON_ACCOUNT_PASSWORD_RESET_NULLIFIED: "Password reset cancelled",
+        REASON_TICKET_CREATED: "Support ticket created",
+        REASON_TICKET_UPDATED: "Support ticket updated",
+        REASON_TEACHER_COURSE_INVITATION: "Co-teacher course invitation",
     }
     if not reason:
         return None
@@ -877,6 +895,99 @@ def build_notification_detail(note):
                 "accepted_username": parsed.get("accepted_username"),
                 "accepted_display_name": parsed.get("accepted_display_name"),
                 "accepted_email": parsed.get("accepted_email"),
+            }
+        )
+        return base
+
+    if reason == REASON_ACCOUNT_DISPLAY_NAME_CHANGED and isinstance(parsed, dict):
+        base.update(
+            {
+                "detail_kind": REASON_ACCOUNT_DISPLAY_NAME_CHANGED,
+                "invite_message": parsed.get("message") or "",
+                "previous_display_name": parsed.get("previous_display_name"),
+                "new_display_name": parsed.get("new_display_name"),
+            }
+        )
+        return base
+
+    if reason == REASON_ACCOUNT_EMAIL_CHANGE_STARTED and isinstance(parsed, dict):
+        from django.urls import reverse
+
+        base.update(
+            {
+                "detail_kind": REASON_ACCOUNT_EMAIL_CHANGE_STARTED,
+                "invite_message": parsed.get("message") or "",
+                "previous_email": parsed.get("previous_email"),
+                "pending_email": parsed.get("pending_email"),
+                "account_settings_path": reverse("account_settings"),
+                "verify_email_path": reverse("verify_email"),
+            }
+        )
+        return base
+
+    if reason == REASON_ACCOUNT_EMAIL_UPDATED and isinstance(parsed, dict):
+        base.update(
+            {
+                "detail_kind": REASON_ACCOUNT_EMAIL_UPDATED,
+                "invite_message": parsed.get("message") or "",
+                "previous_email": parsed.get("previous_email"),
+                "new_email": parsed.get("new_email"),
+            }
+        )
+        return base
+
+    if reason == REASON_ACCOUNT_PASSWORD_UPDATED and isinstance(parsed, dict):
+        base.update(
+            {
+                "detail_kind": REASON_ACCOUNT_PASSWORD_UPDATED,
+                "invite_message": parsed.get("message")
+                or "Your account password was updated.",
+            }
+        )
+        return base
+
+    if reason == REASON_ACCOUNT_PASSWORD_RESET_REQUESTED and isinstance(parsed, dict):
+        base.update(
+            {
+                "detail_kind": REASON_ACCOUNT_PASSWORD_RESET_REQUESTED,
+                "invite_message": parsed.get("message") or "",
+                "expires_at": parsed.get("expires_at") or "",
+            }
+        )
+        return base
+
+    if reason == REASON_ACCOUNT_PASSWORD_RESET_NULLIFIED and isinstance(parsed, dict):
+        base.update(
+            {
+                "detail_kind": REASON_ACCOUNT_PASSWORD_RESET_NULLIFIED,
+                "invite_message": parsed.get("message")
+                or "Your pending password reset was cancelled.",
+            }
+        )
+        return base
+
+    if reason in (REASON_TICKET_CREATED, REASON_TICKET_UPDATED) and isinstance(
+        parsed, dict
+    ):
+        base.update(
+            {
+                "detail_kind": reason,
+                "invite_message": parsed.get("message") or "",
+                "ticket_title": parsed.get("ticket_title") or "",
+                "ticket_path": parsed.get("ticket_path") or "",
+            }
+        )
+        return base
+
+    if reason == REASON_TEACHER_COURSE_INVITATION and isinstance(parsed, dict):
+        base.update(
+            {
+                "detail_kind": REASON_TEACHER_COURSE_INVITATION,
+                "invite_message": parsed.get("message") or "",
+                "course_name": parsed.get("course_name") or "",
+                "inviter_name": parsed.get("inviter_name") or "",
+                "invite_path": parsed.get("invite_path") or "",
+                "invite_code": parsed.get("invite_code") or "",
             }
         )
         return base

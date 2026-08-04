@@ -55,6 +55,165 @@
     </section>
 
     <section class="card" style="margin-bottom: 24px; padding: 20px;">
+        <h3 style="margin-top: 0;">Teachers</h3>
+        <p style="color: #64748b; font-size: 0.9rem;">
+            The main teacher owns the course and can invite co-teachers, remove them, or transfer ownership.
+            Pending invites have no course access until accepted.
+            Valid teachers are Teacher or IT Support accounts.
+        </p>
+        {% if teacher_rows %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+                    <thead>
+                        <tr style="text-align: left; border-bottom: 2px solid #e2e8f0;">
+                            <th style="padding: 8px;">Name</th>
+                            <th style="padding: 8px;">Username</th>
+                            <th style="padding: 8px;">Organization</th>
+                            <th style="padding: 8px;">Role</th>
+                            <th style="padding: 8px;">Status</th>
+                            <th style="padding: 8px;"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in teacher_rows %}
+                            <tr style="border-bottom: 1px solid #f1f5f9;{% if row.status == 'pending' %} background: #fffbeb;{% endif %}">
+                                <td style="padding: 8px;">{{ row.roster_name }}</td>
+                                <td style="padding: 8px;">{{ row.username }}</td>
+                                <td style="padding: 8px;">{{ row.organization }}</td>
+                                <td style="padding: 8px;">{{ row.role_label }}</td>
+                                <td style="padding: 8px;">
+                                    <span {% if row.status == 'pending' %}style="font-weight:600;color:#b45309;"{% else %}style="color:#047857;"{% endif %}>
+                                        {{ row.status_label }}
+                                    </span>
+                                </td>
+                                <td style="padding: 8px;">
+                                    <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                                        {% if row.can_make_main %}
+                                        <form method="post" style="display:inline;"
+                                              onsubmit="return confirm('Transfer course ownership to {{ row.username }}? You will become a co-teacher.');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="transfer_ownership">
+                                            <input type="hidden" name="teacher_id" value="{{ row.user_id }}">
+                                            <button type="submit" class="btn" style="background:#1d4ed8;padding:4px 10px;font-size:0.8rem;">
+                                                Make main teacher
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                        {% if row.can_remove %}
+                                        <form method="post" style="display:inline;"
+                                              onsubmit="return confirm('Remove {{ row.username }} from this course?');">
+                                            {% csrf_token %}
+                                            {% if row.invite_id %}
+                                            <input type="hidden" name="action" value="void_teacher_invite">
+                                            <input type="hidden" name="invite_id" value="{{ row.invite_id }}">
+                                            {% else %}
+                                            <input type="hidden" name="action" value="remove_teacher">
+                                            <input type="hidden" name="teacher_id" value="{{ row.user_id }}">
+                                            {% endif %}
+                                            <button type="submit" class="btn" style="background:#b91c1c;padding:4px 10px;font-size:0.8rem;">
+                                                Remove
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                        {% if row.can_leave %}
+                                        <form method="post" style="display:inline;"
+                                              onsubmit="return confirm('Leave this course as a co-teacher?');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="leave_as_teacher">
+                                            <button type="submit" class="btn" style="background:#64748b;padding:4px 10px;font-size:0.8rem;">
+                                                Leave course
+                                            </button>
+                                        </form>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p style="color: #94a3b8;">No teachers listed for this course.</p>
+        {% endif %}
+
+        {% if can_manage_teachers %}
+        <div style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e2e8f0;">
+            <h4 style="margin: 0 0 0.75rem;">Invite a co-teacher</h4>
+            <p style="color:#64748b;font-size:0.85rem;margin:0 0 0.75rem;">
+                Enter an existing Teacher or IT Support username or email, preview the account, then send the invitation.
+            </p>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+                <div style="flex:1;min-width:220px;">
+                    <label for="teacher-recipient" style="display:block;font-weight:600;margin-bottom:6px;">Username or email</label>
+                    <input id="teacher-recipient" type="text"
+                           style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;"
+                           placeholder="teacher@example.com or username"
+                           autocomplete="off">
+                </div>
+                <button type="button" class="btn" id="teacher-lookup-btn" style="font-weight:600;">Look up</button>
+            </div>
+            <p id="teacher-lookup-error" style="color:#991b1b;font-size:0.85rem;margin:8px 0 0;display:none;"></p>
+            <div id="teacher-preview" hidden style="margin-top:12px;padding:12px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:8px;">
+                <dl style="margin:0;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:0.9rem;">
+                    <dt style="color:#64748b;">Name</dt><dd id="tp-name" style="margin:0;font-weight:600;"></dd>
+                    <dt style="color:#64748b;">Account type</dt><dd id="tp-type" style="margin:0;"></dd>
+                    <dt style="color:#64748b;">Username</dt><dd id="tp-username" style="margin:0;"></dd>
+                    <dt style="color:#64748b;">Email</dt><dd id="tp-email" style="margin:0;"></dd>
+                    <dt style="color:#64748b;">Organization</dt><dd id="tp-org" style="margin:0;"></dd>
+                </dl>
+                <form method="post" style="margin-top:12px;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="invite_teacher">
+                    <input type="hidden" name="teacher_recipient" id="teacher-invite-recipient" value="">
+                    <button type="submit" class="btn" style="font-weight:600;">Send invitation</button>
+                </form>
+            </div>
+        </div>
+        <script>
+        (function () {
+            var lookupUrl = "{{ teacher_lookup_url|escapejs }}";
+            var input = document.getElementById('teacher-recipient');
+            var btn = document.getElementById('teacher-lookup-btn');
+            var err = document.getElementById('teacher-lookup-error');
+            var preview = document.getElementById('teacher-preview');
+            var inviteRecipient = document.getElementById('teacher-invite-recipient');
+            function showError(msg) {
+                err.textContent = msg || '';
+                err.style.display = msg ? 'block' : 'none';
+                preview.hidden = true;
+            }
+            function runLookup() {
+                var q = (input.value || '').trim();
+                if (!q) { showError('Enter a username or email.'); return; }
+                fetch(lookupUrl + '?q=' + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } })
+                    .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+                    .then(function (res) {
+                        if (!res.ok) {
+                            showError((res.data && res.data.error) || 'Lookup failed.');
+                            return;
+                        }
+                        var t = res.data.teacher || {};
+                        document.getElementById('tp-name').textContent = t.roster_name || [t.first_name, t.last_name].filter(Boolean).join(' ') || '—';
+                        document.getElementById('tp-type').textContent = t.user_type_label || t.user_type || '—';
+                        document.getElementById('tp-username').textContent = t.username || '—';
+                        document.getElementById('tp-email').textContent = t.email || '—';
+                        document.getElementById('tp-org').textContent = t.organization || '—';
+                        inviteRecipient.value = t.username || q;
+                        err.style.display = 'none';
+                        preview.hidden = false;
+                    })
+                    .catch(function () { showError('Lookup failed.'); });
+            }
+            btn.addEventListener('click', runLookup);
+            input.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') { e.preventDefault(); runLookup(); }
+            });
+        })();
+        </script>
+        {% endif %}
+    </section>
+
+    <section class="card" style="margin-bottom: 24px; padding: 20px;">
         <h3 style="margin-top: 0;">Student invitations</h3>
         <form method="post" style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
             {% csrf_token %}
@@ -71,7 +230,7 @@
         <p style="margin: 12px 0 0; font-size: 0.85rem; color: #94a3b8;">
             Existing students get an in-app notification with the invite link (email delivery later).
             New students use the link to sign up, then verify with the code in <code>email_authentication</code> (db viewer).
-            Only Student accounts can be invited this way — see Help (coming soon) for how to extend co-Teacher invites.
+            Only Student accounts can be invited this way. Use the Teachers section above to invite co-teachers.
         </p>
     </section>
 
@@ -318,7 +477,46 @@
             <p style="color: #94a3b8; margin-bottom: 0;">No pending parent invitations.</p>
         {% endif %}
     </section>
+
+    {% if can_close_course %}
+    <section class="card" style="margin-bottom: 24px; padding: 20px; border: 1px solid #fecaca;">
+        <h3 style="margin-top: 0; color: #991b1b;">Close course</h3>
+        <p style="color: #64748b; line-height: 1.5;">
+            Closing this course ends live access for students. They and linked parents
+            can still view historic grades from the Dashboard. Teachers will need to
+            reactivate the course from the Courses page before editing it again.
+        </p>
+        <button type="button"
+                class="btn"
+                id="close-course-open-btn"
+                style="background: #b91c1c; margin-top: 8px;">
+            Close course
+        </button>
+    </section>
+    {% endif %}
 </div>
+
+{% if can_close_course %}
+<div id="close-course-overlay" class="kick-modal-overlay" hidden aria-hidden="true">
+    <div class="kick-modal" role="dialog" aria-modal="true" aria-labelledby="close-course-title">
+        <h3 id="close-course-title" style="margin-top: 0;">Close this course?</h3>
+        <p style="color: #334155; line-height: 1.5;">
+            You are about to mark <strong>{{ course.name }}</strong> as closed.
+        </p>
+        <ul style="color: #334155; line-height: 1.6; padding-left: 1.25rem;">
+            <li>Students will lose live access to the course.</li>
+            <li>Students and parents keep view-only historic grades from the Dashboard.</li>
+            <li>To edit the course again, reactivate it from the Courses page.</li>
+        </ul>
+        <form method="post" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; margin-top: 20px;">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="close_course">
+            <button type="button" class="btn" id="close-course-cancel" style="background: #64748b;">Cancel</button>
+            <button type="submit" class="btn" style="background: #b91c1c;">Close course</button>
+        </form>
+    </div>
+</div>
+{% endif %}
 
 <div id="kick-student-overlay" class="kick-modal-overlay" hidden aria-hidden="true">
     <div class="kick-modal" role="dialog" aria-modal="true" aria-labelledby="kick-student-title">
@@ -501,6 +699,31 @@
             }
         });
     }
+})();
+
+(function () {
+    var overlay = document.getElementById('close-course-overlay');
+    var openBtn = document.getElementById('close-course-open-btn');
+    var cancelBtn = document.getElementById('close-course-cancel');
+    if (!overlay || !openBtn) return;
+
+    function openCloseOverlay() {
+        overlay.hidden = false;
+        overlay.setAttribute('aria-hidden', 'false');
+    }
+    function closeCloseOverlay() {
+        overlay.hidden = true;
+        overlay.setAttribute('aria-hidden', 'true');
+    }
+
+    openBtn.addEventListener('click', openCloseOverlay);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeCloseOverlay);
+    overlay.addEventListener('click', function (evt) {
+        if (evt.target === overlay) closeCloseOverlay();
+    });
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && !overlay.hidden) closeCloseOverlay();
+    });
 })();
 </script>
 {% endblock %}

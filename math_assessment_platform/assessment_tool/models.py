@@ -181,17 +181,69 @@ class UserProfile(AbstractBaseUser): #, PermissionsMixin):
         ]
 
 
+class _PsycopgJSONField(models.JSONField):
+    """JSONField that tolerates psycopg returning already-decoded dict/list."""
+
+    def from_db_value(self, value, expression, connection):
+        if isinstance(value, (dict, list)):
+            return value
+        return super().from_db_value(value, expression, connection)
+
+
 class QA(models.Model):
     title = models.CharField(max_length=150, blank=True, null=True)
-    answer = models.TextField(db_comment='The content could be anything from text to an embedded video')  # This field type is a guess.
-    user_restriction_level = models.TextField(blank=True, null=True, db_comment="This identifies which users the Q&A can be seen by. Different users have different Q&A needs. 'null' means publicly viewable.")  # This field type is a guess.
+    answer = _PsycopgJSONField(
+        db_comment='The content could be anything from text to an embedded video',
+    )
+    user_restriction_level = models.TextField(
+        blank=True,
+        null=True,
+        db_comment=(
+            "This identifies which users the Q&A can be seen by. Different users "
+            "have different Q&A needs. 'null' means publicly viewable."
+        ),
+    )
     creation_date = models.DateTimeField()
     modification_date = models.DateTimeField()
+    view_count = models.IntegerField(default=0)
 
     class Meta:
         managed = False
         db_table = 'Q_A'
-        db_table_comment = "IT Support->Teacher->Student->Parent->public - In this order the higher tier can view lower tier Q&A.\nI mentioned in the Requirements Document that I will allow 'tags' to be assigned to the Q&A for easier lookup later. I decided now is not the time to implement this."
+        db_table_comment = (
+            "IT Support->Teacher->Student->Parent->public - In this order the "
+            "higher tier can view lower tier Q&A. Tags live in qa_tag / "
+            "qa_tag_assignment for lookup and filtering."
+        )
+
+
+class QaTag(models.Model):
+    name = models.CharField(max_length=64)
+
+    class Meta:
+        managed = False
+        db_table = 'qa_tag'
+
+
+class QaTagAssignment(models.Model):
+    id = models.AutoField(primary_key=True)
+    qa = models.ForeignKey(
+        QA,
+        models.DO_NOTHING,
+        db_column='qa_id',
+        related_name='tag_assignments',
+    )
+    tag = models.ForeignKey(
+        QaTag,
+        models.DO_NOTHING,
+        db_column='tag_id',
+        related_name='article_assignments',
+    )
+
+    class Meta:
+        managed = False
+        db_table = 'qa_tag_assignment'
+        unique_together = (('qa', 'tag'),)
 
 
 class Assessment(models.Model):
@@ -378,6 +430,7 @@ class ContactUs(models.Model):
     respond_to_email = models.CharField(max_length=255)
     first_name = models.CharField(max_length=255, db_comment='So the response knows who to address')
     inquiry = models.TextField()
+    creation_date = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         managed = False
@@ -614,6 +667,27 @@ class EmailAuthentication(models.Model):
                 name='unique_temp_email_case_insensitive'
             )
         ]
+
+
+class PasswordResetRequest(models.Model):
+    u = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='u_id',
+        related_name='password_reset_requests',
+    )
+    code = models.CharField(max_length=255, unique=True)
+    timeout = models.DateTimeField()
+    creation_date = models.DateTimeField(blank=True, null=True)
+    requested_identifier = models.CharField(max_length=255, blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'password_reset_request'
+        db_table_comment = (
+            'Pending forgot-password tokens. Deleted on successful reset, '
+            'login, or replacement request.'
+        )
 
 
 class EntitySegment(models.Model):
@@ -1217,6 +1291,12 @@ class Ticket(models.Model):
     first_name = models.CharField(max_length=255, db_comment='So the response knows who to address')
     assigned_to = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='assigned_to', related_name='ticket_assigned_to_set', blank=True, null=True, db_comment='This would be an IT Support user')
     creation_date = models.DateTimeField()
+    access_token = models.CharField(max_length=64)
+    priority = models.TextField(blank=True, null=True)  # ticket_priority_enum
+    modification_date = models.DateTimeField()
+    last_comment_at = models.DateTimeField(blank=True, null=True)
+    admin_unread = models.BooleanField(default=False)
+    client_notified_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         managed = False
@@ -1227,13 +1307,65 @@ class Ticket(models.Model):
 class TicketDiscussion(models.Model):
     commentor_email = models.CharField(max_length=255)
     ticket_reference = models.ForeignKey(Ticket, models.DO_NOTHING)
-    comment = models.TextField()  # This field type is a guess.
+    comment = _PsycopgJSONField()
     creation_date = models.DateTimeField(blank=True, null=True)
+    is_system = models.BooleanField(default=False)
+    author_user = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='author_user_id',
+        related_name='ticket_discussion_authored_set',
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         managed = False
         db_table = 'ticket_discussion'
         db_table_comment = 'Essentially the chat history for a given ticket'
+
+
+class TicketAdminFilterPref(models.Model):
+    user = models.OneToOneField(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='user_id',
+        primary_key=True,
+        related_name='ticket_admin_filter_pref',
+    )
+    filters = _PsycopgJSONField(default=dict)
+    updated_at = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'ticket_admin_filter_pref'
+        db_table_comment = (
+            'Saved default Tickets-list filter/sort settings for an IT Support user.'
+        )
+
+
+class TeacherCourseInvitation(models.Model):
+    course = models.ForeignKey(Course, models.DO_NOTHING)
+    invitee = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        related_name='teacher_course_invitation_invitee_set',
+    )
+    invited_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        related_name='teacher_course_invitation_invited_by_set',
+    )
+    code = models.CharField(max_length=255)
+    creation_date = models.DateTimeField(blank=True, null=True)
+    timeout = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'teacher_course_invitation'
+        db_table_comment = (
+            'Pending co-Teacher invites. Deleted on accept, reject, or void.'
+        )
 
 
 class UserCourseActivation(models.Model):

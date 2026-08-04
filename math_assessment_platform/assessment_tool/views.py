@@ -16,11 +16,21 @@ from .models import (
 from .dashboard import (
     dashboard_courses_for_user,
     dashboard_parent_groups_for_user,
+    dashboard_student_closed_grades_for_user,
     teacher_active_retakes_for_user,
     teacher_focus_unlocks_for_user,
     teacher_grade_releases_for_user,
     teacher_manual_grading_for_user,
     user_display_name,
+    user_greeting_name,
+)
+from .course_lifecycle import (
+    apply_course_status,
+    course_is_closed,
+    course_is_deleted,
+    deny_unavailable_course_entry,
+    student_can_view_course_grades,
+    user_can_close_or_reactivate_course,
 )
 from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
@@ -35,7 +45,20 @@ from .forms import (
     ParentRegistrationForm,
     StudentRegistrationForm,
 )
-from .models import EmailAuthentication, UserCourseActivation, ParentCourseInvitation
+from .models import (
+    EmailAuthentication,
+    UserCourseActivation,
+    ParentCourseInvitation,
+    TeacherCourseInvitation,
+    PasswordResetRequest,
+    QA,
+    QaTag,
+    QaTagAssignment,
+    ContactUs,
+    Ticket,
+    TicketDiscussion,
+    TicketAdminFilterPref,
+)
 from .course_enrollment import (
     enrollment_within_credit_reimbursement_window,
     ensure_active_enrollment,
@@ -79,6 +102,19 @@ from .parent_invites import (
     parent_user_matches_invite,
     revoke_parent_access,
     void_parent_invite,
+)
+from .teacher_invites import (
+    accept_teacher_invite,
+    create_teacher_invite,
+    leave_course_as_teacher,
+    list_course_teacher_rows,
+    lookup_teacher_for_invite,
+    reject_teacher_invite,
+    remove_teacher_from_course,
+    teacher_invite_is_redeemable,
+    transfer_course_ownership,
+    user_can_manage_teachers,
+    void_teacher_invite,
 )
 import secrets
 import random
@@ -135,11 +171,17 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         user = self.request.user
 
+        context['greeting_name'] = user_greeting_name(user)
         context['dashboard_courses'] = dashboard_courses_for_user(user)
         context['parent_dashboard'] = (
             dashboard_parent_groups_for_user(user)
             if user.user_type == 'Parent'
             else None
+        )
+        context['student_closed_grades'] = (
+            dashboard_student_closed_grades_for_user(user)
+            if user.user_type == 'Student'
+            else []
         )
 
         if user.user_type == 'Student':
@@ -220,6 +262,12 @@ def parent_grade_summary_view(request, student_id, course_id):
     ).select_related('student', 'course').first()
     if link is None:
         messages.error(request, "Grade summary not found for this student and course.")
+        return redirect('dashboard')
+    if course_is_deleted(link.course):
+        messages.warning(
+            request,
+            "This course is in Trash. Grades are unavailable until it is restored.",
+        )
         return redirect('dashboard')
 
     from .assessment_grades import student_grades_for_course
@@ -346,11 +394,24 @@ def verify_email(request):
             input_code = request.POST.get('code')
             if not is_expired and input_code == auth_record.code:
                 user = request.user
-                user.user_email = auth_record.temp_email
+                previous_email = user.user_email
+                new_email = auth_record.temp_email
+                was_email_update = not bool(user.unactivated_account)
+                user.user_email = new_email
                 user.unactivated_account = False
                 user.save()
                 EmailAuthentication.objects.filter(u_id=user).delete()
-                messages.success(request, "Account activated successfully!")
+                if was_email_update:
+                    from .account_settings import notify_email_updated
+
+                    notify_email_updated(
+                        user=user,
+                        previous_email=previous_email,
+                        new_email=new_email,
+                    )
+                    messages.success(request, "Email updated successfully!")
+                else:
+                    messages.success(request, "Account activated successfully!")
                 invite_code = request.session.pop(INVITE_SESSION_KEY, None)
                 enrolled, invite_msg = complete_course_invite_if_pending(user, invite_code)
                 if invite_msg:
@@ -367,6 +428,8 @@ def verify_email(request):
                         messages.success(request, parent_msg)
                     else:
                         messages.warning(request, parent_msg)
+                if was_email_update:
+                    return redirect('account_settings')
                 return redirect('dashboard')
             elif is_expired:
                 messages.error(request, "This code has expired. Please resend a new one.")
@@ -375,6 +438,7 @@ def verify_email(request):
     
         if 'cancel_activation' in request.POST:
             user = request.user
+            was_email_update = not bool(user.unactivated_account)
             # Mark the account as active
             user.unactivated_account = False
             user.save()
@@ -383,14 +447,105 @@ def verify_email(request):
             EmailAuthentication.objects.filter(u_id=user.user_id).delete()
             
             messages.info(request, "Email verification cancelled. Your account is now active with your current email.")
+            if was_email_update:
+                return redirect('account_settings')
             return redirect('dashboard')
 
     return render(request, 'assessment_tool/verify_email.html', {
         'minutes_left': max(0, minutes_left),
         'temp_email': auth_record.temp_email,
         'is_expired': is_expired,
-        'is_already_active': not request.user.unactivated_account, # True if they are updating email, false if they are a brand new user
+        'is_already_active': not request.user.unactivated_account,
         'current_email': request.user.user_email
+    })
+
+
+@login_required
+def account_settings_view(request):
+    from .account_settings import (
+        cancel_pending_email_change,
+        gender_label,
+        pending_email_for_user,
+        reset_password,
+        start_email_change,
+        update_display_name,
+        update_organization,
+    )
+
+    user = request.user
+    if request.method == 'POST':
+        action = request.POST.get('action') or ''
+        if action == 'update_display_name':
+            changed, _new_value = update_display_name(
+                user, request.POST.get('display_name')
+            )
+            if changed:
+                messages.success(request, "Display name updated.")
+            else:
+                messages.info(request, "Display name was unchanged.")
+            return redirect('account_settings')
+        if action == 'update_organization':
+            try:
+                changed, _new_value = update_organization(
+                    user, request.POST.get('organization')
+                )
+                if changed:
+                    messages.success(request, "Organization updated.")
+                else:
+                    messages.info(request, "Organization was unchanged.")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('account_settings')
+        if action == 'start_email_change':
+            try:
+                start_email_change(
+                    user=user,
+                    new_email_raw=request.POST.get('new_email') or '',
+                    password=request.POST.get('password') or '',
+                )
+                messages.success(
+                    request,
+                    "Email change started. Enter the verification code to finish "
+                    "(look it up in the database for now).",
+                )
+                return redirect('verify_email')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+                return redirect('account_settings')
+        if action == 'cancel_email_change':
+            if cancel_pending_email_change(user):
+                messages.info(
+                    request,
+                    "Pending email change cancelled. Your current email was kept.",
+                )
+            else:
+                messages.info(request, "There was no pending email change to cancel.")
+            return redirect('account_settings')
+        if action == 'reset_password':
+            try:
+                from django.contrib.auth import update_session_auth_hash
+
+                reset_password(
+                    user=user,
+                    new_password=request.POST.get('new_password') or '',
+                    confirm_password=request.POST.get('confirm_password') or '',
+                    current_password=request.POST.get('password') or '',
+                )
+                update_session_auth_hash(request, user)
+                messages.success(request, "Password updated.")
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('account_settings')
+
+    pending = pending_email_for_user(user)
+    return render(request, 'assessment_tool/account_settings.html', {
+        'profile': user,
+        'gender_label': gender_label(user.gender),
+        'display_name_value': user.user_display_name or '',
+        'organization_value': user.organization or '',
+        'pending_email': pending.temp_email if pending else None,
+        'show_organization': user.user_type in ('Teacher', 'IT_Support'),
+        'current_email': (user.user_email or '').strip().lower(),
     })
 
 
@@ -398,13 +553,18 @@ def verify_email(request):
 def database_viewer(request):
     # Get the table selection from the GET request
     table_name = request.GET.get('table', 'user_profile')
-    
+
     # Map the dropdown values to the actual Models
     model_map = {
         'user_profile': UserProfile,
         'email_authentication': EmailAuthentication,
+        'password_reset_request': PasswordResetRequest,
+        'Q_A': QA,
+        'qa_tag': QaTag,
+        'qa_tag_assignment': QaTagAssignment,
         'user_course_activation': UserCourseActivation,
         'parent_course_invitation': ParentCourseInvitation,
+        'teacher_course_invitation': TeacherCourseInvitation,
         'student_course_enrollment': StudentCourseEnrollment,
         'final_grade_calculation': FinalGradeCalculation,
         'course': Course,
@@ -420,6 +580,10 @@ def database_viewer(request):
         'student_assessment_attempt': StudentAssessmentAttempt,
         'assessment_generation_job': AssessmentGenerationJob,
         'notification': Notification,
+        'contact_us': ContactUs,
+        'ticket': Ticket,
+        'ticket_discussion': TicketDiscussion,
+        'ticket_admin_filter_pref': TicketAdminFilterPref,
     }
     
     selected_model = model_map.get(table_name, UserProfile)
@@ -651,10 +815,15 @@ def course_list_view(request):
 
     elif user_type == 'Teacher':
         courses = Course.objects.filter(
-            Q(owner=user) | Q(status='template')
+            Q(owner=user)
+            | Q(status='template')
+            | Q(
+                usersincourse__user=user,
+                usersincourse__user_access='active',
+            )
         ).select_related('owner', 'branch_location').annotate(
             status_order=status_priority
-        ).order_by('status_order', 'name')
+        ).distinct().order_by('status_order', 'name')
 
     elif user_type == 'Student':
         # Student Base Ruleset
@@ -734,8 +903,7 @@ def course_list_view(request):
 
 
             # Standard Status Update Mutations (active, closed, template, hidden)
-            course.status = new_status
-            course.save()
+            apply_course_status(course, new_status)
             messages.success(request, f"Updated '{course.name}' status to {new_status}.")
             return get_sticky_redirect()
         
@@ -1353,6 +1521,25 @@ def restore_trash_item_view(request):
         return JsonResponse({'error': str(e)}, status=400)
 
 @csrf_exempt
+def _safe_login_next(request, candidate=None):
+    """Allow only same-host relative redirect targets after login."""
+    from django.utils.http import url_has_allowed_host_and_scheme
+
+    nxt = candidate if candidate is not None else (
+        request.POST.get('next') or request.GET.get('next') or ''
+    )
+    nxt = (nxt or '').strip()
+    if not nxt:
+        return None
+    if url_has_allowed_host_and_scheme(
+        nxt,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return nxt
+    return None
+
+
 def login_view(request):
     # 1. HANDLE USERS ALREADY LOGGED IN (GET Requests)
     if request.user.is_authenticated and request.method == 'GET':
@@ -1360,7 +1547,8 @@ def login_view(request):
             logout(request)
             return redirect('login')
         else:
-            return redirect('dashboard')
+            nxt = _safe_login_next(request)
+            return redirect(nxt or 'dashboard')
 
     # 2. HANDLE AUTHENTICATION ATTEMPTS (POST Requests)
     if request.method == 'POST':
@@ -1373,16 +1561,29 @@ def login_view(request):
             # Extract authenticated user records from the valid form payload
             user = form.get_user()
             login(request, user)
-            messages.success(request, f"Welcome back, {user.username}!")
+            try:
+                from .password_reset import nullify_password_resets_on_login
+
+                nullify_password_resets_on_login(user)
+            except Exception:
+                logger.exception(
+                    "Failed to nullify password resets after login for user_id=%s",
+                    getattr(user, "user_id", None),
+                )
+            messages.success(request, f"Welcome back, {user_greeting_name(user)}!")
             invite_code = request.session.get(INVITE_SESSION_KEY)
             if invite_code:
                 return redirect('course_invite_redeem', code=invite_code)
             parent_invite_code = request.session.get(PARENT_INVITE_SESSION_KEY)
             if parent_invite_code:
                 return redirect('parent_invite_redeem', code=parent_invite_code)
-            return redirect('dashboard')
+            nxt = _safe_login_next(request)
+            return redirect(nxt or 'dashboard')
         else:
             messages.error(request, "Invalid username or password. Please try again.")
+            nxt = _safe_login_next(request)
+            if nxt:
+                return redirect(f"{reverse('login')}?next={nxt}")
             return redirect('login')
 
     # 3. RENDER BLANK LOGIN FORM (GET Requests)
@@ -1391,7 +1592,95 @@ def login_view(request):
     if reason == 'multiple_tabs':
         messages.warning(request, "You were logged out because the platform was opened in another tab.")
         
-    return render(request, 'assessment_tool/login.html', {'form': form})
+    return render(request, 'assessment_tool/login.html', {
+        'form': form,
+        'next': _safe_login_next(request) or '',
+    })
+
+
+def forgot_password_view(request):
+    if request.user.is_authenticated:
+        return redirect('account_settings')
+
+    identifier = ''
+    if request.method == 'POST':
+        identifier = (request.POST.get('identifier') or '').strip()
+        if not identifier:
+            messages.error(request, "Enter a username or email.")
+            return render(request, 'assessment_tool/forgot_password.html', {
+                'identifier': identifier,
+            })
+
+        from .password_reset import create_password_reset_request
+
+        create_password_reset_request(identifier=identifier)
+        messages.success(
+            request,
+            "If that username or email matches an account, a password reset link "
+            "was sent. The link expires in 15 minutes.",
+        )
+        return redirect('login')
+
+    return render(request, 'assessment_tool/forgot_password.html', {
+        'identifier': identifier,
+    })
+
+
+def password_reset_confirm_view(request, code):
+    from .password_reset import (
+        complete_password_reset,
+        get_reset_by_code,
+        reset_is_expired,
+    )
+
+    row = get_reset_by_code(code)
+    if row is None:
+        return render(request, 'assessment_tool/password_reset_confirm.html', {
+            'error': "This password reset link is invalid or has already been used.",
+        })
+    if reset_is_expired(row):
+        try:
+            row.delete()
+        except Exception:
+            logger.exception("Failed to delete expired password reset id=%s", getattr(row, "pk", None))
+        return render(request, 'assessment_tool/password_reset_confirm.html', {
+            'error': "This password reset link has expired. Request a new one.",
+        })
+
+    user = row.u
+    timeout_time = row.timeout
+    if timezone.is_naive(timeout_time):
+        timeout_time = timezone.make_aware(timeout_time)
+    minutes_left = max(
+        0,
+        int((timeout_time - timezone.now()).total_seconds() // 60),
+    )
+
+    if request.method == 'POST':
+        try:
+            updated_user = complete_password_reset(
+                reset_row=row,
+                new_password=request.POST.get('new_password') or '',
+                confirm_password=request.POST.get('confirm_password') or '',
+            )
+            if request.user.is_authenticated:
+                logout(request)
+            login(
+                request,
+                updated_user,
+                backend='assessment_tool.backends.UsernameOrEmailBackend',
+            )
+            messages.success(request, "Your password was updated. You are now signed in.")
+            return redirect('dashboard')
+        except ValueError as exc:
+            messages.error(request, str(exc))
+            return redirect('password_reset_confirm', code=code)
+
+    return render(request, 'assessment_tool/password_reset_confirm.html', {
+        'username': getattr(user, 'username', '') or getattr(user, 'user_email', ''),
+        'minutes_left': minutes_left,
+        'error': None,
+    })
 
 
 @login_required
@@ -1401,6 +1690,9 @@ def course_detail_view(request, course_id):
         id=course_id,
     )
     user_type = request.user.user_type # Pulling from your established profile engine
+    unavailable_denied = deny_unavailable_course_entry(request, course)
+    if unavailable_denied:
+        return unavailable_denied
     if not _user_can_access_course_page(request.user, course):
         messages.error(request, "You do not have access to this course.")
         return redirect('dashboard')
@@ -1454,6 +1746,9 @@ def course_management_view(request, course_id):
     if not user_can_manage_course(request.user, course):
         messages.error(request, "You do not have permission to manage this course.")
         return redirect('dashboard')
+    unavailable_denied = deny_unavailable_course_entry(request, course)
+    if unavailable_denied:
+        return unavailable_denied
     if not user_can_access_course_management(request.user, course):
         from .folder_roots import WORKSPACE_COURSE_MANAGEMENT_MESSAGE
         messages.error(request, WORKSPACE_COURSE_MANAGEMENT_MESSAGE)
@@ -1464,6 +1759,27 @@ def course_management_view(request, course_id):
 
     if request.method == 'POST':
         action = request.POST.get('action') or ''
+        if action == 'close_course':
+            if not user_can_close_or_reactivate_course(request.user, course):
+                messages.error(
+                    request,
+                    "Only the main teacher (or IT Support) can close this course.",
+                )
+                return redirect('course_management', course_id=course.id)
+            if course.status != 'active':
+                messages.error(
+                    request,
+                    "Only an active course can be closed from Course Management.",
+                )
+                return redirect('course_management', course_id=course.id)
+            apply_course_status(course, 'closed')
+            messages.success(
+                request,
+                f"Closed '{course.name}'. Students no longer have live access; "
+                "they and linked parents can still view historic grades from the Dashboard. "
+                "Reactivate the course from the Courses page if you need to edit it again.",
+            )
+            return redirect('course_list')
         if action == 'create_invite':
             invite_form = CourseInviteForm(request.POST)
             if invite_form.is_valid():
@@ -1645,6 +1961,95 @@ def course_management_view(request, course_id):
                 except ValueError as exc:
                     messages.error(request, str(exc))
             return redirect('course_management', course_id=course.id)
+        elif action == 'lookup_teacher':
+            # Handled via dedicated JSON endpoint; keep for safety.
+            messages.error(request, "Use the teacher lookup field to preview before inviting.")
+            return redirect('course_management', course_id=course.id)
+        elif action == 'invite_teacher':
+            if not user_can_manage_teachers(request.user, course):
+                messages.error(request, "Only the main teacher can invite co-teachers.")
+                return redirect('course_management', course_id=course.id)
+            recipient = (request.POST.get('teacher_recipient') or '').strip()
+            try:
+                invite = create_teacher_invite(
+                    course=course,
+                    created_by=request.user,
+                    recipient_raw=recipient,
+                )
+                messages.success(
+                    request,
+                    f"Invitation sent to {invite.invitee.username}. "
+                    "They must accept from Notifications before gaining access.",
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            except IntegrityError:
+                messages.error(
+                    request,
+                    "Could not create co-teacher invitation (duplicate or database conflict).",
+                )
+            return redirect('course_management', course_id=course.id)
+        elif action == 'void_teacher_invite':
+            invite_id = request.POST.get('invite_id')
+            invite = TeacherCourseInvitation.objects.filter(
+                pk=invite_id, course=course
+            ).first()
+            if invite is None:
+                messages.warning(request, "That co-teacher invitation was already removed.")
+            else:
+                try:
+                    void_teacher_invite(invite, by_user=request.user)
+                    messages.success(request, "Co-teacher invitation voided.")
+                except ValueError as exc:
+                    messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'remove_teacher':
+            teacher_id = request.POST.get('teacher_id')
+            teacher = get_object_or_404(
+                UserProfile.objects.filter(user_type__in=("Teacher", "IT_Support")),
+                pk=teacher_id,
+            )
+            try:
+                remove_teacher_from_course(
+                    course=course,
+                    teacher=teacher,
+                    removed_by=request.user,
+                )
+                messages.success(
+                    request,
+                    f"Removed {teacher.username} as a teacher of this course.",
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'leave_as_teacher':
+            try:
+                leave_course_as_teacher(course=course, teacher=request.user)
+                messages.success(request, "You left this course as a co-teacher.")
+                return redirect('dashboard')
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
+        elif action == 'transfer_ownership':
+            teacher_id = request.POST.get('teacher_id')
+            new_owner = get_object_or_404(
+                UserProfile.objects.filter(user_type__in=("Teacher", "IT_Support")),
+                pk=teacher_id,
+            )
+            try:
+                transfer_course_ownership(
+                    course=course,
+                    new_owner=new_owner,
+                    by_user=request.user,
+                )
+                messages.success(
+                    request,
+                    f"Ownership transferred to {new_owner.username}. "
+                    "They are now the main teacher.",
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            return redirect('course_management', course_id=course.id)
 
     enrolled_slots = (
         UsersInCourse.objects.filter(
@@ -1795,9 +2200,91 @@ def course_management_view(request, course_id):
         'invite_rows': invite_rows,
         'parent_access_rows': parent_access_rows,
         'parent_invite_rows': parent_invite_rows,
+        'teacher_rows': list_course_teacher_rows(course=course, viewer=request.user),
+        'can_manage_teachers': user_can_manage_teachers(request.user, course),
+        'can_close_course': (
+            user_can_close_or_reactivate_course(request.user, course)
+            and course.status == 'active'
+        ),
+        'teacher_lookup_url': reverse(
+            'course_teacher_lookup', kwargs={'course_id': course.id}
+        ),
         'highlight_invite_id': request.GET.get('invite'),
         'highlight_parent_invite_id': request.GET.get('parent_invite'),
     })
+
+
+@login_required
+@require_GET
+def course_teacher_lookup_api(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    if not user_can_manage_course(request.user, course):
+        return JsonResponse({'error': 'Permission denied.'}, status=403)
+    if not user_can_manage_teachers(request.user, course):
+        return JsonResponse(
+            {'error': 'Only the main teacher can look up co-teachers.'},
+            status=403,
+        )
+    recipient = (request.GET.get('q') or '').strip()
+    try:
+        preview = lookup_teacher_for_invite(course=course, recipient_raw=recipient)
+    except ValueError as exc:
+        return JsonResponse({'error': str(exc)}, status=400)
+    return JsonResponse({'teacher': preview})
+
+
+@login_required
+@require_http_methods(['GET', 'POST'])
+def teacher_invite_redeem_view(request, code):
+    invite = (
+        TeacherCourseInvitation.objects.select_related(
+            'course', 'invitee', 'invited_by'
+        )
+        .filter(code=code)
+        .first()
+    )
+    if invite is None or not teacher_invite_is_redeemable(invite):
+        return render(
+            request,
+            'assessment_tool/teacher_invite_redeem.html',
+            {
+                'error': (
+                    'This co-teacher invitation is invalid, expired, or already used.'
+                ),
+                'invite': invite,
+            },
+        )
+
+    if request.method == 'POST':
+        action = (request.POST.get('action') or '').strip()
+        try:
+            if action == 'accept':
+                accept_teacher_invite(invite=invite, user=request.user)
+                messages.success(
+                    request,
+                    f"You joined “{invite.course.name}” as a co-teacher.",
+                )
+                return redirect('course_detail', course_id=invite.course_id)
+            if action == 'reject':
+                reject_teacher_invite(invite=invite, user=request.user)
+                messages.success(request, "Invitation declined.")
+                return redirect('notifications')
+            messages.error(request, "Unknown action.")
+        except ValueError as exc:
+            messages.error(request, str(exc))
+        return redirect('teacher_invite_redeem', code=code)
+
+    return render(
+        request,
+        'assessment_tool/teacher_invite_redeem.html',
+        {
+            'invite': invite,
+            'course': invite.course,
+            'inviter_name': user_display_name(invite.invited_by)
+            or invite.invited_by.username,
+            'is_invitee': request.user.user_id == invite.invitee_id,
+        },
+    )
 
 
 def course_invite_redeem_view(request, code):
@@ -1827,7 +2314,7 @@ def course_invite_redeem_view(request, code):
                     f"Your account is registered as {request.user.user_type}, not as a Student, "
                     "so it cannot be enrolled in a course with a student invitation. "
                     "Log out and use a Student account, or ask your teacher to invite you "
-                    "as a co-Teacher ('Help' article has details, coming soon) if that applies."
+                    "as a co-Teacher (see Q&A for details) if that applies."
                 ),
                 'invite': invite,
                 'mode': 'non_student',
@@ -2167,6 +2654,13 @@ def assessment_view(request, course_id):
     # 1. Grab the current course structure context
     course = get_object_or_404(Course, id=course_id)
 
+    unavailable_denied = deny_unavailable_course_entry(request, course)
+    if unavailable_denied:
+        return unavailable_denied
+    if not _user_can_access_course_page(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect('dashboard')
+
     # 2. Extract current user type session flags from user request profile if needed
     user_type = getattr(request.user, 'user_type', 'Student')
 
@@ -2492,6 +2986,19 @@ def update_assessment_status_ajax(request, course_id):
 
     from .student_attempts import generation_job_blocks_edits, start_generation_job, job_status_payload
 
+    course = assessment.course
+    if course is not None and (
+        course_is_deleted(course)
+        or (
+            course_is_closed(course)
+            and getattr(request.user, "user_type", None) == "Teacher"
+        )
+    ):
+        return JsonResponse(
+            {"error": "This course is unavailable. Restore or reactivate it first."},
+            status=403,
+        )
+
     if generation_job_blocks_edits(assessment):
         return JsonResponse(
             {
@@ -2733,6 +3240,12 @@ def reorder_assessment_ajax(request, course_id):
 
 
 def _user_can_open_assessment_setup(user, course, assessment) -> bool:
+    if course is not None and course_is_deleted(course):
+        return False
+    if course is not None and course_is_closed(course):
+        ut = getattr(user, 'user_type', 'Student')
+        if not (getattr(user, 'is_staff', False) or ut == 'IT_Support'):
+            return False
     user_type = getattr(user, 'user_type', 'Student')
     if user.is_staff or user_type == 'IT_Support':
         return True
@@ -2758,6 +3271,12 @@ def _user_can_open_assessment_setup(user, course, assessment) -> bool:
 
 
 def _user_can_mutate_assessment_setup(user, course, assessment) -> bool:
+    if course is not None and course_is_deleted(course):
+        return False
+    if course is not None and course_is_closed(course):
+        ut = getattr(user, 'user_type', 'Student')
+        if not (getattr(user, 'is_staff', False) or ut == 'IT_Support'):
+            return False
     user_type = getattr(user, 'user_type', 'Student')
     if user.is_staff or user_type == 'IT_Support':
         return True
@@ -2825,8 +3344,14 @@ def get_scoped_assessment(assessment_id, course_id, *, select_related=None):
 
 def _user_can_access_course_page(user, course) -> bool:
     user_type = getattr(user, 'user_type', 'Student')
+    # Trashed courses are inaccessible from live pages for everyone (restore on Courses).
+    if course_is_deleted(course):
+        return False
     if user.is_staff or user_type == 'IT_Support':
         return True
+    # Closed courses are not live for Teachers or Students (grades are separate).
+    if course_is_closed(course) and user_type in ('Teacher', 'Student'):
+        return False
     if getattr(course, 'owner_id', None) == getattr(user, 'user_id', None):
         return True
     if UsersInCourse.objects.filter(course=course, user=user).exists():
@@ -2836,7 +3361,14 @@ def _user_can_access_course_page(user, course) -> bool:
 
 
 def _user_can_mutate_course_content(user, course) -> bool:
+    if course is None or course_is_deleted(course):
+        return False
     user_type = getattr(user, 'user_type', 'Student')
+    # Closed courses: only IT/staff may mutate (Teachers must reactivate first).
+    if course_is_closed(course) and not (
+        getattr(user, 'is_staff', False) or user_type == 'IT_Support'
+    ):
+        return False
     if user.is_staff or user_type == 'IT_Support':
         return True
     branch = getattr(course, 'branch_location', None)
@@ -2878,6 +3410,10 @@ def assessment_setup_view(request, course_id, assessment_id):
         course_id=db_course_id,
     )
     course = assessment.course
+    if course is not None:
+        unavailable = deny_unavailable_course_entry(request, course)
+        if unavailable:
+            return unavailable
     if not _user_can_open_assessment_setup(request.user, course, assessment):
         messages.error(request, "You do not have access to manage this assessment configuration.")
         if course is None:
@@ -3718,6 +4254,9 @@ def student_assessment_take_view(request, course_id, assessment_id):
     if getattr(request.user, "user_type", None) != "Student":
         return redirect("assessment_view", course_id=course_id)
     course = get_object_or_404(Course, id=course_id)
+    unavailable_denied = deny_unavailable_course_entry(request, course)
+    if unavailable_denied:
+        return unavailable_denied
     assessment = get_object_or_404(
         Assessment,
         id=assessment_id,
@@ -3793,6 +4332,12 @@ def student_assessment_take_view(request, course_id, assessment_id):
 def student_assessment_start_ajax(request, course_id, assessment_id):
     if getattr(request.user, "user_type", None) != "Student":
         return JsonResponse({"error": "Unauthorized"}, status=403)
+    course = get_object_or_404(Course, id=course_id)
+    if course_is_closed(course) or course_is_deleted(course):
+        return JsonResponse(
+            {"error": "This course is closed.", "code": "course_closed"},
+            status=403,
+        )
     assessment = get_object_or_404(
         Assessment, id=assessment_id, course_id=course_id, parent_assessment__isnull=True, user__isnull=True
     )
@@ -4019,6 +4564,12 @@ def student_assessment_take_status_ajax(request, course_id, assessment_id):
 def student_assessment_autosave_ajax(request, course_id, assessment_id):
     if getattr(request.user, "user_type", None) != "Student":
         return JsonResponse({"error": "Unauthorized"}, status=403)
+    course = get_object_or_404(Course, id=course_id)
+    if course_is_closed(course) or course_is_deleted(course):
+        return JsonResponse(
+            {"error": "This course is closed.", "code": "course_closed"},
+            status=403,
+        )
     assessment = get_object_or_404(
         Assessment, id=assessment_id, course_id=course_id, parent_assessment__isnull=True
     )
@@ -4097,6 +4648,12 @@ def student_assessment_autosave_ajax(request, course_id, assessment_id):
 def student_assessment_submit_ajax(request, course_id, assessment_id):
     if getattr(request.user, "user_type", None) != "Student":
         return JsonResponse({"error": "Unauthorized"}, status=403)
+    course = get_object_or_404(Course, id=course_id)
+    if course_is_closed(course) or course_is_deleted(course):
+        return JsonResponse(
+            {"error": "This course is closed.", "code": "course_closed"},
+            status=403,
+        )
     assessment = get_object_or_404(
         Assessment, id=assessment_id, course_id=course_id, parent_assessment__isnull=True
     )
@@ -4280,6 +4837,9 @@ def _teacher_grades_access(request, course):
     if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
         messages.error(request, "Teachers only.")
         return redirect("dashboard")
+    unavailable_denied = deny_unavailable_course_entry(request, course)
+    if unavailable_denied:
+        return unavailable_denied
     if not _user_can_access_course_page(request.user, course):
         messages.error(request, "You do not have access to this course.")
         return redirect("dashboard")
@@ -4289,12 +4849,15 @@ def _teacher_grades_access(request, course):
 @login_required
 def course_grades_view(request, course_id):
     course = get_object_or_404(Course, id=course_id)
-    if not _user_can_access_course_page(request.user, course):
-        messages.error(request, "You do not have access to this course.")
-        return redirect("dashboard")
 
     user_type = getattr(request.user, "user_type", None)
     if user_type in ("Teacher", "IT_Support"):
+        unavailable_denied = deny_unavailable_course_entry(request, course)
+        if unavailable_denied:
+            return unavailable_denied
+        if not _user_can_access_course_page(request.user, course):
+            messages.error(request, "You do not have access to this course.")
+            return redirect("dashboard")
         from .assessment_grades import (
             grades_overview_for_course,
             grades_overview_meta,
@@ -4325,6 +4888,16 @@ def course_grades_view(request, course_id):
         messages.error(request, "Unauthorized.")
         return redirect("dashboard")
 
+    if not student_can_view_course_grades(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect("dashboard")
+
+    # Closed course: historic grades only (same read-only surface as parent).
+    historic_viewer = course_is_closed(course)
+    if not historic_viewer and not _user_can_access_course_page(request.user, course):
+        messages.error(request, "You do not have access to this course.")
+        return redirect("dashboard")
+
     from .assessment_grades import student_grades_for_course
 
     payload = student_grades_for_course(course, request.user)
@@ -4338,6 +4911,12 @@ def course_grades_view(request, course_id):
             "grade_total": payload["total"],
             "grade_aggregation_mode": payload["grade_aggregation_mode"],
             "is_teacher_viewer": False,
+            "historic_viewer": historic_viewer,
+            "grades_subtitle": (
+                "Your historic scores for this closed course."
+                if historic_viewer
+                else None
+            ),
         },
     )
 
@@ -4848,12 +5427,20 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
     user_type = getattr(request.user, "user_type", None)
     student_readonly = False
     parent_viewer = False
+    historic_viewer = False
     if user_type in ("Teacher", "IT_Support"):
+        unavailable_denied = deny_unavailable_course_entry(request, course)
+        if unavailable_denied:
+            return unavailable_denied
         if not _user_can_access_course_page(request.user, course):
             messages.error(request, "You do not have access to this course.")
             return redirect("dashboard")
     elif user_type == "Student" and attempt.user_id == request.user.user_id:
-        if not _user_can_access_course_page(request.user, course):
+        if not student_can_view_course_grades(request.user, course):
+            messages.error(request, "You do not have access to this course.")
+            return redirect("dashboard")
+        historic_viewer = course_is_closed(course)
+        if not historic_viewer and not _user_can_access_course_page(request.user, course):
             messages.error(request, "You do not have access to this course.")
             return redirect("dashboard")
         if not student_may_review_attempt(assessment, attempt):
@@ -4861,6 +5448,8 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
                 request,
                 "Your teacher has not enabled submission review for this assessment.",
             )
+            if historic_viewer:
+                return redirect("course_grades", course_id=course.id)
             return redirect("assessment_view", course_id=course.id)
         student_readonly = True
     elif user_type == "Parent" and parent_has_course_access(
@@ -4868,6 +5457,12 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
         student=attempt.user,
         course=course,
     ):
+        if course_is_deleted(course):
+            messages.warning(
+                request,
+                "This course is in Trash. Grades are unavailable until it is restored.",
+            )
+            return redirect("dashboard")
         if not student_may_review_attempt(assessment, attempt):
             messages.error(
                 request,
@@ -4896,6 +5491,7 @@ def course_grades_attempt_view(request, course_id, assessment_id, attempt_id):
             "scores_visible_to_students": scores_visible_for_assessment(assessment),
             "student_readonly": student_readonly,
             "parent_viewer": parent_viewer,
+            "historic_viewer": historic_viewer,
         },
     )
 
@@ -4914,10 +5510,18 @@ def course_grades_attempt_payload_ajax(request, course_id, assessment_id, attemp
     user_type = getattr(request.user, "user_type", None)
     student_readonly = False
     if user_type in ("Teacher", "IT_Support"):
+        if course_is_deleted(course) or (
+            course_is_closed(course) and user_type == "Teacher"
+        ):
+            return JsonResponse({"error": "Course is closed."}, status=403)
         if not _user_can_access_course_page(request.user, course):
             return JsonResponse({"error": "Unauthorized"}, status=403)
     elif user_type == "Student" and attempt.user_id == request.user.user_id:
-        if not _user_can_access_course_page(request.user, course):
+        if not student_can_view_course_grades(request.user, course):
+            return JsonResponse({"error": "Unauthorized"}, status=403)
+        if not course_is_closed(course) and not _user_can_access_course_page(
+            request.user, course
+        ):
             return JsonResponse({"error": "Unauthorized"}, status=403)
         from .assessment_grades import student_may_review_attempt
 
@@ -4929,6 +5533,8 @@ def course_grades_attempt_payload_ajax(request, course_id, assessment_id, attemp
         student=attempt.user,
         course=course,
     ):
+        if course_is_deleted(course):
+            return JsonResponse({"error": "Course is in Trash."}, status=403)
         from .assessment_grades import student_may_review_attempt
 
         if not student_may_review_attempt(assessment, attempt):
@@ -4950,6 +5556,11 @@ def course_grades_attempt_save_ajax(request, course_id, assessment_id, attempt_i
     course = get_object_or_404(Course, id=course_id)
     if getattr(request.user, "user_type", None) not in ("Teacher", "IT_Support"):
         return JsonResponse({"error": "Unauthorized"}, status=403)
+    if course_is_deleted(course) or (
+        course_is_closed(course)
+        and getattr(request.user, "user_type", None) == "Teacher"
+    ):
+        return JsonResponse({"error": "Course is unavailable."}, status=403)
     if not _user_can_access_course_page(request.user, course):
         return JsonResponse({"error": "Unauthorized"}, status=403)
     assessment = get_object_or_404(

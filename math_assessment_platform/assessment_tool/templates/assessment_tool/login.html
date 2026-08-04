@@ -20,6 +20,9 @@
 
         <form method="post">
             {% csrf_token %}
+            {% if next %}
+            <input type="hidden" name="next" value="{{ next }}">
+            {% endif %}
             <div style="margin-bottom: 1rem;">
                 <label style="display: block; margin-bottom: 5px; font-weight: 600;">Username or Email</label>
                 <input type="text" name="username" required style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
@@ -36,6 +39,10 @@
         <p style="text-align: center; font-size: 0.9rem; color: #64748b; margin-bottom: 0;">
             If you are a Teacher registering an account for the first time, 
             <a href="{% url 'register' %}" style="color: #2563eb; font-weight: 600; text-decoration: none;">go here</a>.
+        </p>
+        <p style="text-align: center; font-size: 0.9rem; color: #64748b; margin: 12px 0 0;">
+            If you forgot your password,
+            <a href="{% url 'forgot_password' %}" style="color: #2563eb; font-weight: 600; text-decoration: none;">click here</a>.
         </p>
     </div>
 </div>

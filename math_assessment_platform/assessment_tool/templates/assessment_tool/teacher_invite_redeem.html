@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 640px; margin: 0 auto;">
+    <h1 style="margin-top: 0;">Co-teacher invitation</h1>
+
+    {% if error %}
+    <div class="card" style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;">
+        <p style="margin:0;">{{ error }}</p>
+    </div>
+    {% else %}
+    <div class="card">
+        <p style="line-height:1.5;color:#334155;">
+            <strong>{{ inviter_name }}</strong> invited you to co-teach
+            <strong>{{ course.name }}</strong>.
+        </p>
+        {% if not is_invitee %}
+        <p style="color:#b45309;">
+            Log in as the invited Teacher or IT Support account to accept or decline this invitation.
+        </p>
+        <p>
+            <a href="{% url 'login' %}?next={{ request.path }}" class="btn" style="font-weight:600;text-decoration:none;">Log in</a>
+        </p>
+        {% else %}
+        <form method="post" style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-top:1rem;">
+            {% csrf_token %}
+            <button type="submit" name="action" value="accept" class="btn" style="font-weight:600;">Accept</button>
+            <button type="submit" name="action" value="reject" class="btn"
+                    style="font-weight:600;background:#64748b;"
+                    onclick="return confirm('Decline this co-teacher invitation?');">
+                Decline
+            </button>
+        </form>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

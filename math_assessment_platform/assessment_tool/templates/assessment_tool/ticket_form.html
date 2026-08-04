@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 680px; margin: 0 auto;">
+    <p style="margin: 0 0 0.5rem;">
+        <a href="{% url 'tickets_admin' %}" style="color:#2563eb;font-weight:600;text-decoration:none;">&larr; Back to Tickets</a>
+    </p>
+    <h1 style="margin-top: 0;">
+        {% if mode == 'convert' %}Create ticket from Contact Us{% else %}New ticket{% endif %}
+    </h1>
+
+    {% if mode == 'convert' and contact %}
+    <div class="card" style="margin-bottom: 1rem; background: #f8fafc;">
+        <p style="margin: 0 0 0.5rem; color: #64748b; font-size: 0.9rem;">Original inquiry</p>
+        <p style="margin: 0; white-space: pre-wrap;">{{ contact.inquiry }}</p>
+        <p style="margin: 0.75rem 0 0; color: #64748b; font-size: 0.85rem;">
+            From {{ contact.first_name }} &lt;{{ contact.respond_to_email }}&gt;
+            {% if contact.username %} · {{ contact.username.username }}{% endif %}
+        </p>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            <div style="margin-bottom: 1rem;">
+                <label for="title" style="display:block;font-weight:600;margin-bottom:5px;">Title</label>
+                <input id="title" name="title" required maxlength="{{ max_subject }}" value="{{ form.title }}"
+                       style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="contact_purpose" style="display:block;font-weight:600;margin-bottom:5px;">Purpose</label>
+                <select id="contact_purpose" name="contact_purpose" required
+                        style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    {% for value, label in purposes %}
+                    <option value="{{ value }}" {% if form.contact_purpose == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="priority" style="display:block;font-weight:600;margin-bottom:5px;">Priority</label>
+                <select id="priority" name="priority"
+                        style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    {% for value, label in priorities %}
+                    <option value="{{ value }}" {% if form.priority == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="assigned_to" style="display:block;font-weight:600;margin-bottom:5px;">Assign to</label>
+                <select id="assigned_to" name="assigned_to"
+                        style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    <option value="">Unassigned</option>
+                    {% for u in it_users %}
+                    <option value="{{ u.user_id }}" {% if form.assigned_to == u.user_id|stringformat:'s' %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            {% if mode == 'create' %}
+            <div style="margin-bottom: 1rem;">
+                <label for="first_name" style="display:block;font-weight:600;margin-bottom:5px;">Client first name</label>
+                <input id="first_name" name="first_name" required maxlength="{{ max_first_name }}" value="{{ form.first_name }}"
+                       style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="respond_to_email" style="display:block;font-weight:600;margin-bottom:5px;">Respond-to email</label>
+                <input id="respond_to_email" name="respond_to_email" type="email" required maxlength="{{ max_email }}" value="{{ form.respond_to_email }}"
+                       style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="body" style="display:block;font-weight:600;margin-bottom:5px;">Initial message</label>
+                <textarea id="body" name="body" maxlength="{{ max_body }}" rows="6"
+                          style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;resize:vertical;">{{ form.body }}</textarea>
+            </div>
+            {% endif %}
+
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1.25rem;font-weight:600;">
+                <input type="checkbox" name="notify_client" {% if form.notify_client %}checked{% endif %}>
+                Notify client
+            </label>
+            <p style="margin: -0.75rem 0 1.25rem; color: #94a3b8; font-size: 0.85rem;">
+                Off by default. Only sends when checked (email stub + in-app if linked account).
+            </p>
+
+            <button type="submit" class="btn" style="font-weight:600;">
+                {% if mode == 'convert' %}Create ticket{% else %}Create ticket{% endif %}
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}

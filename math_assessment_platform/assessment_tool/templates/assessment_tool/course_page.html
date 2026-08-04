@@ -54,7 +54,9 @@
                     </td>
                     <td class="td-center">
                         <div class="course-name-container">
+                            {% if course.status != 'deleted' %}
                             <a href="{% url 'course_detail' course.id %}" class="row-link"></a>
+                            {% endif %}
                             
                             <strong>{{ course.name }}</strong>
                             {% if course.owner == request.user or user_type == 'IT_Support' %}

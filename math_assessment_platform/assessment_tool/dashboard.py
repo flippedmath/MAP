@@ -28,6 +28,19 @@ def user_display_name(user) -> str:
     return getattr(user, "username", "") or ""
 
 
+def user_greeting_name(user) -> str:
+    """Preferred short greeting: display name, else first name, else username."""
+    if user is None:
+        return ""
+    display = (getattr(user, "user_display_name", None) or "").strip()
+    if display:
+        return display
+    first = (getattr(user, "user_first_name", None) or "").strip()
+    if first:
+        return first
+    return getattr(user, "username", "") or ""
+
+
 def user_roster_formal_name(user) -> str:
     """
     Roster label: "Last, Display" when a display name exists, else "Last, First M"
@@ -75,7 +88,8 @@ def _teachers_by_course(course_ids):
         UsersInCourse.objects.filter(
             course_id__in=course_ids,
             user__isnull=False,
-            user__user_type="Teacher",
+            user__user_type__in=("Teacher", "IT_Support"),
+            user_access="active",
         )
         .select_related("user")
         .order_by("user__user_last_name", "user__user_first_name", "user__username")
@@ -210,6 +224,8 @@ def dashboard_parent_groups_for_user(user):
     by_student: dict[int, dict] = {}
     for link in links:
         course = link.course
+        if (course.status or "") == "deleted":
+            continue
         enrolled_at = enroll_map.get((link.student_id, link.course_id))
         row = _build_row(
             course=course,
@@ -234,6 +250,9 @@ def dashboard_parent_groups_for_user(user):
             group["closed_courses"].append(row)
         else:
             group["active_courses"].append(row)
+
+    if not by_student:
+        return empty
 
     children = []
     for student_id, group in by_student.items():
@@ -261,6 +280,15 @@ def dashboard_courses_for_user(user):
         .select_related("course")
         .order_by("creation_date")
     )
+    # Students see closed courses only on the historic grades card.
+    # Trashed courses are excluded for everyone until restored.
+    enrollments = [
+        e for e in enrollments if (e.course.status or "") != "deleted"
+    ]
+    if user_type == "Student":
+        enrollments = [
+            e for e in enrollments if (e.course.status or "") != "closed"
+        ]
     course_ids = [e.course_id for e in enrollments]
     teachers_map = _teachers_by_course(course_ids)
     student_counts = (
@@ -280,6 +308,46 @@ def dashboard_courses_for_user(user):
                 is_parent=False,
             )
         )
+    return _sort_dashboard_courses(rows)
+
+
+def dashboard_student_closed_grades_for_user(user):
+    """
+    Closed-course rows for a Student's historic grades dashboard card.
+
+    Returns [] when there are no closed enrollments (card should not render).
+    """
+    if (
+        user is None
+        or not getattr(user, "is_authenticated", False)
+        or getattr(user, "user_type", None) != "Student"
+    ):
+        return []
+
+    enrollments = list(
+        UsersInCourse.objects.filter(user=user, course__status="closed")
+        .select_related("course")
+        .order_by("creation_date")
+    )
+    if not enrollments:
+        return []
+
+    course_ids = [e.course_id for e in enrollments]
+    teachers_map = _teachers_by_course(course_ids)
+    rows = []
+    for enrollment in enrollments:
+        course = enrollment.course
+        row = _build_row(
+            course=course,
+            enrolled_at=enrollment.creation_date,
+            teachers=teachers_map.get(course.pk, []),
+            show_student_count=False,
+            student_count=None,
+            is_parent=False,
+        )
+        # Historic grades only — no live course link.
+        row["has_course_link"] = False
+        rows.append(row)
     return _sort_dashboard_courses(rows)
 
 

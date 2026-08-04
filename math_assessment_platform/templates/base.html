@@ -23,6 +23,14 @@
         <div style="font-weight: bold; font-size: 1.2rem;">MAP</div>
         <div class="nav-links">
             {% if user.is_authenticated %}
+                {% if user.user_type == 'IT_Support' %}
+                <a href="{% url 'tickets_admin' %}" style="color: white; text-decoration: none;">Tickets</a>
+                <a href="{% url 'qa_admin' %}" style="color: white; text-decoration: none;">Q&amp;A Admin</a>
+                <a href="{% url 'db_viewer' %}" style="color: white; text-decoration: none;">Database</a>
+                {% endif %}
+                {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
+                <a href="{% url 'course_list' %}" style="color: white; text-decoration: none;">Courses</a>
+                {% endif %}
                 <a href="{% url 'dashboard' %}" style="color: white; text-decoration: none;">Dashboard</a>
                 <div class="nav-account-dropdown" data-has-unread="{% if has_unread_notifications %}true{% else %}false{% endif %}">
                     <button type="button" class="btn nav-account-trigger" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
@@ -34,6 +42,15 @@
                         <a href="{% url 'notifications' %}" class="nav-account-menu-item" role="menuitem">
                             <span>Notifications</span>
                             <span class="nav-unread-dot nav-unread-dot--item is-hidden" aria-hidden="true"></span>
+                        </a>
+                        <a href="{% url 'account_settings' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Account Settings</span>
+                        </a>
+                        <a href="{% url 'qa' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Q&amp;A</span>
+                        </a>
+                        <a href="{% url 'contact_us' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Contact Us</span>
                         </a>
                         {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
                         <a href="{% url 'file_explorer' %}" class="nav-account-menu-item" role="menuitem">
@@ -48,6 +65,8 @@
                     </div>
                 </div>
             {% else %}
+                <a href="{% url 'qa' %}" style="color: white; text-decoration: none;">Q&amp;A</a>
+                <a href="{% url 'contact_us' %}" style="color: white; text-decoration: none;">Contact Us</a>
                 <a href="{% url 'login' %}" style="color: white; text-decoration: none;">Login</a>
             {% endif %}
         </div>

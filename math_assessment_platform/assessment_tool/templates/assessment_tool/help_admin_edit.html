@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link href="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.snow.css" rel="stylesheet">
+<style>
+    .help-tag-input {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem;
+        width: 100%; min-height: 42px; padding: 6px 8px; box-sizing: border-box;
+        border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; cursor: text;
+    }
+    .help-tag-input:focus-within { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12); }
+    .help-tag-chips { display: contents; }
+    .help-tag {
+        display: inline-flex; align-items: center; gap: 0.3rem;
+        padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #334155;
+        font-size: 0.82rem; border: 1px solid #e2e8f0; line-height: 1.4;
+    }
+    .help-tag--editable { padding-right: 4px; }
+    .help-tag-remove {
+        border: 0; background: transparent; color: #64748b; cursor: pointer;
+        font-size: 1rem; line-height: 1; padding: 0 2px; border-radius: 999px;
+    }
+    .help-tag-remove:hover { color: #b91c1c; background: #fee2e2; }
+    .help-tag-text {
+        flex: 1 1 120px; min-width: 120px; border: 0; outline: none; padding: 4px 2px;
+        font-size: 0.95rem; background: transparent;
+    }
+    .help-content-editor { border: 1px solid #cbd5e1; border-radius: 6px; overflow: hidden; background: #fff; }
+    .help-content-editor .ql-toolbar.ql-snow { border: 0; border-bottom: 1px solid #e2e8f0; }
+    .help-content-editor .ql-container.ql-snow { border: 0; min-height: 220px; font-size: 0.95rem; }
+    .help-content-hint { color: #64748b; font-size: 0.82rem; margin: 0.35rem 0 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 720px; margin: 0 auto;">
+    <p style="margin-bottom: 0.75rem;">
+        <a href="{% url 'qa_admin' %}" style="color:#2563eb;font-weight:600;text-decoration:none;">&larr; Back to Q&amp;A Admin</a>
+    </p>
+    <div class="card">
+        <h1 style="margin-top: 0;">Edit Q&amp;A article</h1>
+        <p style="color:#64748b;font-size:0.9rem;">
+            Views: {{ article.view_count }} · Created: {{ article.creation_date }} ·
+            Modified: {{ article.modification_date }}
+        </p>
+        <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="update">
+            <div style="margin-bottom: 0.85rem;">
+                <label style="display:block;font-weight:600;margin-bottom:4px;">Title</label>
+                <input type="text" name="title" maxlength="150" required value="{{ article.title|default:'' }}"
+                       style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+            </div>
+            <div style="margin-bottom: 0.85rem;">
+                <label style="display:block;font-weight:600;margin-bottom:4px;">Content</label>
+                <div class="help-content-editor" data-content-format="{{ content_format|default:'html' }}">
+                    <textarea name="content" hidden>{{ content_body }}</textarea>
+                    <div class="help-quill-editor"></div>
+                </div>
+                <p class="help-content-hint">
+                    Paste a public YouTube URL (or insert it with the link tool) to embed the video.
+                </p>
+            </div>
+            <div style="margin-bottom: 0.85rem;">
+                <label style="display:block;font-weight:600;margin-bottom:4px;">User restriction level</label>
+                <select name="restriction" style="padding:8px;border:1px solid #cbd5e1;border-radius:6px;">
+                    {% for value, label in restriction_choices %}
+                    <option value="{{ value }}" {% if value == restriction_value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label style="display:block;font-weight:600;margin-bottom:4px;">Tags</label>
+                <div class="help-tag-input" data-help-tag-input>
+                    <div class="help-tag-chips" aria-live="polite"></div>
+                    <input type="hidden" name="tags" value="{{ tags_value }}">
+                    <input type="text" class="help-tag-text" placeholder="Type a tag, then comma or click away"
+                           autocomplete="off" aria-label="Add tags">
+                </div>
+            </div>
+            <button type="submit" class="btn">Save changes</button>
+        </form>
+
+        <hr style="border:0;border-top:1px solid #e2e8f0;margin:1.5rem 0;">
+        <form method="post" onsubmit="return confirm('Delete this Q&A article permanently?');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete">
+            <button type="submit" class="btn" style="background:#b91c1c;">Delete article</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script src="https://cdn.jsdelivr.net/npm/quill@2.0.2/dist/quill.js"></script>
+<script src="{% static 'assessment_tool/js/help_admin_tags.js' %}"></script>
+<script src="{% static 'assessment_tool/js/help_admin_editor.js' %}"></script>
+{% endblock %}

@@ -648,6 +648,18 @@ button:hover { background-color: #1d4ed8; }
     color: #9a3412;
 }
 
+.dashboard-historic-grades-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.dashboard-historic-grades-header h2 {
+    margin: 0;
+}
+
 .dashboard-course-actions {
     flex: 0 0 auto;
 }

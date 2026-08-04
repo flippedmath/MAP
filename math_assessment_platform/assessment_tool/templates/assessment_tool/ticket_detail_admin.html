@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+    .ticket-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .ticket-meta div { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; }
+    .ticket-meta dt { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin: 0 0 4px; }
+    .ticket-meta dd { margin: 0; font-weight: 600; color: #0f172a; }
+    .ticket-timeline { display: flex; flex-direction: column; gap: 0.75rem; }
+    .ticket-comment {
+        border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; background: #fff;
+    }
+    .ticket-comment.is-system { background: #f8fafc; color: #475569; font-style: italic; }
+    .ticket-comment-meta {
+        display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+        font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px;
+    }
+    .ticket-comment-meta-text { flex: 1 1 auto; }
+    .ticket-comment-delete {
+        margin-left: auto; border: 1px solid #fecaca; background: #fff; color: #b91c1c;
+        font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+    }
+    .ticket-comment-delete:hover { background: #fef2f2; }
+    .ticket-comment-body { line-height: 1.5; word-break: break-word; }
+    .ticket-comment-body a { color: #1d4ed8; }
+    .ticket-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
+    .ticket-actions form {
+        display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
+        padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc;
+    }
+    .ticket-actions label { display: block; font-size: 0.78rem; font-weight: 600; color: #475569; margin-bottom: 4px; }
+    .ticket-actions select, .ticket-actions textarea, .ticket-actions input[type="text"] {
+        padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
+    }
+    .qa-picker {
+        border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; padding: 10px; margin: 0.5rem 0 0;
+        max-height: 220px; overflow: auto; display: none;
+    }
+    .qa-picker.is-open { display: block; }
+    .qa-picker button {
+        display: block; width: 100%; text-align: left; border: 0; background: transparent;
+        padding: 8px; cursor: pointer; border-radius: 6px; font-size: 0.9rem;
+    }
+    .qa-picker button:hover { background: #eff6ff; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 860px; margin: 0 auto;">
+    <p style="margin: 0 0 0.5rem;">
+        <a href="{% url 'tickets_admin' %}" style="color:#2563eb;font-weight:600;text-decoration:none;">&larr; Back to Tickets</a>
+    </p>
+    <h1 style="margin-top: 0;">{{ ticket.title }} <span style="color:#94a3b8;font-size:1rem;">#{{ ticket.id }}</span></h1>
+
+    <div class="ticket-meta">
+        <div><dt>Status</dt><dd>{{ status_label }}</dd></div>
+        <div><dt>Priority</dt><dd>{{ priority_label }}</dd></div>
+        <div><dt>Purpose</dt><dd>{{ purpose_label }}</dd></div>
+        <div><dt>Requester</dt><dd>{% if ticket.username %}{{ ticket.username.username }}{% else %}—{% endif %}</dd></div>
+        <div><dt>Email</dt><dd>{{ ticket.respond_to_email }}</dd></div>
+        <div><dt>First name</dt><dd>{{ ticket.first_name }}</dd></div>
+        <div><dt>Assigned</dt><dd>{% if ticket.assigned_to %}{{ ticket.assigned_to.username }}{% else %}—{% endif %}</dd></div>
+        <div><dt>Client notified</dt><dd>{% if ticket.client_notified_at %}{{ ticket.client_notified_at|date:"Y-m-d H:i" }}{% else %}Never{% endif %}</dd></div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1rem;">
+        <div style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:center;justify-content:space-between;">
+            <div style="flex:1 1 280px;">
+                <label style="display:block;font-size:0.78rem;font-weight:600;color:#64748b;margin-bottom:4px;">Public client link</label>
+                <input id="client-link" type="text" readonly value="{{ client_url }}"
+                       style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;font-size:0.85rem;">
+            </div>
+            <div style="display:flex;gap:0.5rem;">
+                <button type="button" class="btn" id="copy-client-link" style="font-weight:600;">Copy link</button>
+                <form method="post" style="margin:0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="notify">
+                    <button type="submit" class="btn" style="font-weight:600;">Send/resend notify</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1rem;">
+        <h2 style="margin-top: 0;">Timeline</h2>
+        <div class="ticket-timeline">
+            {% for d in discussions %}
+            <div class="ticket-comment {% if d.is_system %}is-system{% endif %}">
+                <div class="ticket-comment-meta">
+                    <span class="ticket-comment-meta-text">
+                        {% if d.is_system %}System{% else %}{{ d.email }}{% if d.author %} ({{ d.author }}){% endif %}{% endif %}
+                        · {% if d.created %}{{ d.created|date:"Y-m-d H:i" }}{% else %}—{% endif %}
+                    </span>
+                    <form method="post" style="margin:0;"
+                          onsubmit="return confirm('Delete this comment permanently?');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="delete_comment">
+                        <input type="hidden" name="discussion_id" value="{{ d.id }}">
+                        <button type="submit" class="ticket-comment-delete">Delete</button>
+                    </form>
+                </div>
+                <div class="ticket-comment-body">{{ d.body_html }}</div>
+            </div>
+            {% empty %}
+            <p style="color:#64748b;">No discussion yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Actions</h2>
+        <div class="ticket-actions">
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="status">
+                <div>
+                    <label for="status">Status</label>
+                    <select id="status" name="status">
+                        {% for value, label in statuses %}
+                        <option value="{{ value }}" {% if ticket.status == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn" style="font-weight:600;">Update status</button>
+            </form>
+
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="priority">
+                <div>
+                    <label for="priority">Priority</label>
+                    <select id="priority" name="priority">
+                        {% for value, label in priorities %}
+                        <option value="{{ value }}" {% if ticket.priority == value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn" style="font-weight:600;">Update priority</button>
+            </form>
+
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="assign">
+                <div>
+                    <label for="assigned_to">Assignee</label>
+                    <select id="assigned_to" name="assigned_to">
+                        <option value="">Unassigned</option>
+                        {% for u in it_users %}
+                        <option value="{{ u.user_id }}" {% if ticket.assigned_to_id == u.user_id %}selected{% endif %}>{{ u.username }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="btn" style="font-weight:600;">Update assignee</button>
+            </form>
+        </div>
+
+        <form method="post" style="margin-top: 1rem;" id="comment-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="comment">
+            <label for="body" style="display:block;font-weight:600;margin-bottom:5px;">Comment</label>
+            <textarea id="body" name="body" required maxlength="{{ max_body }}" rows="5"
+                      style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;resize:vertical;"></textarea>
+            <div style="margin-top: 0.5rem; display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
+                <button type="button" class="btn" id="qa-insert-btn" style="font-weight:600;background:#64748b;">Insert Q&amp;A…</button>
+                <button type="button" class="btn" id="qa-post-btn" style="font-weight:600;background:#475569;">Post Q&amp;A as comment…</button>
+                <label style="display:flex;align-items:center;gap:0.4rem;font-weight:600;margin-left:auto;">
+                    <input type="checkbox" name="notify_client"> Notify client of update
+                </label>
+                <button type="submit" class="btn" style="font-weight:600;">Post comment</button>
+            </div>
+            <div class="qa-picker" id="qa-picker" data-url="{{ qa_search_url }}">
+                <input type="search" id="qa-search" placeholder="Search Q&amp;A titles…"
+                       style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;margin-bottom:8px;">
+                <div id="qa-results"></div>
+            </div>
+        </form>
+
+        {% if can_delete %}
+        <form method="post" style="margin-top: 1.5rem;" onsubmit="return confirm('Delete this ticket permanently?');">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="delete">
+            <button type="submit" class="btn" style="background:#b91c1c;font-weight:600;">Delete ticket</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+<script>
+(function () {
+    var copyBtn = document.getElementById('copy-client-link');
+    var linkInput = document.getElementById('client-link');
+    if (copyBtn && linkInput) {
+        copyBtn.addEventListener('click', function () {
+            navigator.clipboard.writeText(linkInput.value).then(function () {
+                copyBtn.textContent = 'Copied';
+                setTimeout(function () { copyBtn.textContent = 'Copy link'; }, 1500);
+            });
+        });
+    }
+
+    var picker = document.getElementById('qa-picker');
+    var resultsEl = document.getElementById('qa-results');
+    var searchInput = document.getElementById('qa-search');
+    var body = document.getElementById('body');
+    var insertBtn = document.getElementById('qa-insert-btn');
+    var postBtn = document.getElementById('qa-post-btn');
+    var mode = 'insert';
+    var timer = null;
+
+    function openPicker(nextMode) {
+        mode = nextMode;
+        picker.classList.add('is-open');
+        searchInput.focus();
+        fetchResults('');
+    }
+    insertBtn.addEventListener('click', function () { openPicker('insert'); });
+    postBtn.addEventListener('click', function () { openPicker('post'); });
+
+    function fetchResults(q) {
+        var url = picker.getAttribute('data-url') + '?q=' + encodeURIComponent(q || '');
+        fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                resultsEl.innerHTML = '';
+                (data.results || []).forEach(function (item) {
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.textContent = item.title;
+                    btn.addEventListener('click', function () {
+                        var text = 'Q&A: ' + item.title + '\n' + item.detail_url;
+                        if (mode === 'post') {
+                            body.value = text;
+                            document.getElementById('comment-form').submit();
+                        } else {
+                            body.value = (body.value ? body.value.replace(/\s*$/, '') + '\n\n' : '') + text;
+                            picker.classList.remove('is-open');
+                        }
+                    });
+                    resultsEl.appendChild(btn);
+                });
+                if (!(data.results || []).length) {
+                    resultsEl.textContent = 'No articles found.';
+                }
+            });
+    }
+
+    searchInput.addEventListener('input', function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () { fetchResults(searchInput.value); }, 200);
+    });
+})();
+</script>
+{% endblock %}

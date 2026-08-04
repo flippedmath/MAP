@@ -141,7 +141,7 @@
     <div class="grade-review-toolbar">
       <div>
         <h2 style="display:inline-flex; align-items:center; gap:10px; margin:0;">
-          <a href="{% if parent_viewer %}{% url 'grade_summary' attempt.user_id course.id %}{% elif student_readonly %}{% url 'assessment_view' course.id %}{% else %}{% url 'course_grades_assessment' course.id assessment.id %}{% endif %}" style="color:#64748b;" title="Back">
+          <a href="{% if parent_viewer %}{% url 'grade_summary' attempt.user_id course.id %}{% elif historic_viewer %}{% url 'course_grades' course.id %}{% elif student_readonly %}{% url 'assessment_view' course.id %}{% else %}{% url 'course_grades_assessment' course.id assessment.id %}{% endif %}" style="color:#64748b;" title="Back">
             <i class="fas fa-arrow-left"></i>
           </a>
           {% if parent_viewer %}

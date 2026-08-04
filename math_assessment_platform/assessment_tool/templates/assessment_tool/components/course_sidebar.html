@@ -26,6 +26,11 @@
                 <span class="nav-icon">📈</span>
                 <span class="nav-label">Grades</span>
             </a>
+            {% elif historic_viewer and course %}
+            <a href="{% url 'course_grades' course.id %}" class="nav-item {% if active_tab == 'grades' %}active{% endif %}">
+                <span class="nav-icon">📈</span>
+                <span class="nav-label">Grades</span>
+            </a>
             {% elif course %}
             <a href="{% url 'course_detail' course.id %}" class="nav-item {% if active_tab == 'introduction' %}active{% endif %}">
                 <span class="nav-icon">📖</span>

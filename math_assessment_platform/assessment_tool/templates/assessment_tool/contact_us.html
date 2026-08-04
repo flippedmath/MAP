@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 640px; margin: 0 auto;">
+    <h1 style="margin-top: 0;">Contact Us</h1>
+    <p style="color: #64748b; line-height: 1.5;">
+        Send a message to IT Support. Submissions are reviewed before a support ticket is created.
+    </p>
+
+    {% if not is_authenticated %}
+    <div class="card" style="background: #eff6ff; border: 1px solid #bfdbfe; margin-bottom: 1.25rem;">
+        <p style="margin: 0; color: #1e3a8a; line-height: 1.5;">
+            If you have an account, <a href="{{ login_url }}" style="color: #1d4ed8; font-weight: 700;">log in first</a>
+            for faster support — your username will be linked automatically.
+        </p>
+    </div>
+    {% endif %}
+
+    <div class="card">
+        <form method="post">
+            {% csrf_token %}
+            {% if username_display %}
+            <div style="margin-bottom: 1rem;">
+                <label style="display: block; font-weight: 600; margin-bottom: 5px;">Username</label>
+                <div style="padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; color: #334155;">
+                    {{ username_display }}
+                </div>
+            </div>
+            {% endif %}
+
+            <div style="margin-bottom: 1rem;">
+                <label for="subject" style="display: block; font-weight: 600; margin-bottom: 5px;">Subject</label>
+                <input id="subject" name="subject" type="text" required maxlength="{{ max_subject }}"
+                       value="{{ form.subject }}"
+                       style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label for="contact_purpose" style="display: block; font-weight: 600; margin-bottom: 5px;">Purpose</label>
+                <select id="contact_purpose" name="contact_purpose" required
+                        style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+                    <option value="" {% if not form.contact_purpose %}selected{% endif %} disabled>Select a purpose…</option>
+                    {% for value, label in purposes %}
+                    <option value="{{ value }}" {% if form.contact_purpose == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label for="first_name" style="display: block; font-weight: 600; margin-bottom: 5px;">First name</label>
+                <input id="first_name" name="first_name" type="text" required maxlength="{{ max_first_name }}"
+                       value="{{ form.first_name }}"
+                       style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+            </div>
+
+            <div style="margin-bottom: 1rem;">
+                <label for="respond_to_email" style="display: block; font-weight: 600; margin-bottom: 5px;">Respond-to email</label>
+                <input id="respond_to_email" name="respond_to_email" type="email" required maxlength="{{ max_email }}"
+                       value="{{ form.respond_to_email }}"
+                       style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+            </div>
+
+            <div style="margin-bottom: 1.25rem;">
+                <label for="inquiry" style="display: block; font-weight: 600; margin-bottom: 5px;">Inquiry</label>
+                <textarea id="inquiry" name="inquiry" required maxlength="{{ max_body }}" rows="8"
+                          style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; resize: vertical;">{{ form.inquiry }}</textarea>
+                <p style="margin: 6px 0 0; color: #94a3b8; font-size: 0.85rem;">Max {{ max_body }} characters.</p>
+            </div>
+
+            <button type="submit" class="btn" style="font-weight: 600;">Send message</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -2030,6 +2030,8 @@ def open_takeable_assessments_for_student(student) -> list[dict]:
     rows = []
     now = timezone.now()
     for enr in enrollments:
+        if (getattr(enr.course, "status", None) or "") == "closed":
+            continue
         assessments = m.Assessment.objects.filter(
             course=enr.course,
             parent_assessment__isnull=True,

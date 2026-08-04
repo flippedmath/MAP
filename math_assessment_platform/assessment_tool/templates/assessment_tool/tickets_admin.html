@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+    .tickets-toolbar { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: end; margin-bottom: 1rem; }
+    .tickets-toolbar label { display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 4px; }
+    .tickets-toolbar select, .tickets-toolbar input {
+        padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; min-width: 120px;
+    }
+    .tickets-table { width: 100%; border-collapse: collapse; }
+    .tickets-table th, .tickets-table td {
+        padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; font-size: 0.92rem;
+    }
+    .tickets-table th { color: #64748b; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; }
+    .tickets-table tr:hover { background: #f8fafc; }
+    .badge-unread {
+        display: inline-block; background: #fee2e2; color: #991b1b; font-size: 0.75rem; font-weight: 700;
+        padding: 2px 8px; border-radius: 999px;
+    }
+    .tickets-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .tickets-actions form { display: inline; margin: 0; }
+    .tickets-actions a, .tickets-actions button {
+        font-size: 0.85rem; padding: 4px 10px; border-radius: 6px; border: 1px solid #cbd5e1;
+        background: #fff; cursor: pointer; text-decoration: none; color: #1e293b; font-weight: 600;
+    }
+    .tickets-actions .danger { color: #b91c1c; border-color: #fecaca; }
+    .contact-inquiry-scroll {
+        display: block;
+        width: 100%;
+        max-width: 280px;
+        height: 4.5rem;
+        max-height: 4.5rem;
+        margin: 0;
+        padding: 6px 8px;
+        box-sizing: border-box;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        background: #f8fafc;
+        color: #334155;
+        font: inherit;
+        font-size: 0.85rem;
+        line-height: 1.35;
+        resize: none;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 1100px; margin: 0 auto;">
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+        <h1 style="margin: 0;">Tickets</h1>
+        <a href="{% url 'ticket_create' %}" class="btn" style="font-weight: 600; text-decoration: none;">New ticket</a>
+    </div>
+    <p style="color: #64748b;">IT Support inbox: Contact Us submissions and support tickets.</p>
+
+    <div class="card" style="margin-bottom: 1.5rem;">
+        <h2 style="margin-top: 0;">Contact Us inbox</h2>
+        {% if contact_rows %}
+        <table class="tickets-table">
+            <thead>
+                <tr>
+                    <th>Subject</th>
+                    <th>Purpose</th>
+                    <th>Inquiry</th>
+                    <th>Requester</th>
+                    <th>Email</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in contact_rows %}
+                <tr>
+                    <td>{{ row.contact.subject }}</td>
+                    <td>{{ row.purpose_label }}</td>
+                    <td>
+                        <textarea class="contact-inquiry-scroll" readonly rows="3" tabindex="0"
+                                  aria-label="Inquiry for {{ row.contact.subject }}">{{ row.contact.inquiry }}</textarea>
+                    </td>
+                    <td>{{ row.requester }}</td>
+                    <td>{{ row.contact.respond_to_email }}</td>
+                    <td>{% if row.contact.creation_date %}{{ row.contact.creation_date|date:"Y-m-d H:i" }}{% else %}—{% endif %}</td>
+                    <td>
+                        <div class="tickets-actions">
+                            <a href="{% url 'contact_convert' contact_id=row.contact.id %}">Create ticket</a>
+                            <form method="post" action="{% url 'contact_delete' contact_id=row.contact.id %}"
+                                  onsubmit="return confirm('Delete this Contact Us submission?');">
+                                {% csrf_token %}
+                                <button type="submit" class="danger">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: #64748b; margin: 0;">No Contact Us submissions.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Tickets</h2>
+        <form method="get" class="tickets-toolbar" id="tickets-filter-form">
+            <div>
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                    <option value="" {% if not filters.status %}selected{% endif %}>Active</option>
+                    <option value="all" {% if filters.status == 'all' %}selected{% endif %}>All statuses</option>
+                    {% for value, label in statuses %}
+                    <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="priority">Priority</label>
+                <select id="priority" name="priority">
+                    <option value="">Any</option>
+                    {% for value, label in priorities %}
+                    <option value="{{ value }}" {% if filters.priority == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="assigned_to">Assignee</label>
+                <select id="assigned_to" name="assigned_to">
+                    <option value="">Any</option>
+                    <option value="unassigned" {% if filters.assigned_to == 'unassigned' %}selected{% endif %}>Unassigned</option>
+                    {% for u in it_users %}
+                    <option value="{{ u.user_id }}" {% if filters.assigned_to == u.user_id|stringformat:'s' %}selected{% endif %}>{{ u.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="unread">Unread</label>
+                <select id="unread" name="unread">
+                    <option value="">Any</option>
+                    <option value="1" {% if filters.unread %}selected{% endif %}>Unread only</option>
+                </select>
+            </div>
+            <div>
+                <label for="sort">Sort</label>
+                <select id="sort" name="sort">
+                    <option value="last_activity" {% if filters.sort == 'last_activity' %}selected{% endif %}>Last activity</option>
+                    <option value="creation_date" {% if filters.sort == 'creation_date' %}selected{% endif %}>Created</option>
+                    <option value="last_comment_at" {% if filters.sort == 'last_comment_at' %}selected{% endif %}>Last comment</option>
+                    <option value="status" {% if filters.sort == 'status' %}selected{% endif %}>Status</option>
+                    <option value="priority" {% if filters.sort == 'priority' %}selected{% endif %}>Priority</option>
+                </select>
+            </div>
+            <div>
+                <label for="dir">Direction</label>
+                <select id="dir" name="dir">
+                    <option value="desc" {% if filters.dir != 'asc' %}selected{% endif %}>Desc</option>
+                    <option value="asc" {% if filters.dir == 'asc' %}selected{% endif %}>Asc</option>
+                </select>
+            </div>
+        </form>
+        <div class="tickets-actions" style="margin: -0.25rem 0 1rem;">
+            <form method="post" action="{% url 'tickets_admin' %}" id="tickets-save-defaults-form">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_filter_defaults">
+                <input type="hidden" name="status" value="{{ filters.status }}">
+                <input type="hidden" name="priority" value="{{ filters.priority }}">
+                <input type="hidden" name="assigned_to" value="{{ filters.assigned_to }}">
+                <input type="hidden" name="requester" value="{{ filters.requester }}">
+                <input type="hidden" name="unread" value="{{ filters.unread }}">
+                <input type="hidden" name="sort" value="{{ filters.sort }}">
+                <input type="hidden" name="dir" value="{{ filters.dir }}">
+                <button type="submit">Save current filters as default</button>
+            </form>
+            {% if has_saved_filter_defaults %}
+            <form method="post" action="{% url 'tickets_admin' %}"
+                  onsubmit="return confirm('Clear your saved Tickets filter defaults?');">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="clear_filter_defaults">
+                <button type="submit">Clear saved default</button>
+            </form>
+            <span style="align-self:center;color:#64748b;font-size:0.85rem;">
+                {% if using_saved_filter_defaults %}Using your saved defaults{% else %}Saved defaults on file{% endif %}
+            </span>
+            {% endif %}
+        </div>
+
+        {% if ticket_rows %}
+        <table class="tickets-table">
+            <thead>
+                <tr>
+                    <th>Title</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th>Requester</th>
+                    <th>Assigned</th>
+                    <th>Created</th>
+                    <th>Last activity</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in ticket_rows %}
+                <tr>
+                    <td>
+                        <a href="{% url 'ticket_admin_detail' ticket_id=row.ticket.id %}" style="font-weight: 600; color: #1d4ed8; text-decoration: none;">
+                            {{ row.ticket.title }}
+                        </a>
+                        {% if row.ticket.admin_unread %}<span class="badge-unread">Unread</span>{% endif %}
+                    </td>
+                    <td>{{ row.status_label }}</td>
+                    <td>{{ row.priority_label }}</td>
+                    <td>{{ row.requester }}<div style="color:#94a3b8;font-size:0.8rem;">{{ row.ticket.respond_to_email }}</div></td>
+                    <td>{{ row.assignee }}</td>
+                    <td>{{ row.ticket.creation_date|date:"Y-m-d H:i" }}</td>
+                    <td>{% if row.ticket.modification_date %}{{ row.ticket.modification_date|date:"Y-m-d H:i" }}{% else %}—{% endif %}</td>
+                    <td>
+                        <div class="tickets-actions">
+                            <button type="button" class="copy-link" data-url="{{ request.scheme }}://{{ request.get_host }}{{ row.client_url }}">Copy link</button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: #64748b; margin: 0;">No tickets match these filters.</p>
+        {% endif %}
+    </div>
+</div>
+<script>
+(function () {
+    var filterForm = document.getElementById('tickets-filter-form');
+    if (filterForm) {
+        filterForm.querySelectorAll('select').forEach(function (sel) {
+            sel.addEventListener('change', function () {
+                filterForm.requestSubmit ? filterForm.requestSubmit() : filterForm.submit();
+            });
+        });
+    }
+
+    var saveForm = document.getElementById('tickets-save-defaults-form');
+    if (saveForm && filterForm) {
+        saveForm.addEventListener('submit', function () {
+            filterForm.querySelectorAll('select[name]').forEach(function (sel) {
+                var hidden = saveForm.querySelector('input[name="' + sel.name + '"]');
+                if (hidden) hidden.value = sel.value;
+            });
+        });
+    }
+
+    document.querySelectorAll('.copy-link').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var url = btn.getAttribute('data-url') || '';
+            if (!url) return;
+            navigator.clipboard.writeText(url).then(function () {
+                btn.textContent = 'Copied';
+                setTimeout(function () { btn.textContent = 'Copy link'; }, 1500);
+            });
+        });
+    });
+})();
+</script>
+{% endblock %}

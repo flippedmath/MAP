@@ -3,8 +3,13 @@
 
 {% block content %}
 <div class="card">
-    <h1>Welcome, {{ user.user_first_name }}</h1>
+    <h1>Welcome, {{ greeting_name }}</h1>
     <p>Role: <strong>{{ user.user_type }}</strong></p>
+    {% if user.user_type == "IT_Support" %}
+        <p style="color: #64748b; margin-bottom: 0;">
+            Logged in as IT Support. You have full access to the database because you are an Admin.
+        </p>
+    {% endif %}
 </div>
 
 <div class="dashboard-grid">
@@ -427,11 +432,156 @@
             <h2>Classroom Management</h2>
             <a href="{% url 'admin:index' %}" class="btn">Access Question Bank</a>
         </div>
-    {% elif user.user_type == "IT_Support" %}
-        <div class="card">
-            <h2>System Administration</h2>
-            <p>Logged in as IT Support. You have full access to the database via Admin.</p>
+    {% endif %}
+
+    {% if student_closed_grades %}
+    <div
+        class="card dashboard-courses-card dashboard-historic-grades-card"
+        id="student-historic-grades-card"
+        data-hide-storage-key="map_student_historic_grades_hidden_{{ user.user_id }}"
+    >
+        <div class="dashboard-historic-grades-header">
+            <h2>My closed course grades</h2>
+            <button
+                type="button"
+                class="btn dashboard-hide-rows-btn"
+                id="student-historic-hide-rows"
+                style="background: #64748b; padding: 6px 12px; font-size: 0.85rem;"
+            >Hide rows</button>
         </div>
+        <p class="dashboard-empty" style="margin-top: 0;">
+            These are your own historic grades for courses that are no longer active.
+            View-only access is kept after a course closes.
+        </p>
+        <div class="dashboard-course-list" id="student-historic-grades-list">
+            {% for row in student_closed_grades %}
+                <div
+                    class="dashboard-course-row dashboard-course-row--closed"
+                    data-course-id="{{ row.course_id }}"
+                >
+                    <div class="dashboard-course-main">
+                        <div class="dashboard-course-name">
+                            <span>{{ row.name }}</span>
+                        </div>
+                        <div class="dashboard-course-meta">
+                            <span class="dashboard-course-status">{{ row.status_label }}</span>
+                            <span class="dashboard-course-teachers">Teachers: {{ row.teachers_display }}</span>
+                            {% if row.show_enrollment_span %}
+                                <span class="dashboard-course-span">
+                                    Enrolled:
+                                    {% if row.enrolled_at_utc %}
+                                        <time class="local-datetime" datetime="{{ row.enrolled_at_utc }}">{{ row.enrolled_at_utc }}</time>
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                    –
+                                    {% if row.close_date_utc %}
+                                        <time class="local-datetime" datetime="{{ row.close_date_utc }}">{{ row.close_date_utc }}</time>
+                                    {% else %}
+                                        —
+                                    {% endif %}
+                                </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="dashboard-course-actions">
+                        <a href="{% url 'course_grades' row.course_id %}" class="btn">View grades</a>
+                        <button
+                            type="button"
+                            class="btn dashboard-hide-row-btn"
+                            style="background: #94a3b8; padding: 6px 10px; font-size: 0.8rem;"
+                            data-hide-course="{{ row.course_id }}"
+                        >Hide</button>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+        <p class="dashboard-empty" id="student-historic-grades-hidden-note" hidden>
+            Rows are hidden.
+            <button type="button" class="btn" id="student-historic-show-rows" style="background: #64748b; padding: 4px 10px; font-size: 0.8rem; margin-left: 8px;">Show rows</button>
+        </p>
+    </div>
+    <script>
+    (function () {
+      var card = document.getElementById('student-historic-grades-card');
+      var list = document.getElementById('student-historic-grades-list');
+      var hideAllBtn = document.getElementById('student-historic-hide-rows');
+      var showBtn = document.getElementById('student-historic-show-rows');
+      var note = document.getElementById('student-historic-grades-hidden-note');
+      if (!card || !list) return;
+      var storageKey = card.getAttribute('data-hide-storage-key') || '';
+
+      function readHidden() {
+        try {
+          var raw = window.localStorage.getItem(storageKey);
+          var parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed.map(String) : [];
+        } catch (_) {
+          return [];
+        }
+      }
+
+      function writeHidden(ids) {
+        try {
+          window.localStorage.setItem(storageKey, JSON.stringify(ids));
+        } catch (_) {}
+      }
+
+      function applyVisibility() {
+        var hidden = new Set(readHidden());
+        var rows = list.querySelectorAll('.dashboard-course-row');
+        var visibleCount = 0;
+        rows.forEach(function (row) {
+          var id = String(row.getAttribute('data-course-id') || '');
+          var isHidden = hidden.has(id);
+          row.hidden = isHidden;
+          if (!isHidden) visibleCount += 1;
+        });
+        list.hidden = visibleCount === 0;
+        if (note) note.hidden = visibleCount !== 0 || rows.length === 0;
+        if (hideAllBtn) hideAllBtn.hidden = visibleCount === 0;
+        // Hide the entire card when every row is dismissed (or none exist).
+        card.hidden = visibleCount === 0 && (hidden.size > 0 || rows.length === 0);
+        // If all rows hidden but we want "Show rows" recoverable, keep card visible with note.
+        if (visibleCount === 0 && rows.length > 0) {
+          card.hidden = false;
+          if (note) note.hidden = false;
+        }
+      }
+
+      list.querySelectorAll('[data-hide-course]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var id = String(btn.getAttribute('data-hide-course') || '');
+          if (!id) return;
+          var hidden = readHidden();
+          if (hidden.indexOf(id) === -1) hidden.push(id);
+          writeHidden(hidden);
+          applyVisibility();
+        });
+      });
+
+      if (hideAllBtn) {
+        hideAllBtn.addEventListener('click', function () {
+          var ids = [];
+          list.querySelectorAll('.dashboard-course-row').forEach(function (row) {
+            var id = String(row.getAttribute('data-course-id') || '');
+            if (id) ids.push(id);
+          });
+          writeHidden(ids);
+          applyVisibility();
+        });
+      }
+
+      if (showBtn) {
+        showBtn.addEventListener('click', function () {
+          writeHidden([]);
+          applyVisibility();
+        });
+      }
+
+      applyVisibility();
+    })();
+    </script>
     {% endif %}
 </div>
 

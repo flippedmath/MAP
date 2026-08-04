@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+    .ticket-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .ticket-meta div { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; }
+    .ticket-meta dt { font-size: 0.75rem; color: #64748b; text-transform: uppercase; margin: 0 0 4px; }
+    .ticket-meta dd { margin: 0; font-weight: 600; color: #0f172a; }
+    .ticket-timeline { display: flex; flex-direction: column; gap: 0.75rem; }
+    .ticket-comment {
+        border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 14px; background: #fff;
+    }
+    .ticket-comment.is-system { background: #f8fafc; color: #475569; font-style: italic; }
+    .ticket-comment-meta { font-size: 0.8rem; color: #94a3b8; margin-bottom: 6px; }
+    .ticket-comment-body { line-height: 1.5; word-break: break-word; }
+    .ticket-comment-body a { color: #1d4ed8; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 760px; margin: 0 auto;">
+    <h1 style="margin-top: 0;">{{ ticket.title }}</h1>
+    <p style="color: #64748b;">Support ticket for {{ ticket.first_name }}</p>
+
+    <div class="ticket-meta">
+        <div><dt>Status</dt><dd>{{ status_label }}</dd></div>
+        <div><dt>Purpose</dt><dd>{{ purpose_label }}</dd></div>
+        {% if show_username %}
+        <div><dt>Username</dt><dd>{{ username_display }}</dd></div>
+        {% endif %}
+        <div><dt>Email</dt><dd>{{ ticket.respond_to_email }}</dd></div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1rem;">
+        <h2 style="margin-top: 0;">Conversation</h2>
+        <div class="ticket-timeline">
+            {% for d in discussions %}
+            <div class="ticket-comment {% if d.is_system %}is-system{% endif %}">
+                <div class="ticket-comment-meta">
+                    {% if d.is_system %}Update{% else %}{{ d.email }}{% endif %}
+                    · {% if d.created %}{{ d.created|date:"Y-m-d H:i" }}{% else %}—{% endif %}
+                </div>
+                <div class="ticket-comment-body">{{ d.body_html }}</div>
+            </div>
+            {% empty %}
+            <p style="color:#64748b;">No messages yet.</p>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top: 0;">Add a comment</h2>
+        {% if ticket.status == 'closed' or ticket.status == 'canceled' %}
+        <div style="background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 8px; padding: 12px 14px; margin-bottom: 1rem; line-height: 1.5;">
+            This ticket is currently
+            {% if ticket.status == 'closed' %}closed{% else %}canceled{% endif %}.
+            Adding a comment will reopen it so support can continue helping you.
+        </div>
+        {% endif %}
+        <form method="post">
+            {% csrf_token %}
+            <textarea name="body" required maxlength="{{ max_body }}" rows="5"
+                      style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;resize:vertical;"
+                      placeholder="Write your reply…"></textarea>
+            <p style="margin: 6px 0 1rem; color: #94a3b8; font-size: 0.85rem;">
+                Max {{ max_body }} characters.
+            </p>
+            <button type="submit" class="btn" style="font-weight:600;">Post comment</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

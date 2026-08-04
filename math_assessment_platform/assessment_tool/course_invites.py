@@ -40,10 +40,15 @@ def user_can_manage_course(user, course) -> bool:
         return True
     if getattr(user, "user_type", None) != "Teacher":
         return False
+    owner_id = getattr(course, "owner_id", None)
+    user_id = getattr(user, "user_id", None) or getattr(user, "pk", None)
+    if owner_id and user_id and owner_id == user_id:
+        return True
     return UsersInCourse.objects.filter(
         course=course,
         user=user,
-        user__user_type="Teacher",
+        user__user_type__in=("Teacher", "IT_Support"),
+        user_access="active",
     ).exists()
 
 
@@ -141,7 +146,7 @@ def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCours
             raise ValueError(
                 f"“{temp_email}” is registered as {target_user.user_type}, not as a Student, "
                 "so they cannot be enrolled with a student invitation. "
-                "See Help (coming soon) for how to invite a co-Teacher to a course."
+                "See Q&A for how to invite a co-Teacher to a course."
             )
         if target_user and _user_already_enrolled(course, target_user):
             raise ValueError("That student is already enrolled in this course.")
@@ -158,7 +163,7 @@ def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCours
             raise ValueError(
                 f"“{target_user.username}” is registered as {target_user.user_type}, not as a Student, "
                 "so they cannot be enrolled with a student invitation. "
-                "See Help (coming soon) for how to invite a co-Teacher to a course."
+                "See Q&A for how to invite a co-Teacher to a course."
             )
         if _user_already_enrolled(course, target_user):
             raise ValueError("That student is already enrolled in this course.")
