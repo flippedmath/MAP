@@ -1,6 +1,5 @@
 from django.urls import path
 from django.contrib.auth import views as auth_views
-from django.views.generic import RedirectView
 from . import views
 from . import help_views
 from . import ticket_views
@@ -10,7 +9,7 @@ from . import credit_views
 from . import assessment_print
 
 urlpatterns = [
-    path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
+    path('', views.under_construction_view, name='home'),
     path('verify/', views.verify_email, name='verify_email'),
     path('dashboard/', views.HomeDashboardView.as_view(), name='dashboard'),
     path(

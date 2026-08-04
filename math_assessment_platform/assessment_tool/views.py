@@ -162,6 +162,11 @@ def patched_version(package_name):
 importlib.metadata.version = patched_version
 
 
+def under_construction_view(request):
+    """Public landing for everyone (including logged-in users)."""
+    return render(request, 'assessment_tool/under_construction.html')
+
+
 class HomeDashboardView(LoginRequiredMixin, TemplateView):
     template_name = 'assessment_tool/dashboard.html'
 

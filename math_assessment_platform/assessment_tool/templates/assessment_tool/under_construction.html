@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+  .uc-wrap {
+    max-width: 720px;
+    margin: 2.5rem auto 3rem;
+    text-align: center;
+  }
+  .uc-banner {
+    display: inline-block;
+    margin: 0 0 1.5rem;
+    padding: 0.65rem 1.25rem;
+    font-size: clamp(1.35rem, 4vw, 2rem);
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #7c2d12;
+    background: #ffedd5;
+    border: 2px solid #f97316;
+    border-radius: 8px;
+  }
+  .uc-brand {
+    margin: 0 0 0.75rem;
+    font-size: clamp(1.75rem, 5vw, 2.4rem);
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .uc-lead {
+    margin: 0 auto 1.25rem;
+    max-width: 38rem;
+    font-size: 1.05rem;
+    line-height: 1.55;
+    color: #334155;
+  }
+  .uc-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+    margin-top: 1.75rem;
+  }
+  .uc-actions a {
+    display: inline-block;
+    padding: 0.65rem 1.1rem;
+    border-radius: 6px;
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .uc-actions .btn-primary {
+    background: #1e40af;
+    color: #fff;
+  }
+  .uc-actions .btn-secondary {
+    background: #e2e8f0;
+    color: #0f172a;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="uc-wrap">
+  <div class="uc-banner" role="status">Under Construction</div>
+  <h1 class="uc-brand">Math Assessment Platform</h1>
+  <p class="uc-lead">
+    MAP helps teachers build, deliver, and grade math assessments with
+    structured problem types, course management, and student workflows.
+    The site is live for early testing while we finish remaining features.
+  </p>
+  <p class="uc-lead" style="font-size: 0.95rem; color: #64748b;">
+    Testers: sign in or open your dashboard directly. Public visitors can
+    browse Q&amp;A or contact us.
+  </p>
+  <div class="uc-actions">
+    <a class="btn-primary" href="{% url 'login' %}">Sign in</a>
+    <a class="btn-secondary" href="{% url 'register' %}">Teacher register</a>
+    <a class="btn-secondary" href="{% url 'qa' %}">Q&amp;A</a>
+    <a class="btn-secondary" href="{% url 'contact_us' %}">Contact us</a>
+    {% if user.is_authenticated %}
+    <a class="btn-secondary" href="{% url 'dashboard' %}">Dashboard</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

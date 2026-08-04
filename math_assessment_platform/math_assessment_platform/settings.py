@@ -22,10 +22,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-79=f)8y(0s0&g=qy#++j^sxaycjw%nzx5gy$)fug96w^gc90j*'
+SECRET_KEY = config(
+    'SECRET_KEY',
+    default='django-insecure-79=f)8y(0s0&g=qy#++j^sxaycjw%nzx5gy$)fug96w^gc90j*',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=True, cast=bool)
 
 # Local + temporary public tunnels (cloudflared trycloudflare / ngrok).
 # Override with ALLOWED_HOSTS=host1,host2 in .env if needed.
@@ -117,8 +120,8 @@ DATABASES = {
         'NAME': config('DB_ACTUAL_NAME'),
         'USER': config('SECRET_DB_USER'),
         'PASSWORD': config('DB_USER_PASSWORD'),
-        'HOST': 'localhost',
-        'PORT': '5432',
+        'HOST': config('DB_HOST', default='localhost'),
+        'PORT': config('DB_PORT', default='5432'),
     }
 }
 
@@ -167,6 +170,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
