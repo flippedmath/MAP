@@ -1541,6 +1541,15 @@ def _safe_login_next(request, candidate=None):
 
 
 def login_view(request):
+    from .auth_throttle import (
+        LOCKED_MESSAGE,
+        SCOPE_LOGIN,
+        apply_progressive_delay,
+        clear_failures,
+        is_locked,
+        record_failure,
+    )
+
     # 1. HANDLE USERS ALREADY LOGGED IN (GET Requests)
     if request.user.is_authenticated and request.method == 'GET':
         if request.user.user_type == 'Student':
@@ -1554,12 +1563,38 @@ def login_view(request):
     if request.method == 'POST':
         if request.user.is_authenticated:
             logout(request)
-            
+
+        identity = (request.POST.get('username') or '').strip()
+        nxt = _safe_login_next(request)
+
+        if is_locked(scope=SCOPE_LOGIN, request=request, identity=identity):
+            messages.error(request, LOCKED_MESSAGE)
+            if nxt:
+                return redirect(f"{reverse('login')}?next={nxt}")
+            return redirect('login')
+
+        apply_progressive_delay(
+            scope=SCOPE_LOGIN, request=request, identity=identity
+        )
+
         # Initialize the standard form with post data
         form = AuthenticationForm(request, data=request.POST)
         if form.is_valid():
             # Extract authenticated user records from the valid form payload
             user = form.get_user()
+            clear_failures(scope=SCOPE_LOGIN, request=request, identity=identity)
+            # Also clear under the authenticated username/email aliases.
+            clear_failures(
+                scope=SCOPE_LOGIN,
+                request=request,
+                identity=getattr(user, "username", None),
+            )
+            if getattr(user, "user_email", None):
+                clear_failures(
+                    scope=SCOPE_LOGIN,
+                    request=request,
+                    identity=user.user_email,
+                )
             login(request, user)
             try:
                 from .password_reset import nullify_password_resets_on_login
@@ -1577,14 +1612,16 @@ def login_view(request):
             parent_invite_code = request.session.get(PARENT_INVITE_SESSION_KEY)
             if parent_invite_code:
                 return redirect('parent_invite_redeem', code=parent_invite_code)
-            nxt = _safe_login_next(request)
             return redirect(nxt or 'dashboard')
+
+        record_failure(scope=SCOPE_LOGIN, request=request, identity=identity)
+        if is_locked(scope=SCOPE_LOGIN, request=request, identity=identity):
+            messages.error(request, LOCKED_MESSAGE)
         else:
             messages.error(request, "Invalid username or password. Please try again.")
-            nxt = _safe_login_next(request)
-            if nxt:
-                return redirect(f"{reverse('login')}?next={nxt}")
-            return redirect('login')
+        if nxt:
+            return redirect(f"{reverse('login')}?next={nxt}")
+        return redirect('login')
 
     # 3. RENDER BLANK LOGIN FORM (GET Requests)
     form = AuthenticationForm() # Empty form instance for the template context
@@ -1599,6 +1636,14 @@ def login_view(request):
 
 
 def forgot_password_view(request):
+    from .auth_throttle import (
+        LOCKED_MESSAGE,
+        SCOPE_PASSWORD_RESET,
+        apply_progressive_delay,
+        is_locked,
+        record_failure,
+    )
+
     if request.user.is_authenticated:
         return redirect('account_settings')
 
@@ -1611,9 +1656,26 @@ def forgot_password_view(request):
                 'identifier': identifier,
             })
 
+        if is_locked(
+            scope=SCOPE_PASSWORD_RESET, request=request, identity=identifier
+        ):
+            messages.error(request, LOCKED_MESSAGE)
+            return render(request, 'assessment_tool/forgot_password.html', {
+                'identifier': identifier,
+            })
+
+        apply_progressive_delay(
+            scope=SCOPE_PASSWORD_RESET, request=request, identity=identifier
+        )
+
         from .password_reset import create_password_reset_request
 
         create_password_reset_request(identifier=identifier)
+        # Count every reset request (match or not) so bots cannot spray freely.
+        record_failure(
+            scope=SCOPE_PASSWORD_RESET, request=request, identity=identifier
+        )
+
         messages.success(
             request,
             "If that username or email matches an account, a password reset link "
