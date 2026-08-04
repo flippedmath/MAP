@@ -20,7 +20,16 @@ Target site: `https://map.flippedmath.com`
 5. Create venv, `pip install -r requirements.txt`.
 6. Load schema / seed (see `db-promote.md`).
 7. `collectstatic`, configure Gunicorn + Nginx, `certbot --nginx`.
-8. Install cron jobs with MAP markers (see `.cursor/rules/scheduled-jobs-deploy.mdc`).
+8. Install cron jobs with MAP markers (see `.cursor/rules/scheduled-jobs-deploy.mdc`), including `MAP:backup_postgres` (daily `pg_dump` to `/var/backups/map/`).
+
+## Database backups (production)
+
+- Script: `math_assessment_platform/scripts/backup_postgres.sh`
+- Cron marker: `MAP:backup_postgres` (daily 03:05)
+- Output: `/var/backups/map/map_db_YYYY-MM-DD_HHMMSS.sql.gz` (kept 14 days)
+- Log: `/var/log/map-db-backup.log`
+- This is **not** a full off-site copy; enable DigitalOcean Droplet backups and/or copy dumps off the VPS periodically.
+- Media under `math_assessment_platform/media/` is not included in `pg_dump`.
 
 ## Server `.env` keys
 
