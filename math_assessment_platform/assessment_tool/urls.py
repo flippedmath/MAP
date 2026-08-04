@@ -6,6 +6,7 @@ from . import help_views
 from . import ticket_views
 from . import collaboration_views
 from . import content_image_views
+from . import credit_views
 
 urlpatterns = [
     path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
@@ -46,6 +47,11 @@ urlpatterns = [
     path('tickets/', ticket_views.tickets_admin_view, name='tickets_admin'),
     path('tickets/new/', ticket_views.ticket_create_view, name='ticket_create'),
     path(
+        'tickets/user-lookup/',
+        ticket_views.ticket_user_lookup_api,
+        name='ticket_user_lookup',
+    ),
+    path(
         'tickets/contact/<int:contact_id>/convert/',
         ticket_views.contact_convert_view,
         name='contact_convert',
@@ -80,6 +86,22 @@ urlpatterns = [
     path('notifications/<int:notification_id>/delete/', views.notification_delete_view, name='notification_delete'),
     path('notifications/<int:notification_id>/restore/', views.notification_restore_view, name='notification_restore'),
     path('account/', views.account_settings_view, name='account_settings'),
+    path('credits/admin/', credit_views.credits_admin_view, name='credits_admin'),
+    path(
+        'credits/admin/lookup/',
+        credit_views.credits_admin_lookup_api,
+        name='credits_admin_lookup',
+    ),
+    path(
+        'credits/transfer-lookup/',
+        credit_views.credits_transfer_lookup_api,
+        name='credits_transfer_lookup',
+    ),
+    path(
+        'credits/invoice/<int:invoice_id>/',
+        credit_views.credits_invoice_download,
+        name='credits_invoice_download',
+    ),
     path(
         'parent/grade-summary/<int:student_id>/<int:course_id>/',
         views.parent_grade_summary_view,

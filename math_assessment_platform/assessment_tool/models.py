@@ -87,6 +87,10 @@ class MyUserManager(BaseUserManager):
         fields.setdefault('ongoing_assessment', False)
         fields.setdefault('ban_account', False)
         fields.setdefault('user_credit', 0)
+        fields.setdefault('lifetime_credits_acquired', 0)
+        fields.setdefault('lifetime_seat_debits', 0)
+        fields.setdefault('lifetime_seat_reimbursements', 0)
+        fields.setdefault('teacher_unlocked', False)
         return self.create_user(**fields)
 
     def create_superuser(self, user_email, username, gender, user_first_name, user_last_name, **extra_fields):
@@ -122,6 +126,13 @@ class UserProfile(AbstractBaseUser): #, PermissionsMixin):
     user_last_name = models.CharField(max_length=255, blank=True, null=True)
     user_display_name = models.CharField(max_length=255, blank=True, null=True)
     user_credit = models.IntegerField(blank=True, null=True, db_comment='Default is null generally; application logic should set 0 when user_type is Teacher')
+    lifetime_credits_acquired = models.IntegerField(default=0)
+    lifetime_seat_debits = models.IntegerField(default=0)
+    lifetime_seat_reimbursements = models.IntegerField(default=0)
+    teacher_unlocked = models.BooleanField(
+        default=False,
+        db_comment='Cached unlock: balance>=1 OR unreimbursed seat spend>0; recomputed on ledger mutations.',
+    )
     organization = models.CharField(max_length=255, blank=True, null=True)
     creation_date = models.DateTimeField(default=timezone.now, blank=True, null=True)
     unactivated_account = models.BooleanField(blank=True, null=True, db_comment="When an account has a required email that hasn't been verified, then the account is not activated")
@@ -457,6 +468,137 @@ class ContentImage(models.Model):
     class Meta:
         managed = False
         db_table = 'content_image'
+
+
+class CreditInvoice(models.Model):
+    """PDF invoice stored under PRIVATE_FILE_ROOT (not public media)."""
+
+    owner_user = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='owner_user_id',
+        related_name='credit_invoices',
+    )
+    uploaded_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='uploaded_by_id',
+        related_name='credit_invoices_uploaded',
+        blank=True,
+        null=True,
+    )
+    storage_path = models.CharField(max_length=512, unique=True)
+    original_filename = models.CharField(max_length=255, blank=True, null=True)
+    content_type = models.CharField(max_length=64, default='application/pdf')
+    byte_size = models.IntegerField(blank=True, null=True)
+    creation_date = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'credit_invoice'
+
+
+class CreditPurchase(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_COMPLETED = 'completed'
+    STATUS_CANCELED = 'canceled'
+    STATUS_REJECTED = 'rejected'
+
+    # checkout: teacher paid (or stub checkout) — no admin validation.
+    # allotment_request: offline/invoice path — IT must validate before credits.
+    PROVIDER_CHECKOUT = 'checkout'
+    PROVIDER_ALLOTMENT_REQUEST = 'allotment_request'
+    PROVIDER_STUB = 'stub'  # legacy
+
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='user_id')
+    pack_size = models.IntegerField()
+    list_unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=32, default=STATUS_PENDING)
+    provider = models.CharField(max_length=64, default=PROVIDER_STUB)
+    provider_ref = models.CharField(max_length=255, blank=True, null=True)
+    note = models.TextField(blank=True, null=True)
+    invoice = models.ForeignKey(
+        CreditInvoice,
+        models.DO_NOTHING,
+        db_column='invoice_id',
+        blank=True,
+        null=True,
+        related_name='purchases',
+    )
+    money_spent = models.DecimalField(
+        max_digits=12, decimal_places=2, blank=True, null=True
+    )
+    credits_gained = models.IntegerField(blank=True, null=True)
+    invoice_dated = models.DateField(blank=True, null=True)
+    paid_by = models.CharField(max_length=255, blank=True, null=True)
+    payer_organization = models.CharField(max_length=255, blank=True, null=True)
+    approval_notes = models.TextField(blank=True, null=True)
+    approved_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='approved_by_id',
+        related_name='credit_purchases_approved',
+        blank=True,
+        null=True,
+    )
+    approved_at = models.DateTimeField(blank=True, null=True)
+    creation_date = models.DateTimeField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'credit_purchase'
+
+
+class CreditLedger(models.Model):
+    REASON_PURCHASE = 'purchase'
+    REASON_ADMIN_GRANT = 'admin_grant'
+    REASON_ADMIN_REVOKE = 'admin_revoke'
+    REASON_TRANSFER_IN = 'transfer_in'
+    REASON_TRANSFER_OUT = 'transfer_out'
+    REASON_INVITE_SPEND = 'invite_spend'
+    REASON_INVITE_VOID_REIMBURSE = 'invite_void_reimburse'
+    REASON_KICK_REIMBURSE = 'kick_reimburse'
+    REASON_ADJUSTMENT = 'adjustment'
+
+    user = models.ForeignKey('UserProfile', models.DO_NOTHING, db_column='user_id')
+    delta = models.IntegerField()
+    balance_after = models.IntegerField()
+    reason = models.CharField(max_length=64)
+    actor_user = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='actor_user_id',
+        related_name='credit_ledger_actions',
+        blank=True,
+        null=True,
+    )
+    related_invite_id = models.IntegerField(blank=True, null=True)
+    related_enrollment_id = models.IntegerField(blank=True, null=True)
+    related_purchase = models.ForeignKey(
+        CreditPurchase,
+        models.DO_NOTHING,
+        db_column='related_purchase_id',
+        blank=True,
+        null=True,
+    )
+    invoice = models.ForeignKey(
+        CreditInvoice,
+        models.DO_NOTHING,
+        db_column='invoice_id',
+        blank=True,
+        null=True,
+        related_name='ledger_rows',
+    )
+    note = models.TextField(blank=True, null=True)
+    creation_date = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'credit_ledger'
 
 
 class Course(models.Model):

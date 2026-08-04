@@ -1,0 +1,840 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card credits-admin" style="max-width: 1180px; margin: 0 auto;">
+    <h1 style="margin-top: 0;">Credits administration</h1>
+    <nav class="credits-admin-tabs" aria-label="Credits admin sections">
+        <a href="{% url 'credits_admin' %}?tab=manage{% if initial_teacher_query %}&teacher={{ initial_teacher_query|urlencode }}{% endif %}"
+           class="credits-admin-tab{% if credits_admin_tab != 'history' %} is-active{% endif %}">Manage</a>
+        <a href="{% url 'credits_admin' %}?tab=history&start={{ history_start }}&end={{ history_end }}{% if history_user %}&user={{ history_user|urlencode }}{% endif %}{% if history_organization %}&organization={{ history_organization|urlencode }}{% endif %}"
+           class="credits-admin-tab{% if credits_admin_tab == 'history' %} is-active{% endif %}">Purchase history</a>
+    </nav>
+
+    {% if credits_admin_tab == 'history' %}
+    <section style="margin-top: 18px;">
+        <h2 style="font-size: 1.15rem; margin: 0 0 8px;">Purchase history</h2>
+        <p style="color:#64748b;font-size:0.9rem;line-height:1.45;">
+            Completed website checkouts, verified allotments, and rejected allotment requests in the selected
+            date range. Optionally narrow by username/email or organization. Rejected requests keep their
+            invoice link and rejection notes.
+        </p>
+        <form method="get" class="credits-history-filters" style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:14px 0 18px;">
+            <input type="hidden" name="tab" value="history">
+            <div>
+                <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">From</label>
+                <input type="date" name="start" value="{{ history_start }}" required
+                       style="padding:8px;border:1px solid #cbd5e1;border-radius:6px;">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">To</label>
+                <input type="date" name="end" value="{{ history_end }}" required
+                       style="padding:8px;border:1px solid #cbd5e1;border-radius:6px;">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">User</label>
+                <input type="text" name="user" value="{{ history_user }}"
+                       placeholder="Username or email"
+                       style="min-width:180px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+            </div>
+            <div>
+                <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Organization</label>
+                <input type="text" name="organization" value="{{ history_organization }}"
+                       placeholder="Payer or account org"
+                       style="min-width:180px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+            </div>
+            <button type="submit" class="btn" style="padding:8px 12px;">Apply filters</button>
+            {% if history_user or history_organization %}
+            <a href="{% url 'credits_admin' %}?tab=history&start={{ history_start }}&end={{ history_end }}"
+               class="btn" style="padding:8px 12px;background:#64748b;text-decoration:none;">Clear user/org</a>
+            {% endif %}
+        </form>
+        {% if purchase_history_rows %}
+        <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.86rem;">
+                <thead>
+                    <tr style="text-align:left;border-bottom:2px solid #e2e8f0;">
+                        <th style="padding:8px;">Completed</th>
+                        <th style="padding:8px;">User</th>
+                        <th style="padding:8px;">Source</th>
+                        <th style="padding:8px;">Status</th>
+                        <th style="padding:8px;">Credits</th>
+                        <th style="padding:8px;">Money spent</th>
+                        <th style="padding:8px;">Invoice date</th>
+                        <th style="padding:8px;">Paid by</th>
+                        <th style="padding:8px;">Organization</th>
+                        <th style="padding:8px;">Decided by</th>
+                        <th style="padding:8px;">Invoice</th>
+                        <th style="padding:8px;">Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in purchase_history_rows %}
+                    <tr style="border-bottom:1px solid #f1f5f9;vertical-align:top;">
+                        <td style="padding:8px;white-space:nowrap;">
+                            {% if item.purchase.completed_at %}
+                            <time class="local-datetime" datetime="{{ item.purchase.completed_at|date:'c' }}">{{ item.purchase.completed_at }}</time>
+                            {% elif item.purchase.approved_at %}
+                            <time class="local-datetime" datetime="{{ item.purchase.approved_at|date:'c' }}">{{ item.purchase.approved_at }}</time>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td style="padding:8px;">{{ item.username }}</td>
+                        <td style="padding:8px;">{{ item.provider_label }}</td>
+                        <td style="padding:8px;">
+                            {% if item.purchase.status == 'rejected' %}
+                            <span style="color:#b91c1c;font-weight:700;">{{ item.status_label }}</span>
+                            {% else %}
+                            {{ item.status_label }}
+                            {% endif %}
+                        </td>
+                        <td style="padding:8px;">
+                            {% if item.purchase.status == 'rejected' %}
+                            {{ item.purchase.pack_size }} (not granted)
+                            {% else %}
+                            {{ item.purchase.credits_gained|default:item.purchase.pack_size }}
+                            {% endif %}
+                        </td>
+                        <td style="padding:8px;">
+                            {% if item.purchase.money_spent != None %}${% endif %}{{ item.purchase.money_spent|default:"—" }}
+                        </td>
+                        <td style="padding:8px;white-space:nowrap;">{{ item.purchase.invoice_dated|default:"—" }}</td>
+                        <td style="padding:8px;">{{ item.purchase.paid_by|default:"—" }}</td>
+                        <td style="padding:8px;">{{ item.organization_display }}</td>
+                        <td style="padding:8px;">{{ item.approver }}</td>
+                        <td style="padding:8px;">
+                            {% if item.invoice_url %}
+                            <a href="{{ item.invoice_url }}" target="_blank" rel="noopener">
+                                {{ item.invoice_filename|default:"View PDF" }}
+                            </a>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td style="padding:8px;max-width:240px;white-space:pre-wrap;">{{ item.purchase.approval_notes|default:item.purchase.note|default:"—" }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p style="color:#64748b;">No purchases or rejected allotments match these filters.</p>
+        {% endif %}
+    </section>
+    {% else %}
+
+    <p style="color: #64748b; line-height: 1.45;">
+        Grant or revoke seat credits for Teachers or IT Support accounts (including off-site payments).
+        You may attach a PDF invoice when granting, or leave a note if assigning without an invoice.
+        Pending allotment requests require invoice details below before credits are granted.
+        Invoice PDFs are private (owner + IT only) and are not resized.
+    </p>
+
+    <div class="credits-admin-split">
+        <div class="credits-admin-split__left">
+            <section>
+                <h2 style="font-size: 1.15rem; margin: 0 0 10px;">Grant credits</h2>
+                <form method="post" enctype="multipart/form-data" id="credits-grant-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="grant">
+                    <label style="display:block;font-weight:600;margin-bottom:6px;">Username or email (Teacher or IT Support)</label>
+                    <input name="target" type="text" required
+                           class="credits-teacher-lookup"
+                           value="{{ initial_teacher_query }}"
+                           autocomplete="off"
+                           style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">Amount</label>
+                    <input name="amount" type="number" min="1" step="1" required
+                           style="width:120px;padding:10px;border:1px solid #cbd5e1;border-radius:6px;">
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">Invoice PDF (optional)</label>
+                    <input name="invoice_pdf" id="credits-grant-invoice" type="file" accept="application/pdf,.pdf">
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">
+                        Note <span id="credits-grant-note-req">(required without invoice)</span>
+                    </label>
+                    <input name="note" id="credits-grant-note" type="text" maxlength="1000"
+                           placeholder="Required if no invoice is attached"
+                           style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    <div style="margin-top:14px;">
+                        <button type="submit" class="btn" style="background:#047857;">Grant credits</button>
+                    </div>
+                </form>
+            </section>
+
+            <section style="margin-top: 28px;">
+                <h2 style="font-size: 1.15rem; margin: 0 0 10px;">Revoke credits</h2>
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="revoke">
+                    <label style="display:block;font-weight:600;margin-bottom:6px;">Username or email (Teacher or IT Support)</label>
+                    <input name="target" type="text" required
+                           class="credits-teacher-lookup"
+                           value="{{ initial_teacher_query }}"
+                           autocomplete="off"
+                           style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">Amount</label>
+                    <input name="amount" type="number" min="1" step="1" required
+                           style="width:120px;padding:10px;border:1px solid #cbd5e1;border-radius:6px;">
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">Note (required)</label>
+                    <input name="note" type="text" required maxlength="1000"
+                           style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    <div style="margin-top:14px;">
+                        <button type="submit" class="btn" style="background:#b91c1c;">Revoke credits</button>
+                    </div>
+                </form>
+            </section>
+
+            <section style="margin-top: 28px;">
+                <h2 style="font-size: 1.15rem; margin: 0 0 10px;">Batch grant</h2>
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="batch_grant">
+                    <label style="display:block;font-weight:600;margin-bottom:6px;">Usernames / emails (Teacher or IT Support, one per line)</label>
+                    <textarea name="targets" rows="6" required
+                              style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;font-family:inherit;"></textarea>
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">Amount each</label>
+                    <input name="amount" type="number" min="1" step="1" required
+                           style="width:120px;padding:10px;border:1px solid #cbd5e1;border-radius:6px;">
+                    <label style="display:block;font-weight:600;margin:12px 0 6px;">Note (required)</label>
+                    <input name="note" type="text" required maxlength="1000"
+                           style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    <div style="margin-top:14px;">
+                        <button type="submit" class="btn">Batch grant</button>
+                    </div>
+                </form>
+            </section>
+        </div>
+
+        <aside class="credits-admin-split__right" aria-live="polite">
+            <div id="credits-teacher-panel" class="credits-teacher-panel">
+                <p class="credits-teacher-panel__empty" id="credits-teacher-empty">
+                    User details appear here when you enter a username or email on the left.
+                </p>
+                <div id="credits-teacher-body" hidden>
+                    <h2 style="font-size: 1.15rem; margin: 0 0 12px;">Account profile</h2>
+                    <dl class="credits-teacher-meta" id="credits-teacher-meta"></dl>
+                    <h3 style="font-size: 1.05rem; margin: 22px 0 10px;">Credit history</h3>
+                    <div id="credits-teacher-history" class="credits-teacher-history"></div>
+                </div>
+                <p id="credits-teacher-error" class="credits-teacher-panel__error" hidden></p>
+            </div>
+        </aside>
+    </div>
+
+    <section style="margin-top: 36px;">
+        <h2 style="font-size: 1.15rem; margin-bottom: 10px;">Pending allotment requests (verify)</h2>
+        <p style="color:#64748b;font-size:0.9rem;line-height:1.45;">
+            These are offline / invoice allotment requests that bypassed checkout.
+            Direct teacher purchases do not appear here — they are completed automatically.
+            Enter required invoice fields (money spent, credits gained, invoice date, who paid),
+            then approve. Your admin account is recorded automatically with the approval notes.
+        </p>
+        {% if pending_purchase_rows %}
+        <div style="display:flex;flex-direction:column;gap:14px;">
+            {% for item in pending_purchase_rows %}
+            <div style="border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;background:#f8fafc;">
+                <div style="display:flex;flex-wrap:wrap;gap:10px 18px;margin-bottom:10px;font-size:0.92rem;">
+                    <strong>#{{ item.purchase.id }}</strong>
+                    <span>{{ item.purchase.user.username }}</span>
+                    <span>Requested {{ item.purchase.pack_size }} credits · ref. ${{ item.purchase.total_amount }}</span>
+                    <span>
+                        {% if item.purchase.creation_date %}
+                        <time class="local-datetime" datetime="{{ item.purchase.creation_date|date:'c' }}">{{ item.purchase.creation_date }}</time>
+                        {% else %}—{% endif %}
+                    </span>
+                    {% if item.invoice_url %}
+                    <a href="{{ item.invoice_url }}" target="_blank" rel="noopener">
+                        View invoice{% if item.invoice_filename %} ({{ item.invoice_filename }}){% endif %}
+                    </a>
+                    {% else %}
+                    <span style="color:#b45309;font-weight:600;">No invoice PDF yet</span>
+                    {% endif %}
+                </div>
+                {% if item.purchase.note %}
+                <p style="margin:0 0 10px;font-size:0.88rem;color:#334155;">Teacher note: {{ item.purchase.note }}</p>
+                {% endif %}
+                <form method="post" enctype="multipart/form-data" class="credits-approve-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="complete_purchase">
+                    <input type="hidden" name="purchase_id" value="{{ item.purchase.id }}">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">
+                        <div>
+                            <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Money spent *</label>
+                            <input name="money_spent" type="text" inputmode="decimal" required placeholder="e.g. 2500.00"
+                                   style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Credits gained *</label>
+                            <input name="credits_gained" type="number" min="1" step="1" required value="{{ item.purchase.pack_size }}"
+                                   style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Invoice date *</label>
+                            <input name="invoice_dated" type="date" required
+                                   style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Who paid *</label>
+                            <input name="paid_by" type="text" required maxlength="255" placeholder="Name on invoice / payer"
+                                   style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Organization (optional)</label>
+                            <input name="payer_organization" type="text" maxlength="255"
+                                   placeholder="{{ item.purchase.user.organization|default:'' }}"
+                                   style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                        </div>
+                        <div>
+                            <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">
+                                {% if item.invoice_url %}Replace invoice PDF{% else %}Attach invoice PDF{% endif %}
+                            </label>
+                            <input name="invoice_pdf" type="file" accept="application/pdf,.pdf">
+                        </div>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">Additional notes (optional)</label>
+                        <input name="approval_notes" type="text" maxlength="2000"
+                               placeholder="Optional verification notes (your username is recorded automatically)"
+                               style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                    </div>
+                    <div style="margin-top:12px;">
+                        <button type="button" class="btn credits-approve-open"
+                                style="padding:8px 12px;font-size:0.85rem;background:#047857;">
+                            Approve allotment
+                        </button>
+                    </div>
+                </form>
+                <form method="post" class="credits-reject-form" style="margin-top:14px;padding-top:12px;border-top:1px dashed #e2e8f0;">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reject_purchase">
+                    <input type="hidden" name="purchase_id" value="{{ item.purchase.id }}">
+                    <label style="display:block;font-size:0.78rem;font-weight:700;color:#64748b;margin-bottom:4px;">
+                        Rejection reason *
+                    </label>
+                    <input name="rejection_note" type="text" required maxlength="2000"
+                           placeholder="Required reason for rejecting this allotment"
+                           style="width:100%;max-width:520px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;margin-bottom:8px;">
+                    <button type="submit" class="btn" style="padding:6px 10px;font-size:0.8rem;background:#b91c1c;">
+                        Reject request
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:#64748b;">No pending allotment requests.</p>
+        {% endif %}
+    </section>
+
+    <section style="margin-top: 32px;">
+        <h2 style="font-size: 1.15rem; margin-bottom: 10px;">Recent ledger (all users)</h2>
+        {% if ledger_rows %}
+        <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+                <thead>
+                    <tr style="text-align:left;border-bottom:2px solid #e2e8f0;">
+                        <th style="padding:8px;">When</th>
+                        <th style="padding:8px;">User</th>
+                        <th style="padding:8px;">Type</th>
+                        <th style="padding:8px;">Δ</th>
+                        <th style="padding:8px;">Balance</th>
+                        <th style="padding:8px;">Actor</th>
+                        <th style="padding:8px;">Note</th>
+                        <th style="padding:8px;">Invoice</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in ledger_rows %}
+                    <tr style="border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:8px;white-space:nowrap;">
+                            {% if item.row.creation_date %}
+                            <time class="local-datetime" datetime="{{ item.row.creation_date|date:'c' }}">{{ item.row.creation_date }}</time>
+                            {% else %}—{% endif %}
+                        </td>
+                        <td style="padding:8px;">{{ item.username }}</td>
+                        <td style="padding:8px;">{{ item.reason_label }}</td>
+                        <td style="padding:8px;">{% if item.row.delta > 0 %}+{% endif %}{{ item.row.delta }}</td>
+                        <td style="padding:8px;">{{ item.row.balance_after }}</td>
+                        <td style="padding:8px;">{{ item.actor }}</td>
+                        <td style="padding:8px;max-width:240px;">{{ item.row.note|default:"—" }}</td>
+                        <td style="padding:8px;min-width:160px;">
+                            {% if item.invoice_url %}
+                            <a href="{{ item.invoice_url }}" target="_blank" rel="noopener">
+                                {{ item.invoice_filename|default:"View PDF" }}
+                            </a>
+                            {% endif %}
+                            {% if item.can_attach_invoice %}
+                            <form method="post" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:4px;{% if item.invoice_url %}margin-top:6px;{% endif %}">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="attach_ledger_invoice">
+                                <input type="hidden" name="ledger_id" value="{{ item.row.id }}">
+                                <input type="file" name="invoice_pdf" accept="application/pdf,.pdf" required style="font-size:0.75rem;">
+                                <button type="submit" class="btn" style="padding:4px 8px;font-size:0.75rem;">
+                                    {% if item.invoice_url %}Replace PDF{% else %}Attach PDF{% endif %}
+                                </button>
+                            </form>
+                            {% elif not item.invoice_url %}—{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p style="color:#64748b;">No ledger entries yet.</p>
+        {% endif %}
+    </section>
+
+    <section style="margin-top: 28px; padding-top: 16px; border-top: 1px solid #e2e8f0;">
+        <h2 style="font-size: 1.05rem; margin-bottom: 8px;">Configured packs (reference)</h2>
+        <ul style="color:#64748b;font-size:0.9rem;">
+            {% for pack in credit_packs %}
+            <li>{{ pack.size }} seats — {{ pack.discount_percent }}% off — ${{ pack.unit_price }}/seat — ${{ pack.total_amount }} total</li>
+            {% endfor %}
+        </ul>
+    </section>
+
+    <section style="margin-top: 28px; padding: 16px 18px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc;">
+        <h2 style="font-size: 1.05rem; margin: 0 0 8px;">Unlocked Teacher benefits</h2>
+        <p style="color:#64748b;font-size:0.9rem;line-height:1.45;margin:0 0 10px;">
+            A Teacher account is unlocked when it has at least one credit balance, or at least one
+            unreimbursed student seat. Unlocking enables paid teaching features beyond the free trial:
+        </p>
+        <ul style="margin:0;padding-left:1.2rem;color:#334155;font-size:0.9rem;line-height:1.5;">
+            <li>Create more than one course (locked teachers are limited to a single course)</li>
+            <li>Send student invites (each invite spends one seat credit)</li>
+            <li>Create and use private collaboration groups (Public Library stays available while locked)</li>
+            <li>Print tests and generate printouts
+                <span style="color:#94a3b8;">(coming soon — UI not implemented yet; capability is gated for unlocked teachers)</span>
+            </li>
+        </ul>
+        <p style="color:#94a3b8;font-size:0.85rem;line-height:1.45;margin:12px 0 0;">
+            Voiding unused invites or removing a student within 7 days reimburses a credit and can
+            relock the teacher if balance and unreimbursed seats both return to zero.
+        </p>
+    </section>
+    {% endif %}
+</div>
+
+{% if credits_admin_tab != 'history' %}
+<div id="credits-approve-overlay" class="credits-approve-overlay" hidden aria-hidden="true">
+    <div class="credits-approve-modal" role="dialog" aria-modal="true" aria-labelledby="credits-approve-title">
+        <h3 id="credits-approve-title" style="margin-top:0;">Confirm allotment approval</h3>
+        <p style="color:#334155;line-height:1.5;margin:0 0 10px;">
+            Approve this credit allotment request? Credits will be granted immediately and the teacher will be notified.
+        </p>
+        <p id="credits-approve-summary" style="color:#0f172a;font-weight:600;line-height:1.45;margin:0 0 18px;"></p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+            <button type="button" class="btn" id="credits-approve-cancel" style="background:#64748b;">Cancel</button>
+            <button type="button" class="btn" id="credits-approve-confirm" style="background:#047857;">Confirm approval</button>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<style>
+    .credits-admin-tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 16px 0 4px;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 0;
+    }
+    .credits-admin-tab {
+        display: inline-block;
+        padding: 10px 14px;
+        text-decoration: none;
+        color: #64748b;
+        font-weight: 600;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+    }
+    .credits-admin-tab:hover { color: #1e40af; }
+    .credits-admin-tab.is-active {
+        color: #1d4ed8;
+        border-bottom-color: #2563eb;
+    }
+    .credits-admin-split {
+        display: grid;
+        grid-template-columns: minmax(280px, 1fr) minmax(300px, 1.1fr);
+        gap: 24px;
+        align-items: start;
+        margin-top: 24px;
+    }
+    @media (max-width: 860px) {
+        .credits-admin-split {
+            grid-template-columns: 1fr;
+        }
+    }
+    .credits-teacher-panel {
+        position: sticky;
+        top: 12px;
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        background: #f8fafc;
+        padding: 16px 18px;
+        min-height: 220px;
+        max-height: calc(100vh - 40px);
+        overflow: auto;
+    }
+    .credits-teacher-panel__empty {
+        color: #94a3b8;
+        font-size: 0.92rem;
+        line-height: 1.45;
+        margin: 0;
+    }
+    .credits-teacher-panel__error {
+        color: #b91c1c;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0;
+    }
+    .credits-teacher-meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px 16px;
+        margin: 0;
+    }
+    .credits-teacher-meta > div { margin: 0; }
+    .credits-teacher-meta dt {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: #64748b;
+        margin: 0 0 2px;
+    }
+    .credits-teacher-meta dd {
+        margin: 0;
+        color: #0f172a;
+        font-size: 0.95rem;
+        word-break: break-word;
+    }
+    .credits-teacher-history {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+    .credits-tx {
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 10px 12px;
+    }
+    .credits-tx__top {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 6px 12px;
+        font-size: 0.88rem;
+    }
+    .credits-tx__when { color: #64748b; font-variant-numeric: tabular-nums; }
+    .credits-tx__type { font-weight: 700; color: #1e293b; }
+    .credits-tx__delta { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .credits-tx__delta.is-pos { color: #047857; }
+    .credits-tx__delta.is-neg { color: #b91c1c; }
+    .credits-tx--rejected {
+        border-color: #fecaca;
+        background: #fff7f7;
+    }
+    .credits-tx__meta {
+        margin-top: 4px;
+        font-size: 0.82rem;
+        color: #64748b;
+    }
+    .credits-approve-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.55);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        padding: 16px;
+    }
+    .credits-approve-overlay[hidden] { display: none !important; }
+    .credits-approve-modal {
+        background: #fff;
+        border-radius: 10px;
+        max-width: 440px;
+        width: 100%;
+        padding: 22px 24px;
+        box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+    }
+    .credits-tx__note {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px dashed #e2e8f0;
+        font-size: 0.88rem;
+        color: #334155;
+        line-height: 1.4;
+        white-space: pre-wrap;
+    }
+</style>
+
+<script>
+(function () {
+    var lookupUrl = "{{ credits_lookup_url|escapejs }}";
+    var inputs = Array.prototype.slice.call(document.querySelectorAll(".credits-teacher-lookup"));
+    var emptyEl = document.getElementById("credits-teacher-empty");
+    var bodyEl = document.getElementById("credits-teacher-body");
+    var metaEl = document.getElementById("credits-teacher-meta");
+    var historyEl = document.getElementById("credits-teacher-history");
+    var errorEl = document.getElementById("credits-teacher-error");
+    var timer = null;
+    var lastQuery = "";
+    var syncing = false;
+
+    function escapeHtml(value) {
+        return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    function showEmpty(message) {
+        if (emptyEl) {
+            emptyEl.hidden = false;
+            emptyEl.textContent = message ||
+                "User details appear here when you enter a username or email on the left.";
+        }
+        if (bodyEl) bodyEl.hidden = true;
+        if (errorEl) {
+            errorEl.hidden = true;
+            errorEl.textContent = "";
+        }
+    }
+
+    function showError(message) {
+        if (emptyEl) emptyEl.hidden = true;
+        if (bodyEl) bodyEl.hidden = true;
+        if (errorEl) {
+            errorEl.hidden = false;
+            errorEl.textContent = message || "No matching Teacher or IT Support account found.";
+        }
+    }
+
+    function metaItem(label, value) {
+        return (
+            "<div><dt>" + escapeHtml(label) + "</dt><dd>" +
+            escapeHtml(value || "—") +
+            "</dd></div>"
+        );
+    }
+
+    function renderTeacher(data) {
+        if (!data || !data.found) {
+            showError((data && data.error) || "No matching Teacher or IT Support account found.");
+            return;
+        }
+        if (emptyEl) emptyEl.hidden = true;
+        if (errorEl) errorEl.hidden = true;
+        if (bodyEl) bodyEl.hidden = false;
+
+        if (metaEl) {
+            metaEl.innerHTML = [
+                metaItem("Display name", data.display_name),
+                metaItem("Username", data.username),
+                metaItem("Email", data.email),
+                metaItem("First name", data.first_name),
+                metaItem("Last name", data.last_name),
+                metaItem("Organization", data.organization),
+                metaItem("Gender", data.gender),
+                metaItem("Account type", data.user_type),
+                metaItem("Credit balance", String(data.credit_balance)),
+                metaItem("Status", data.unlocked ? "Unlocked" : "Locked"),
+                metaItem("Unreimbursed seats", String(data.net_unreimbursed_seats)),
+                metaItem("Lifetime acquired", String(data.lifetime_credits_acquired)),
+                metaItem("Lifetime seat debits", String(data.lifetime_seat_debits)),
+                metaItem("Lifetime reimbursements", String(data.lifetime_seat_reimbursements))
+            ].join("");
+        }
+
+        if (historyEl) {
+            var txs = data.transactions || [];
+            if (!txs.length) {
+                historyEl.innerHTML = "<p style=\"color:#94a3b8;font-size:0.9rem;margin:0;\">No credit transactions yet.</p>";
+            } else {
+                historyEl.innerHTML = txs.map(function (tx) {
+                    var isRejected = tx.status === "rejected" || tx.reason === "allotment_rejected";
+                    var deltaClass = isRejected
+                        ? "is-neg"
+                        : (tx.delta > 0 ? "is-pos" : (tx.delta < 0 ? "is-neg" : ""));
+                    var deltaText = isRejected
+                        ? "Rejected"
+                        : ((tx.delta > 0 ? "+" : "") + tx.delta);
+                    var when = tx.creation_date
+                        ? "<time class=\"local-datetime\" datetime=\"" + escapeHtml(tx.creation_date) + "\">" +
+                          escapeHtml(tx.creation_date_display || tx.creation_date) + "</time>"
+                        : "—";
+                    var note = (tx.note || "").trim()
+                        ? "<div class=\"credits-tx__note\">" + escapeHtml(tx.note) + "</div>"
+                        : "<div class=\"credits-tx__note\" style=\"color:#94a3b8;\">No note</div>";
+                    var invoice = tx.invoice_url
+                        ? "<div class=\"credits-tx__note\"><a href=\"" + escapeHtml(tx.invoice_url) +
+                          "\" target=\"_blank\" rel=\"noopener\">Invoice: " +
+                          escapeHtml(tx.invoice_filename || "View PDF") + "</a></div>"
+                        : "";
+                    var metaBits = [];
+                    if (isRejected) {
+                        metaBits.push("Status: Rejected");
+                        if (tx.pack_size) metaBits.push("Requested: " + tx.pack_size + " credits");
+                    } else if (tx.balance_after != null) {
+                        metaBits.push("Balance after: " + String(tx.balance_after));
+                    }
+                    if (tx.actor) metaBits.push("Actor: " + tx.actor);
+                    return (
+                        "<article class=\"credits-tx" + (isRejected ? " credits-tx--rejected" : "") + "\">" +
+                          "<div class=\"credits-tx__top\">" +
+                            "<span class=\"credits-tx__when\">" + when + "</span>" +
+                            "<span class=\"credits-tx__type\">" + escapeHtml(tx.reason_label) + "</span>" +
+                            "<span class=\"credits-tx__delta " + deltaClass + "\">" + escapeHtml(deltaText) + "</span>" +
+                          "</div>" +
+                          "<div class=\"credits-tx__meta\">" + escapeHtml(metaBits.join(" · ")) + "</div>" +
+                          note +
+                          invoice +
+                        "</article>"
+                    );
+                }).join("");
+                if (typeof window.MAPHydrateLocalDatetimes === "function") {
+                    window.MAPHydrateLocalDatetimes(historyEl);
+                }
+            }
+        }
+    }
+
+    function lookup(query) {
+        var q = (query || "").trim();
+        if (q.length < 2) {
+            lastQuery = "";
+            showEmpty();
+            return;
+        }
+        if (q === lastQuery) return;
+        lastQuery = q;
+        fetch(lookupUrl + "?q=" + encodeURIComponent(q), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) { renderTeacher(data); })
+            .catch(function () { showError("Could not look up that user."); });
+    }
+
+    function scheduleLookup(value) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () { lookup(value); }, 280);
+    }
+
+    function syncOtherInputs(source, value) {
+        syncing = true;
+        inputs.forEach(function (input) {
+            if (input !== source) input.value = value;
+        });
+        syncing = false;
+    }
+
+    inputs.forEach(function (input) {
+        input.addEventListener("input", function () {
+            if (syncing) return;
+            syncOtherInputs(input, input.value);
+            scheduleLookup(input.value);
+        });
+        input.addEventListener("change", function () {
+            if (syncing) return;
+            syncOtherInputs(input, input.value);
+            lookup(input.value);
+        });
+    });
+
+    var initial = "{{ initial_teacher_query|escapejs }}";
+    if (initial) {
+        lookup(initial);
+    } else {
+        showEmpty();
+    }
+
+    var grantInvoice = document.getElementById("credits-grant-invoice");
+    var grantNote = document.getElementById("credits-grant-note");
+    var grantNoteReq = document.getElementById("credits-grant-note-req");
+    function syncGrantNoteRequirement() {
+        var hasFile = grantInvoice && grantInvoice.files && grantInvoice.files.length > 0;
+        if (grantNote) {
+            if (hasFile) grantNote.removeAttribute("required");
+            else grantNote.setAttribute("required", "required");
+        }
+        if (grantNoteReq) {
+            grantNoteReq.textContent = hasFile
+                ? "(optional with invoice)"
+                : "(required without invoice)";
+        }
+    }
+    if (grantInvoice) {
+        grantInvoice.addEventListener("change", syncGrantNoteRequirement);
+        syncGrantNoteRequirement();
+    }
+
+    var approveOverlay = document.getElementById("credits-approve-overlay");
+    var approveSummary = document.getElementById("credits-approve-summary");
+    var approveConfirmBtn = document.getElementById("credits-approve-confirm");
+    var approveCancelBtn = document.getElementById("credits-approve-cancel");
+    var pendingApproveForm = null;
+
+    function closeApproveOverlay() {
+        pendingApproveForm = null;
+        if (approveOverlay) {
+            approveOverlay.hidden = true;
+            approveOverlay.setAttribute("aria-hidden", "true");
+        }
+    }
+
+    function openApproveOverlay(form) {
+        pendingApproveForm = form;
+        var credits = (form.querySelector("[name='credits_gained']") || {}).value || "";
+        var money = (form.querySelector("[name='money_spent']") || {}).value || "";
+        var paidBy = (form.querySelector("[name='paid_by']") || {}).value || "";
+        var invoiceDate = (form.querySelector("[name='invoice_dated']") || {}).value || "";
+        if (approveSummary) {
+            approveSummary.textContent =
+                "Grant " + credits + " credit(s) for $" + money +
+                ". Invoice date: " + invoiceDate + ". Paid by: " + paidBy + ".";
+        }
+        if (approveOverlay) {
+            approveOverlay.hidden = false;
+            approveOverlay.setAttribute("aria-hidden", "false");
+        }
+    }
+
+    Array.prototype.slice.call(document.querySelectorAll(".credits-approve-form")).forEach(function (form) {
+        form.addEventListener("submit", function (evt) {
+            // Button is type=button; keep as safety if Enter is pressed in a field.
+            evt.preventDefault();
+            if (!form.reportValidity()) return;
+            openApproveOverlay(form);
+        });
+    });
+    Array.prototype.slice.call(document.querySelectorAll(".credits-approve-open")).forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            var form = btn.closest("form");
+            if (!form) return;
+            if (!form.reportValidity()) return;
+            openApproveOverlay(form);
+        });
+    });
+    if (approveCancelBtn) approveCancelBtn.addEventListener("click", closeApproveOverlay);
+    if (approveConfirmBtn) {
+        approveConfirmBtn.addEventListener("click", function () {
+            if (pendingApproveForm) pendingApproveForm.submit();
+            closeApproveOverlay();
+        });
+    }
+    if (approveOverlay) {
+        approveOverlay.addEventListener("click", function (evt) {
+            if (evt.target === approveOverlay) closeApproveOverlay();
+        });
+    }
+    document.addEventListener("keydown", function (evt) {
+        if (evt.key === "Escape" && approveOverlay && !approveOverlay.hidden) {
+            closeApproveOverlay();
+        }
+    });
+})();
+</script>
+{% endblock %}

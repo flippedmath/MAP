@@ -26,6 +26,7 @@
                 {% if user.user_type == 'IT_Support' %}
                 <a href="{% url 'tickets_admin' %}" style="color: white; text-decoration: none;">Tickets</a>
                 <a href="{% url 'qa_admin' %}" style="color: white; text-decoration: none;">Q&amp;A Admin</a>
+                <a href="{% url 'credits_admin' %}" style="color: white; text-decoration: none;">Credits</a>
                 <a href="{% url 'db_viewer' %}" style="color: white; text-decoration: none;">Database</a>
                 {% endif %}
                 {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}

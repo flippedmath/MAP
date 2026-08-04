@@ -56,6 +56,9 @@ from .models import (
     QaTagAssignment,
     ContactUs,
     ContentImage,
+    CreditInvoice,
+    CreditLedger,
+    CreditPurchase,
     Ticket,
     TicketDiscussion,
     TicketAdminFilterPref,
@@ -472,10 +475,18 @@ def account_settings_view(request):
         update_display_name,
         update_organization,
     )
+    from .credit_views import account_credits_context, handle_account_credit_post
 
     user = request.user
     if request.method == 'POST':
         action = request.POST.get('action') or ''
+        if action in (
+            'buy_credits',
+            'request_credits',
+            'attach_purchase_invoice',
+            'transfer_credits',
+        ):
+            return handle_account_credit_post(request)
         if action == 'update_display_name':
             changed, _new_value = update_display_name(
                 user, request.POST.get('display_name')
@@ -539,7 +550,12 @@ def account_settings_view(request):
             return redirect('account_settings')
 
     pending = pending_email_for_user(user)
-    return render(request, 'assessment_tool/account_settings.html', {
+    active_tab = (request.GET.get('tab') or 'profile').strip().lower()
+    if active_tab not in ('profile', 'credits'):
+        active_tab = 'profile'
+    if active_tab == 'credits' and user.user_type not in ('Teacher', 'IT_Support'):
+        active_tab = 'profile'
+    context = {
         'profile': user,
         'gender_label': gender_label(user.gender),
         'display_name_value': user.user_display_name or '',
@@ -547,7 +563,10 @@ def account_settings_view(request):
         'pending_email': pending.temp_email if pending else None,
         'show_organization': user.user_type in ('Teacher', 'IT_Support'),
         'current_email': (user.user_email or '').strip().lower(),
-    })
+        'account_active_tab': active_tab,
+    }
+    context.update(account_credits_context(user))
+    return render(request, 'assessment_tool/account_settings.html', context)
 
 
 @user_passes_test(lambda u: u.is_superuser, login_url='/dashboard/')
@@ -583,6 +602,9 @@ def database_viewer(request):
         'notification': Notification,
         'contact_us': ContactUs,
         'content_image': ContentImage,
+        'credit_invoice': CreditInvoice,
+        'credit_ledger': CreditLedger,
+        'credit_purchase': CreditPurchase,
         'ticket': Ticket,
         'ticket_discussion': TicketDiscussion,
         'ticket_admin_filter_pref': TicketAdminFilterPref,
@@ -916,10 +938,15 @@ def course_list_view(request):
             source_course = get_object_or_404(Course, id=source_id)
 
             try:
+                from .credits import CreditError, assert_can_create_course
+                assert_can_create_course(user)
                 source_course.duplicate_course(user=user, target_transition=target_transition)
                 messages.success(request, f"Successfully branched new course from '{source_course.name}'.")
                 return redirect('course_list')
-            except:
+            except CreditError as exc:
+                messages.error(request, str(exc))
+                return redirect('course_list')
+            except Exception:
                 messages.error(request, "Permission denied for this specific Course copy operation or associated folder doesn't exist.")
                 return redirect('course_list')
 
@@ -1890,7 +1917,11 @@ def course_management_view(request, course_id):
             )
             try:
                 void_course_invite(invite)
-                messages.success(request, "Invitation voided and removed.")
+                messages.success(
+                    request,
+                    "Invitation voided and removed. "
+                    "Any seat credit spent on this unused invite was reimbursed.",
+                )
             except ValueError as exc:
                 messages.error(request, str(exc))
             return redirect('course_management', course_id=course.id)
@@ -1915,8 +1946,7 @@ def course_management_view(request, course_id):
                     msg += (
                         " Recorded grades for this enrollment period were not kept "
                         "on a transcript because the student was enrolled for less than one week. "
-                        "Credit reimbursement for removals within one week of enrollment "
-                        "will apply when the credit system is available."
+                        "The seat credit for this student was reimbursed."
                     )
                 elif summary.get("grade_rows"):
                     msg += (
@@ -2260,6 +2290,11 @@ def course_management_view(request, course_id):
             'can_void': inv.status == ParentCourseInvitation.STATUS_PENDING,
         })
 
+    from .credits import get_balance, teacher_is_unlocked
+
+    # Fresh balance after invite/void/kick redirects.
+    acting_teacher = UserProfile.objects.filter(pk=request.user.pk).first() or request.user
+
     return render(request, 'assessment_tool/course_management.html', {
         'course': course,
         'user_type': request.user.user_type,
@@ -2281,6 +2316,9 @@ def course_management_view(request, course_id):
         ),
         'highlight_invite_id': request.GET.get('invite'),
         'highlight_parent_invite_id': request.GET.get('parent_invite'),
+        'credit_balance': get_balance(acting_teacher),
+        'teacher_credits_unlocked': teacher_is_unlocked(acting_teacher),
+        'credits_account_url': reverse('account_settings') + '?tab=credits',
     })
 
 

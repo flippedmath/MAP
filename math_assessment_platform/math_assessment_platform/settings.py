@@ -162,3 +162,10 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # URL that handles the media served from MEDIA_ROOT.
 MEDIA_URL = '/media/'
+
+# Auth-gated uploads (credit invoices, etc.). Never served via MEDIA_URL.
+PRIVATE_FILE_ROOT = os.path.join(BASE_DIR, 'private_files')
+
+# Allow credit invoice PDFs up to ~25 MB (stored as-is, not resized).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 26 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024

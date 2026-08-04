@@ -59,6 +59,27 @@
 
             {% if mode == 'create' %}
             <div style="margin-bottom: 1rem;">
+                <label for="client_lookup" style="display:block;font-weight:600;margin-bottom:5px;">
+                    Client username or email
+                </label>
+                <input id="client_lookup" name="client_lookup" type="text" autocomplete="off"
+                       value="{{ form.client_lookup }}"
+                       placeholder="Type a username or email to look up an account"
+                       style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
+                <input type="hidden" id="username_id" name="username_id" value="{{ form.username_id }}">
+                <input type="hidden" id="linked_username" name="linked_username" value="{{ form.linked_username }}">
+                <p id="client_lookup_status" style="margin:6px 0 0;font-size:0.85rem;color:#94a3b8;" aria-live="polite">
+                    Optional. Matching accounts auto-fill first name, email, and linked username.
+                </p>
+            </div>
+            <div style="margin-bottom: 1rem;">
+                <label for="linked_username_display" style="display:block;font-weight:600;margin-bottom:5px;">Username</label>
+                <input id="linked_username_display" type="text" readonly
+                       value="{{ form.linked_username }}"
+                       placeholder="Filled when an account is verified"
+                       style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;background:#f8fafc;color:#0f172a;">
+            </div>
+            <div style="margin-bottom: 1rem;">
                 <label for="first_name" style="display:block;font-weight:600;margin-bottom:5px;">Client first name</label>
                 <input id="first_name" name="first_name" required maxlength="{{ max_first_name }}" value="{{ form.first_name }}"
                        style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;">
@@ -89,4 +110,104 @@
         </form>
     </div>
 </div>
+
+{% if mode == 'create' and ticket_user_lookup_url %}
+<script>
+(function () {
+    var lookupUrl = "{{ ticket_user_lookup_url|escapejs }}";
+    var lookupInput = document.getElementById("client_lookup");
+    var statusEl = document.getElementById("client_lookup_status");
+    var userIdInput = document.getElementById("username_id");
+    var linkedHidden = document.getElementById("linked_username");
+    var linkedDisplay = document.getElementById("linked_username_display");
+    var firstNameInput = document.getElementById("first_name");
+    var emailInput = document.getElementById("respond_to_email");
+    var timer = null;
+    var lastQuery = "";
+
+    function setStatus(message, kind) {
+        if (!statusEl) return;
+        statusEl.textContent = message || "";
+        if (kind === "ok") statusEl.style.color = "#047857";
+        else if (kind === "error") statusEl.style.color = "#b91c1c";
+        else statusEl.style.color = "#94a3b8";
+    }
+
+    function clearLinkedUser() {
+        if (userIdInput) userIdInput.value = "";
+        if (linkedHidden) linkedHidden.value = "";
+        if (linkedDisplay) linkedDisplay.value = "";
+    }
+
+    function applyUser(data) {
+        if (userIdInput) userIdInput.value = String(data.user_id || "");
+        if (linkedHidden) linkedHidden.value = data.username || "";
+        if (linkedDisplay) linkedDisplay.value = data.username || "";
+        if (firstNameInput) firstNameInput.value = data.first_name || "";
+        if (emailInput) emailInput.value = data.email || "";
+        var typeLabel = data.user_type ? " · " + data.user_type : "";
+        setStatus(
+            "Verified account: " + (data.username || "") + typeLabel +
+            (data.display_name ? " (" + data.display_name + ")" : ""),
+            "ok"
+        );
+    }
+
+    function lookup(query) {
+        var q = (query || "").trim();
+        if (q.length < 2) {
+            lastQuery = "";
+            clearLinkedUser();
+            setStatus(
+                "Optional. Matching accounts auto-fill first name, email, and linked username.",
+                "hint"
+            );
+            return;
+        }
+        if (q === lastQuery) return;
+        lastQuery = q;
+        setStatus("Looking up account…", "hint");
+        fetch(lookupUrl + "?q=" + encodeURIComponent(q), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                if (!data || !data.found) {
+                    clearLinkedUser();
+                    setStatus((data && data.error) || "No matching account found.", "error");
+                    return;
+                }
+                applyUser(data);
+            })
+            .catch(function () {
+                clearLinkedUser();
+                setStatus("Could not look up that account.", "error");
+            });
+    }
+
+    function scheduleLookup(value) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(function () { lookup(value); }, 280);
+    }
+
+    if (lookupInput) {
+        lookupInput.addEventListener("input", function () {
+            scheduleLookup(lookupInput.value);
+        });
+        lookupInput.addEventListener("change", function () {
+            lookup(lookupInput.value);
+        });
+        if ((lookupInput.value || "").trim().length >= 2) {
+            lookup(lookupInput.value);
+        } else if ((userIdInput && userIdInput.value) || (linkedDisplay && linkedDisplay.value)) {
+            setStatus(
+                "Linked username: " + ((linkedDisplay && linkedDisplay.value) || "account"),
+                "ok"
+            );
+        }
+    }
+})();
+</script>
+{% endif %}
 {% endblock %}

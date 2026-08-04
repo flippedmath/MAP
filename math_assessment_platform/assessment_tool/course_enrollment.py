@@ -289,9 +289,6 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
     if within_week:
         # Early removal: no transcript for this stint.
         grades_discarded = discard_enrollment_grades(enrollment)
-        # TODO(credits): When the credit system is implemented, reimburse the Teacher
-        # for course-seat credits (student removed within one week of enrollment).
-        _ = removed_by
     else:
         grades_snapshotted = snapshot_enrollment_grades(enrollment)
         grade_rows = FinalGradeCalculation.objects.filter(enrollment=enrollment).count()
@@ -305,6 +302,11 @@ def kick_student_from_course(*, course, student, removed_by=None) -> dict:
     enrollment.save(
         update_fields=["status", "end_reason", "ended_at", "slot"]
     )
+
+    if within_week:
+        from .credits import reimburse_kick_credit
+
+        reimburse_kick_credit(enrollment_id=enrollment.pk, actor=removed_by)
 
     slot_id = slot.pk
     UsersInCourse.objects.filter(pk=slot_id).delete()

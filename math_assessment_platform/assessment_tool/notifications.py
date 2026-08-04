@@ -41,6 +41,9 @@ REASON_ACCOUNT_PASSWORD_RESET_NULLIFIED = "account_password_reset_nullified"
 REASON_TICKET_CREATED = "ticket_created"
 REASON_TICKET_UPDATED = "ticket_updated"
 REASON_TEACHER_COURSE_INVITATION = "teacher_course_invitation"
+REASON_CREDIT_ALLOTMENT_PENDING = "credit_allotment_pending"
+REASON_CREDIT_ALLOTMENT_APPROVED = "credit_allotment_approved"
+REASON_CREDIT_ALLOTMENT_REJECTED = "credit_allotment_rejected"
 
 NOTIFICATION_TRASH_RETENTION = timedelta(days=30)
 NOTIFICATIONS_PAGE_SIZE = 10
@@ -496,6 +499,9 @@ def _humanize_reason(reason):
         REASON_TICKET_CREATED: "Support ticket created",
         REASON_TICKET_UPDATED: "Support ticket updated",
         REASON_TEACHER_COURSE_INVITATION: "Co-teacher course invitation",
+        REASON_CREDIT_ALLOTMENT_PENDING: "Credit allotment pending",
+        REASON_CREDIT_ALLOTMENT_APPROVED: "Credit allotment approved",
+        REASON_CREDIT_ALLOTMENT_REJECTED: "Credit allotment rejected",
     }
     if not reason:
         return None
@@ -962,6 +968,42 @@ def build_notification_detail(note):
                 "detail_kind": REASON_ACCOUNT_PASSWORD_RESET_NULLIFIED,
                 "invite_message": parsed.get("message")
                 or "Your pending password reset was cancelled.",
+            }
+        )
+        return base
+
+    if reason in (
+        REASON_CREDIT_ALLOTMENT_PENDING,
+        REASON_CREDIT_ALLOTMENT_APPROVED,
+        REASON_CREDIT_ALLOTMENT_REJECTED,
+    ) and isinstance(parsed, dict):
+        from django.urls import reverse
+
+        defaults = {
+            REASON_CREDIT_ALLOTMENT_PENDING: (
+                "Your credit allotment request is pending. Credits will be added "
+                "after IT Support approves the request."
+            ),
+            REASON_CREDIT_ALLOTMENT_APPROVED: (
+                "Your credit allotment request was approved. Credits have been added."
+            ),
+            REASON_CREDIT_ALLOTMENT_REJECTED: (
+                "Your credit allotment request was rejected."
+            ),
+        }
+        base.update(
+            {
+                "detail_kind": reason,
+                "invite_message": parsed.get("message") or defaults.get(reason, ""),
+                "pack_size": parsed.get("pack_size"),
+                "credits_gained": parsed.get("credits_gained"),
+                "purchase_id": parsed.get("purchase_id"),
+                "total_amount": parsed.get("total_amount"),
+                "money_spent": parsed.get("money_spent"),
+                "decision_notes": parsed.get("decision_notes") or "",
+                "decision_status": parsed.get("decision_status") or reason,
+                "credits_path": parsed.get("credits_path")
+                or (reverse("account_settings") + "?tab=credits"),
             }
         )
         return base

@@ -5,13 +5,15 @@ from __future__ import annotations
 from django.contrib import messages
 from django.contrib.auth.decorators import user_passes_test
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.http import JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from .models import ContactUs, Ticket
+from .dashboard import user_display_name
+from .models import ContactUs, Ticket, UserProfile
 from . import tickets as ticket_lib
 
 
@@ -195,6 +197,39 @@ def tickets_admin_view(request):
 
 
 @it_required
+@require_GET
+def ticket_user_lookup_api(request):
+    """Resolve username/email to a user profile for New ticket autofill."""
+    q = (request.GET.get("q") or "").strip()
+    if len(q) < 2:
+        return JsonResponse(
+            {"found": False, "error": "Type at least 2 characters."}
+        )
+    user = UserProfile.objects.filter(
+        Q(username__iexact=q) | Q(user_email__iexact=q)
+    ).first()
+    if user is None:
+        return JsonResponse(
+            {"found": False, "error": f"No account matches “{q}”."}
+        )
+    first_name = (user.user_first_name or "").strip()
+    if not first_name:
+        # Fall back so the required ticket field can still be filled.
+        first_name = (user.user_display_name or user.username or "").strip()
+    return JsonResponse(
+        {
+            "found": True,
+            "user_id": user.pk,
+            "username": user.username or "",
+            "email": user.user_email or "",
+            "first_name": first_name,
+            "display_name": user_display_name(user),
+            "user_type": user.user_type or "",
+        }
+    )
+
+
+@it_required
 @require_http_methods(["GET", "POST"])
 def ticket_create_view(request):
     form = {
@@ -207,6 +242,8 @@ def ticket_create_view(request):
         "assigned_to": "",
         "notify_client": False,
         "username_id": "",
+        "client_lookup": "",
+        "linked_username": "",
     }
     if request.method == "POST":
         form = {
@@ -219,12 +256,14 @@ def ticket_create_view(request):
             "assigned_to": (request.POST.get("assigned_to") or "").strip(),
             "notify_client": request.POST.get("notify_client") == "on",
             "username_id": (request.POST.get("username_id") or "").strip(),
+            "client_lookup": (request.POST.get("client_lookup") or "").strip(),
+            "linked_username": (request.POST.get("linked_username") or "").strip(),
         }
         username = None
         if form["username_id"].isdigit():
-            from .models import UserProfile
-
             username = UserProfile.objects.filter(pk=int(form["username_id"])).first()
+            if username:
+                form["linked_username"] = username.username or form["linked_username"]
         try:
             ticket = ticket_lib.create_ticket(
                 title=form["title"],
@@ -260,6 +299,7 @@ def ticket_create_view(request):
             "max_first_name": ticket_lib.MAX_FIRST_NAME,
             "max_email": ticket_lib.MAX_EMAIL,
             "max_body": ticket_lib.MAX_BODY,
+            "ticket_user_lookup_url": reverse("ticket_user_lookup"),
         },
     )
 

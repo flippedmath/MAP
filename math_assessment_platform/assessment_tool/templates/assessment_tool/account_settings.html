@@ -1,10 +1,29 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="card account-settings" style="max-width: 720px; margin: 0 auto;">
+<div class="card account-settings" style="max-width: 820px; margin: 0 auto;">
     <h1 style="margin-top: 0;">Account Settings</h1>
-    <p style="color: #64748b;">Review your account details. Display name, email, and password can be updated here.</p>
+    <p style="color: #64748b;">Review your account details. Display name, email, password{% if show_credits_tab %}, and seat credits{% endif %} can be managed here.</p>
 
+    <div class="account-tabs" role="tablist" aria-label="Account sections">
+        <a href="{% url 'account_settings' %}?tab=profile"
+           class="account-tab{% if account_active_tab != 'credits' %} is-active{% endif %}"
+           role="tab"
+           aria-selected="{% if account_active_tab != 'credits' %}true{% else %}false{% endif %}">
+            Profile
+        </a>
+        {% if show_credits_tab %}
+        <a href="{% url 'account_settings' %}?tab=credits"
+           class="account-tab{% if account_active_tab == 'credits' %} is-active{% endif %}"
+           role="tab"
+           aria-selected="{% if account_active_tab == 'credits' %}true{% else %}false{% endif %}"
+           id="credits-tab">
+            Credits
+        </a>
+        {% endif %}
+    </div>
+
+    <div id="account-panel-profile" class="account-tab-panel"{% if account_active_tab == 'credits' %} hidden{% endif %}>
     <section style="margin-top: 24px;">
         <h2 style="font-size: 1.1rem; margin-bottom: 12px;">Profile</h2>
         <dl class="account-settings-meta">
@@ -194,6 +213,287 @@
         <a href="{% url 'contact_us' %}" style="color: #2563eb; font-weight: 600;">submit a formal IT ticket</a>
         so support can update it.
     </p>
+    </div>{# end profile panel #}
+
+    {% if show_credits_tab %}
+    <div id="account-panel-credits" class="account-tab-panel"{% if account_active_tab != 'credits' %} hidden{% endif %}>
+        <section style="margin-top: 24px;">
+            <h2 style="font-size: 1.1rem; margin-bottom: 8px;">Seat credits</h2>
+            <div class="credit-status-card">
+                <div>
+                    <div class="credit-status-card__balance">{{ credit_balance }}</div>
+                    <div class="credit-status-card__label">Available credits</div>
+                </div>
+                <div>
+                    <div style="font-weight: 700; color: {% if teacher_credits_unlocked %}#047857{% else %}#b45309{% endif %};">
+                        {% if teacher_credits_unlocked %}Unlocked{% else %}Locked (free trial){% endif %}
+                    </div>
+                    <p style="color: #64748b; font-size: 0.88rem; margin: 6px 0 0; line-height: 1.45; max-width: 420px;">
+                        Unlocked when you have at least one credit, or at least one student seat that has not been reimbursed.
+                        Voiding unused invites or removing a student within 7 days reimburses a credit and can relock the account if nothing remains.
+                    </p>
+                    <p style="color: #94a3b8; font-size: 0.82rem; margin: 8px 0 0;">
+                        Unreimbursed seats: {{ net_unreimbursed_seats }}
+                    </p>
+                    {% if not teacher_credits_unlocked %}
+                    <div class="credit-unlock-benefits" style="margin-top: 12px; max-width: 480px;">
+                        <p style="font-weight: 700; color: #92400e; font-size: 0.85rem; margin: 0 0 6px;">
+                            While locked (free trial)
+                        </p>
+                        <ul style="margin: 0; padding-left: 1.15rem; color: #64748b; font-size: 0.85rem; line-height: 1.45;">
+                            <li>One course only</li>
+                            <li>No student invites</li>
+                            <li>No private collaboration groups (Public Library remains available)</li>
+                            <li>Printing tests / generating printouts not available</li>
+                        </ul>
+                        <p style="font-weight: 700; color: #047857; font-size: 0.85rem; margin: 12px 0 6px;">
+                            When unlocked, you can
+                        </p>
+                        <ul style="margin: 0; padding-left: 1.15rem; color: #64748b; font-size: 0.85rem; line-height: 1.45;">
+                            <li>Create additional courses</li>
+                            <li>Invite students (1 credit per seat invite)</li>
+                            <li>Use private collaboration groups</li>
+                            <li>Print tests and generate printouts
+                                <span style="color: #94a3b8;">(coming soon — not implemented yet)</span>
+                            </li>
+                        </ul>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+
+        <section style="margin-top: 28px;">
+            <h2 style="font-size: 1.1rem; margin-bottom: 8px;">Buy credits</h2>
+            <p style="color: #64748b; font-size: 0.9rem; line-height: 1.45;">
+                Purchase seat credits directly. List price is ${{ credit_list_unit_price }} / seat;
+                larger quantities automatically receive volume discounts.
+                Checkout credits are added immediately — no IT validation step.
+            </p>
+            <form method="post" id="buy-credits-form">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="buy_credits">
+                <label for="id_buy_credit_qty" style="display: block; font-weight: 600; margin-bottom: 6px;">
+                    Number of credits
+                </label>
+                <input
+                    id="id_buy_credit_qty"
+                    name="pack_size"
+                    type="number"
+                    min="1"
+                    step="1"
+                    required
+                    inputmode="numeric"
+                    placeholder="e.g. 30"
+                    style="width: 140px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                >
+                <div id="buy-credits-quote" class="buy-credits-quote" hidden>
+                    <div class="buy-credits-quote__row">
+                        <span>Price / seat</span>
+                        <strong id="buy-credits-unit">—</strong>
+                    </div>
+                    <div class="buy-credits-quote__row">
+                        <span>Total</span>
+                        <strong id="buy-credits-total">—</strong>
+                        <span id="buy-credits-discount" class="buy-credits-discount" hidden></span>
+                    </div>
+                </div>
+                <p id="buy-credits-hint" style="color: #94a3b8; font-size: 0.85rem; margin: 10px 0 0;">
+                    Volume tiers: 10+ → 15% off, 30+ → 25%, 50+ → 35%, 100+ → 40%, 150+ → 45%.
+                </p>
+                <label for="id_buy_credit_note" style="display: block; font-weight: 600; margin: 14px 0 6px;">
+                    Note (optional)
+                </label>
+                <input
+                    id="id_buy_credit_note"
+                    name="note"
+                    type="text"
+                    maxlength="1000"
+                    style="width: 100%; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                >
+                <div style="margin-top: 14px;">
+                    <button type="submit" class="btn" id="buy-credits-submit" disabled>Buy credits</button>
+                </div>
+            </form>
+        </section>
+
+        <section style="margin-top: 28px;">
+            <h2 style="font-size: 1.1rem; margin-bottom: 8px;">Request credit allotment</h2>
+            <p style="color: #64748b; font-size: 0.9rem; line-height: 1.45;">
+                Bypass checkout when you already have an invoice or need IT to allot credits offline.
+                You must attach a PDF invoice <em>or</em> leave a note. Credits are not added yet —
+                they stay pending until IT Support approves the request. You will also get a
+                notification confirming the pending allotment. Invoice PDFs are stored as uploaded
+                (not resized) and are only visible to you and IT Support.
+            </p>
+            <form method="post" id="request-credits-form" enctype="multipart/form-data">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="request_credits">
+                <label for="id_request_credit_qty" style="display: block; font-weight: 600; margin-bottom: 6px;">
+                    Number of credits to allot
+                </label>
+                <input
+                    id="id_request_credit_qty"
+                    name="pack_size"
+                    type="number"
+                    min="1"
+                    step="1"
+                    required
+                    inputmode="numeric"
+                    placeholder="e.g. 30"
+                    style="width: 140px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                >
+                <div id="request-credits-quote" class="buy-credits-quote" hidden>
+                    <div class="buy-credits-quote__row">
+                        <span>Reference price / seat</span>
+                        <strong id="request-credits-unit">—</strong>
+                    </div>
+                    <div class="buy-credits-quote__row">
+                        <span>Reference total</span>
+                        <strong id="request-credits-total">—</strong>
+                        <span id="request-credits-discount" class="buy-credits-discount" hidden></span>
+                    </div>
+                </div>
+                <label for="id_request_invoice_pdf" style="display: block; font-weight: 600; margin: 14px 0 6px;">
+                    Invoice PDF
+                </label>
+                <input
+                    id="id_request_invoice_pdf"
+                    name="invoice_pdf"
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    style="display: block; max-width: 420px;"
+                >
+                <label for="id_request_credit_note" style="display: block; font-weight: 600; margin: 14px 0 6px;">
+                    Note <span id="request-note-req-label">(required without invoice)</span>
+                </label>
+                <input
+                    id="id_request_credit_note"
+                    name="note"
+                    type="text"
+                    maxlength="1000"
+                    placeholder="e.g. School PO #1234 — please allot credits"
+                    style="width: 100%; max-width: 420px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;"
+                >
+                <div style="margin-top: 14px;">
+                    <button type="submit" class="btn" id="request-credits-submit" disabled>Submit for IT verification</button>
+                </div>
+            </form>
+            {% if pending_purchase_rows %}
+            <h3 style="font-size: 1rem; margin: 20px 0 8px;">Pending allotment requests</h3>
+            <ul style="margin: 0; padding-left: 1.1rem; color: #334155; font-size: 0.9rem;">
+                {% for item in pending_purchase_rows %}
+                <li style="margin-bottom: 12px;">
+                    #{{ item.purchase.id }} — {{ item.purchase.pack_size }} credits (${{ item.purchase.total_amount }})
+                    {% if item.invoice_url %}
+                    · <a href="{{ item.invoice_url }}" target="_blank" rel="noopener">View invoice</a>
+                    {% else %}
+                    <form method="post" enctype="multipart/form-data" style="display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: 8px;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="attach_purchase_invoice">
+                        <input type="hidden" name="purchase_id" value="{{ item.purchase.id }}">
+                        <input type="file" name="invoice_pdf" accept="application/pdf,.pdf" required style="font-size: 0.8rem;">
+                        <button type="submit" class="btn" style="padding: 4px 8px; font-size: 0.78rem;">Attach invoice</button>
+                    </form>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+        </section>
+
+        <section style="margin-top: 28px;">
+            <h2 style="font-size: 1.1rem; margin-bottom: 8px;">Transfer credits</h2>
+            <p style="color: #64748b; font-size: 0.9rem; line-height: 1.45;">
+                {% if transfer_allows_it_support %}
+                Send unused credits to a Teacher or another IT Support account.
+                {% else %}
+                Send unused credits to another Teacher. Non-teacher accounts cannot receive transfers.
+                {% endif %}
+                You cannot transfer your last unlock credit if you have no unreimbursed student seats
+                (that would lock your account again). Amount must be a positive whole number.
+            </p>
+            <div class="credits-transfer-split">
+                <form method="post" id="credits-transfer-form" class="credits-transfer-split__left">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="transfer_credits">
+                    <label for="id_credit_recipient" style="display: block; font-weight: 600; margin-bottom: 6px;">Recipient username or email</label>
+                    <input id="id_credit_recipient" name="recipient" type="text" required
+                           autocomplete="off"
+                           style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+                    <label for="id_credit_amount" style="display: block; font-weight: 600; margin: 12px 0 6px;">Amount</label>
+                    <input id="id_credit_amount" name="amount" type="number" min="1" step="1" required
+                           inputmode="numeric"
+                           style="width: 120px; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+                    <label for="id_credit_note" style="display: block; font-weight: 600; margin: 12px 0 6px;">Note (optional)</label>
+                    <input id="id_credit_note" name="note" type="text" maxlength="500"
+                           style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
+                    <div style="margin-top: 14px;">
+                        <button type="submit" class="btn" id="credits-transfer-submit" disabled>Transfer credits</button>
+                    </div>
+                </form>
+                <aside class="credits-transfer-split__right" aria-live="polite">
+                    <div id="credits-transfer-panel" class="credits-transfer-panel">
+                        <p class="credits-transfer-panel__empty" id="credits-transfer-empty">
+                            Recipient details appear here when you enter a username or email.
+                        </p>
+                        <div id="credits-transfer-body" hidden>
+                            <h3 style="font-size: 1.05rem; margin: 0 0 12px;">Recipient</h3>
+                            <dl class="credits-transfer-meta" id="credits-transfer-meta"></dl>
+                        </div>
+                        <p id="credits-transfer-error" class="credits-transfer-panel__error" hidden></p>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <section style="margin-top: 28px;">
+            <h2 style="font-size: 1.1rem; margin-bottom: 8px;">Credit history</h2>
+            {% if credit_ledger_rows %}
+            <div style="overflow-x: auto;">
+                <table class="credit-pack-table">
+                    <thead>
+                        <tr>
+                            <th>When</th>
+                            <th>Type</th>
+                            <th>Change</th>
+                            <th>Balance</th>
+                            <th>Actor</th>
+                            <th>Note</th>
+                            <th>Invoice</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in credit_ledger_rows %}
+                        <tr>
+                            <td>
+                                {% if item.row.creation_date %}
+                                <time class="local-datetime" datetime="{{ item.row.creation_date|date:'c' }}">{{ item.row.creation_date }}</time>
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>{{ item.reason_label }}</td>
+                            <td>{% if item.row.delta > 0 %}+{% endif %}{{ item.row.delta }}</td>
+                            <td>{{ item.row.balance_after }}</td>
+                            <td>{{ item.actor }}</td>
+                            <td style="max-width: 220px; white-space: normal;">{{ item.row.note|default:"—" }}</td>
+                            <td>
+                                {% if item.invoice_url %}
+                                <a href="{{ item.invoice_url }}" target="_blank" rel="noopener">
+                                    {{ item.invoice_filename|default:"View PDF" }}
+                                </a>
+                                {% else %}—{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p style="color: #64748b; font-size: 0.9rem;">No credit activity yet.</p>
+            {% endif %}
+        </section>
+    </div>
+    {% endif %}
 </div>
 
 <div id="password-confirm-overlay" class="account-modal-overlay" hidden aria-hidden="true"
@@ -220,6 +520,94 @@
 </div>
 
 <style>
+    .account-tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 18px 0 4px;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 0;
+    }
+    .account-tab {
+        display: inline-block;
+        padding: 10px 14px;
+        text-decoration: none;
+        color: #64748b;
+        font-weight: 600;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+    }
+    .account-tab:hover { color: #1e40af; }
+    .account-tab.is-active {
+        color: #1d4ed8;
+        border-bottom-color: #2563eb;
+    }
+    .credit-status-card {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px 28px;
+        padding: 16px 18px;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        background: #f8fbff;
+    }
+    .credit-status-card__balance {
+        font-size: 2.2rem;
+        font-weight: 800;
+        color: #1e40af;
+        line-height: 1;
+        font-variant-numeric: tabular-nums;
+    }
+    .credit-status-card__label {
+        font-size: 0.8rem;
+        font-weight: 700;
+        color: #3b82f6;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin-top: 4px;
+    }
+    .credit-pack-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+    .credit-pack-table th,
+    .credit-pack-table td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid #e2e8f0;
+        vertical-align: middle;
+    }
+    .credit-pack-table th {
+        color: #64748b;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .buy-credits-quote {
+        margin-top: 14px;
+        padding: 12px 14px;
+        border: 1px solid #bfdbfe;
+        border-radius: 8px;
+        background: #f8fbff;
+        max-width: 420px;
+    }
+    .buy-credits-quote__row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 8px 12px;
+        font-size: 0.95rem;
+        color: #334155;
+    }
+    .buy-credits-quote__row + .buy-credits-quote__row {
+        margin-top: 8px;
+    }
+    .buy-credits-discount {
+        color: #047857;
+        font-weight: 700;
+        font-size: 0.88rem;
+    }
     .account-settings-meta {
         display: grid;
         gap: 10px 24px;
@@ -272,6 +660,60 @@
         width: 100%;
         padding: 24px;
         box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+    }
+    .credits-transfer-split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+        gap: 20px;
+        align-items: start;
+        margin-top: 14px;
+    }
+    @media (max-width: 760px) {
+        .credits-transfer-split {
+            grid-template-columns: 1fr;
+        }
+    }
+    .credits-transfer-panel {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        background: #f8fafc;
+        padding: 16px 18px;
+        min-height: 180px;
+        position: sticky;
+        top: 12px;
+    }
+    .credits-transfer-panel__empty {
+        color: #94a3b8;
+        font-size: 0.92rem;
+        line-height: 1.45;
+        margin: 0;
+    }
+    .credits-transfer-panel__error {
+        color: #b91c1c;
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0;
+    }
+    .credits-transfer-meta {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin: 0;
+    }
+    .credits-transfer-meta > div { margin: 0; }
+    .credits-transfer-meta dt {
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        color: #64748b;
+        margin: 0 0 2px;
+    }
+    .credits-transfer-meta dd {
+        margin: 0;
+        color: #0f172a;
+        font-size: 0.95rem;
+        word-break: break-word;
     }
 </style>
 
@@ -462,4 +904,258 @@
     }
 })();
 </script>
+{% if show_credits_tab %}
+<script>
+(function () {
+    var listUnit = parseFloat('{{ credit_list_unit_price|escapejs }}') || 100;
+    var tiers = [
+        {% for tier in credit_discount_tiers %}
+        { min: {{ tier.min_quantity }}, pct: parseFloat('{{ tier.discount_percent|escapejs }}') }{% if not forloop.last %},{% endif %}
+        {% endfor %}
+    ];
+
+    function discountForQty(qty) {
+        var pct = 0;
+        tiers.forEach(function (tier) {
+            if (qty >= tier.min) pct = tier.pct;
+        });
+        return pct;
+    }
+
+    function money(n) {
+        return '$' + n.toFixed(2);
+    }
+
+    function bindCreditQuote(opts) {
+        var qtyInput = document.getElementById(opts.qtyId);
+        var quoteEl = document.getElementById(opts.quoteId);
+        var unitEl = document.getElementById(opts.unitId);
+        var totalEl = document.getElementById(opts.totalId);
+        var discountEl = document.getElementById(opts.discountId);
+        var submitBtn = document.getElementById(opts.submitId);
+        if (!qtyInput) return;
+
+        function updateQuote() {
+            var raw = (qtyInput.value || '').trim();
+            var qty = parseInt(raw, 10);
+            var valid = raw !== '' && Number.isFinite(qty) && qty >= 1 && String(qty) === raw;
+            if (!valid) {
+                if (quoteEl) quoteEl.hidden = true;
+                if (submitBtn && !opts.extraValid) submitBtn.disabled = true;
+                if (typeof opts.onQtyChange === 'function') opts.onQtyChange(false);
+                return;
+            }
+            var pct = discountForQty(qty);
+            var unit = Math.round(listUnit * (100 - pct)) / 100;
+            var total = Math.round(unit * qty * 100) / 100;
+            if (unitEl) unitEl.textContent = money(unit);
+            if (totalEl) totalEl.textContent = money(total);
+            if (discountEl) {
+                if (pct > 0) {
+                    discountEl.hidden = false;
+                    discountEl.textContent = pct + '% off';
+                } else {
+                    discountEl.hidden = true;
+                    discountEl.textContent = '';
+                }
+            }
+            if (quoteEl) quoteEl.hidden = false;
+            if (typeof opts.onQtyChange === 'function') {
+                opts.onQtyChange(true);
+            } else if (submitBtn) {
+                submitBtn.disabled = false;
+            }
+        }
+
+        qtyInput.addEventListener('input', updateQuote);
+        qtyInput.addEventListener('change', updateQuote);
+        updateQuote();
+        return { updateQuote: updateQuote, qtyInput: qtyInput, submitBtn: submitBtn };
+    }
+
+    bindCreditQuote({
+        qtyId: 'id_buy_credit_qty',
+        quoteId: 'buy-credits-quote',
+        unitId: 'buy-credits-unit',
+        totalId: 'buy-credits-total',
+        discountId: 'buy-credits-discount',
+        submitId: 'buy-credits-submit'
+    });
+
+    var requestQtyOk = false;
+    var requestInvoice = document.getElementById('id_request_invoice_pdf');
+    var requestNote = document.getElementById('id_request_credit_note');
+    var requestNoteLabel = document.getElementById('request-note-req-label');
+    var requestSubmit = document.getElementById('request-credits-submit');
+
+    function requestHasEvidence() {
+        var hasFile = requestInvoice && requestInvoice.files && requestInvoice.files.length > 0;
+        var hasNote = requestNote && (requestNote.value || '').trim().length > 0;
+        return !!(hasFile || hasNote);
+    }
+
+    function syncRequestSubmit() {
+        var hasFile = requestInvoice && requestInvoice.files && requestInvoice.files.length > 0;
+        if (requestNote) {
+            if (hasFile) requestNote.removeAttribute('required');
+            else requestNote.setAttribute('required', 'required');
+        }
+        if (requestNoteLabel) {
+            requestNoteLabel.textContent = hasFile
+                ? '(optional with invoice)'
+                : '(required without invoice)';
+        }
+        if (requestSubmit) {
+            requestSubmit.disabled = !(requestQtyOk && requestHasEvidence());
+        }
+    }
+
+    bindCreditQuote({
+        qtyId: 'id_request_credit_qty',
+        quoteId: 'request-credits-quote',
+        unitId: 'request-credits-unit',
+        totalId: 'request-credits-total',
+        discountId: 'request-credits-discount',
+        submitId: 'request-credits-submit',
+        onQtyChange: function (ok) {
+            requestQtyOk = ok;
+            syncRequestSubmit();
+        }
+    });
+    if (requestInvoice) requestInvoice.addEventListener('change', syncRequestSubmit);
+    if (requestNote) {
+        requestNote.addEventListener('input', syncRequestSubmit);
+        requestNote.addEventListener('change', syncRequestSubmit);
+    }
+    syncRequestSubmit();
+
+    var transferLookupUrl = "{{ transfer_lookup_url|escapejs }}";
+    var recipientInput = document.getElementById("id_credit_recipient");
+    var amountInput = document.getElementById("id_credit_amount");
+    var transferSubmit = document.getElementById("credits-transfer-submit");
+    var transferEmpty = document.getElementById("credits-transfer-empty");
+    var transferBody = document.getElementById("credits-transfer-body");
+    var transferMeta = document.getElementById("credits-transfer-meta");
+    var transferError = document.getElementById("credits-transfer-error");
+    var transferTimer = null;
+    var transferLastQuery = "";
+    var transferRecipientOk = false;
+
+    function escapeHtml(value) {
+        return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    function amountIsPositiveInt() {
+        if (!amountInput) return false;
+        var raw = (amountInput.value || "").trim();
+        var n = parseInt(raw, 10);
+        return raw !== "" && Number.isFinite(n) && n >= 1 && String(n) === raw;
+    }
+
+    function updateTransferSubmit() {
+        if (!transferSubmit) return;
+        transferSubmit.disabled = !(transferRecipientOk && amountIsPositiveInt());
+    }
+
+    function showTransferEmpty(message) {
+        transferRecipientOk = false;
+        if (transferEmpty) {
+            transferEmpty.hidden = false;
+            transferEmpty.textContent = message ||
+                "Recipient details appear here when you enter a username or email.";
+        }
+        if (transferBody) transferBody.hidden = true;
+        if (transferError) {
+            transferError.hidden = true;
+            transferError.textContent = "";
+        }
+        updateTransferSubmit();
+    }
+
+    function showTransferError(message) {
+        transferRecipientOk = false;
+        if (transferEmpty) transferEmpty.hidden = true;
+        if (transferBody) transferBody.hidden = true;
+        if (transferError) {
+            transferError.hidden = false;
+            transferError.textContent = message || "No matching recipient found.";
+        }
+        updateTransferSubmit();
+    }
+
+    function metaItem(label, value) {
+        return (
+            "<div><dt>" + escapeHtml(label) + "</dt><dd>" +
+            escapeHtml(value || "—") +
+            "</dd></div>"
+        );
+    }
+
+    function renderTransferRecipient(data) {
+        if (!data || !data.found) {
+            showTransferError((data && data.error) || "No matching recipient found.");
+            return;
+        }
+        transferRecipientOk = true;
+        if (transferEmpty) transferEmpty.hidden = true;
+        if (transferError) transferError.hidden = true;
+        if (transferBody) transferBody.hidden = false;
+        if (transferMeta) {
+            transferMeta.innerHTML = [
+                metaItem("Display name", data.display_name),
+                metaItem("First name", data.first_name),
+                metaItem("Last name", data.last_name),
+                metaItem("Organization", data.organization),
+                metaItem("Gender", data.gender),
+                metaItem("Email", data.email),
+                metaItem("Username", data.username),
+                metaItem("Account type", data.user_type)
+            ].join("");
+        }
+        updateTransferSubmit();
+    }
+
+    function lookupTransferRecipient(query) {
+        var q = (query || "").trim();
+        if (q.length < 2) {
+            transferLastQuery = "";
+            showTransferEmpty();
+            return;
+        }
+        if (q === transferLastQuery) return;
+        transferLastQuery = q;
+        fetch(transferLookupUrl + "?q=" + encodeURIComponent(q), {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+        })
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) { renderTransferRecipient(data); })
+            .catch(function () { showTransferError("Could not look up that user."); });
+    }
+
+    function scheduleTransferLookup(value) {
+        if (transferTimer) clearTimeout(transferTimer);
+        transferTimer = setTimeout(function () { lookupTransferRecipient(value); }, 280);
+    }
+
+    if (recipientInput) {
+        recipientInput.addEventListener("input", function () {
+            scheduleTransferLookup(recipientInput.value);
+        });
+        recipientInput.addEventListener("change", function () {
+            lookupTransferRecipient(recipientInput.value);
+        });
+    }
+    if (amountInput) {
+        amountInput.addEventListener("input", updateTransferSubmit);
+        amountInput.addEventListener("change", updateTransferSubmit);
+    }
+    showTransferEmpty();
+})();
+</script>
+{% endif %}
 {% endblock %}

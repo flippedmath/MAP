@@ -67,6 +67,17 @@ def _require_teacher_or_it(user):
     return getattr(user, "user_type", None) in ("Teacher", "IT_Support")
 
 
+def _credit_collab_denied(user):
+    """Return an error message if the user cannot use private collab groups."""
+    from .credits import CreditError, assert_can_use_collab_groups
+
+    try:
+        assert_can_use_collab_groups(user)
+    except CreditError as exc:
+        return str(exc)
+    return None
+
+
 def _serialize_branch_acl(branch_id):
     acl = []
     for row in list_branch_acl(branch_id):
@@ -135,6 +146,9 @@ def manage_group_detail(request, pg_id):
 def manage_group_create(request):
     if not _require_teacher_or_it(request.user):
         return JsonResponse({"error": "Unauthorized"}, status=403)
+    denied = _credit_collab_denied(request.user)
+    if denied:
+        return JsonResponse({"error": denied}, status=403)
     data = json.loads(request.body)
     name = (data.get("name") or "").strip()
     if not name:
@@ -162,6 +176,11 @@ def manage_group_add_member(request, pg_id):
     target = get_object_or_404(UserProfile, user_id=user_id)
     if target.user_type not in ("Teacher", "IT_Support"):
         return JsonResponse({"error": "Only Teachers and IT Support can join groups."}, status=400)
+    # Public Library / system groups stay available; private groups need unlock.
+    if not is_system_group(pg):
+        denied = _credit_collab_denied(target)
+        if denied:
+            return JsonResponse({"error": denied}, status=403)
     existing = get_group_membership(target, pg)
     only_if_new = bool(data.get("only_if_new"))
     if existing and only_if_new:

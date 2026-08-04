@@ -134,6 +134,13 @@ def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCours
     if course_is_under_workspace(course):
         raise ValueError(WORKSPACE_COURSE_MANAGEMENT_MESSAGE)
 
+    from .credits import CreditError, assert_can_invite, spend_invite_credit
+
+    try:
+        assert_can_invite(created_by)
+    except CreditError as exc:
+        raise ValueError(str(exc)) from exc
+
     kind, value = normalize_recipient(recipient_raw)
     target_user = None
     temp_email = None
@@ -196,6 +203,11 @@ def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCours
         creation_date=timezone.now(),
     )
 
+    try:
+        spend_invite_credit(created_by, invite_id=invite.pk)
+    except CreditError as exc:
+        raise ValueError(str(exc)) from exc
+
     # TODO: send invitation email when SMTP is wired.
     if target_user is not None:
         try:
@@ -233,22 +245,27 @@ def void_course_invite(invite: UserCourseActivation) -> None:
     Permanently remove a pending invitation (same as deleting the
     ``user_course_activation`` row). Empty unused course slots are removed too.
 
-    TODO(credits): When the credit system is implemented, reimburse the Teacher
-    for credits spent to extend this invite if it was never accepted/activated.
+    Reimburses the seat credit spent when the invite was created (if any).
     """
-    invite = UserCourseActivation.objects.select_for_update().select_related("slot").get(
-        pk=invite.pk
-    )
+    invite = UserCourseActivation.objects.select_for_update().select_related(
+        "slot", "created_by"
+    ).get(pk=invite.pk)
     if invite.status != UserCourseActivation.STATUS_PENDING:
         raise ValueError("Only pending invitations can be voided.")
 
     slot = invite.slot
     slot_id = invite.slot_id
     invite_id = invite.pk
+    created_by = invite.created_by
     invite.delete()
 
-    # TODO(credits): reimburse Teacher credits for unused invite (invite_id=%s).
-    _ = invite_id  # reserved for future credit ledger linkage
+    from .credits import reimburse_invite_credit
+
+    reimburse_invite_credit(
+        invite_id=invite_id,
+        teacher=created_by,
+        actor=created_by,
+    )
 
     if slot_id and slot is not None and slot.user_id is None:
         UsersInCourse.objects.filter(pk=slot_id, user__isnull=True).delete()
@@ -534,7 +551,15 @@ def enroll_user_from_invite(invite: UserCourseActivation, user: UserProfile) -> 
     slot.save(update_fields=["user", "user_access"])
 
     # Durable enrollment stint (separate from seat); grades for this period key off it.
-    start_enrollment_for_slot(course=invite.course, user=user, slot=slot)
+    enrollment = start_enrollment_for_slot(course=invite.course, user=user, slot=slot)
+    invite_id = invite.pk
+
+    from .credits import link_invite_spend_to_enrollment
+
+    link_invite_spend_to_enrollment(
+        invite_id=invite_id,
+        enrollment_id=enrollment.pk,
+    )
 
     if used_different_account:
         _notify_teacher_different_account(

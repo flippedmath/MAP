@@ -3,4 +3,5 @@
 .env
 command_descriptions_to_remember.txt
 math_assessment_platform/media/course_images/
+math_assessment_platform/private_files/
 math_assessment_platform/logs/

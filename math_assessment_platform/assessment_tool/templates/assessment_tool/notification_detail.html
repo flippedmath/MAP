@@ -570,6 +570,66 @@
     {% endif %}
 </div>
 
+{% elif notification.detail_kind == "credit_allotment_pending" or notification.detail_kind == "credit_allotment_approved" or notification.detail_kind == "credit_allotment_rejected" %}
+
+<div class="card">
+    <h2 class="notification-section-heading" style="margin-top: 0;">
+        {% if notification.detail_kind == "credit_allotment_approved" %}
+        Credit allotment approved
+        {% elif notification.detail_kind == "credit_allotment_rejected" %}
+        Credit allotment rejected
+        {% else %}
+        Credit allotment pending
+        {% endif %}
+    </h2>
+    {% if notification.invite_message %}
+        <p class="notification-summary">{{ notification.invite_message }}</p>
+    {% endif %}
+    <dl class="notification-kv-list" style="margin-top: 1rem;">
+        {% if notification.purchase_id %}
+        <div>
+            <dt>Request ID</dt>
+            <dd>#{{ notification.purchase_id }}</dd>
+        </div>
+        {% endif %}
+        {% if notification.credits_gained %}
+        <div>
+            <dt>Credits granted</dt>
+            <dd>{{ notification.credits_gained }}</dd>
+        </div>
+        {% elif notification.pack_size %}
+        <div>
+            <dt>Credits requested</dt>
+            <dd>{{ notification.pack_size }}</dd>
+        </div>
+        {% endif %}
+        {% if notification.money_spent %}
+        <div>
+            <dt>Money spent</dt>
+            <dd>${{ notification.money_spent }}</dd>
+        </div>
+        {% elif notification.total_amount %}
+        <div>
+            <dt>Reference total</dt>
+            <dd>${{ notification.total_amount }}</dd>
+        </div>
+        {% endif %}
+        {% if notification.decision_notes %}
+        <div>
+            <dt>Notes</dt>
+            <dd style="white-space: pre-wrap;">{{ notification.decision_notes }}</dd>
+        </div>
+        {% endif %}
+    </dl>
+    {% if notification.credits_path %}
+        <p style="margin-top: 1rem;">
+            <a href="{{ notification.credits_path }}" class="btn" style="display: inline-block; padding: 10px 16px;">
+                Open Credits
+            </a>
+        </p>
+    {% endif %}
+</div>
+
 {% elif notification.detail_kind == "ticket_created" or notification.detail_kind == "ticket_updated" %}
 
 <div class="card">

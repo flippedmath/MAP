@@ -3,8 +3,18 @@
 
 {% block course_sub_content %}
 <div class="course-management">
-    <h2 style="margin-top: 0;">Course Management</h2>
-    <p style="color: #64748b;">Invite students to this course by email or existing username. Existing accounts are notified and must accept the invite before they are enrolled.</p>
+    <div class="course-management-header">
+        <div>
+            <h2 style="margin-top: 0; margin-bottom: 8px;">Course Management</h2>
+            <p style="color: #64748b; margin: 0;">Invite students to this course by email or existing username. Existing accounts are notified and must accept the invite before they are enrolled.</p>
+        </div>
+        <a href="{{ credits_account_url }}"
+           class="credit-balance-chip"
+           title="Manage seat credits on your account">
+            <span class="credit-balance-chip__label">Seat credits</span>
+            <span class="credit-balance-chip__value" id="credit-balance-value">{{ credit_balance }}</span>
+        </a>
+    </div>
 
     <section class="card" style="margin-bottom: 24px; padding: 20px;">
         <h3 style="margin-top: 0;">Enrolled students</h3>
@@ -309,7 +319,7 @@
                                 <td style="padding: 8px;">
                                     {% if row.can_void %}
                                         <form method="post" style="display: inline;"
-                                              onsubmit="return confirm('Void and delete this invitation? The link will no longer work. Credits spent on unused invites will be reimbursed when the credit system is available.');">
+                                              onsubmit="return confirm('Void and delete this invitation? The link will no longer work. The seat credit spent on this unused invite will be reimbursed.');">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="void_invite">
                                             <input type="hidden" name="invite_id" value="{{ row.invite.id }}">
@@ -558,8 +568,8 @@
         </p>
         <p id="kick-transcript-note" style="color: #334155; line-height: 1.5;"></p>
         <p id="kick-credit-note" style="color: #64748b; font-size: 0.9rem; line-height: 1.5; display: none;">
-            If you remove the student within one week of enrollment, course-seat credits
-            will be reimbursed when the credit system is available.
+            If you remove the student within one week of enrollment, the seat credit
+            for this student will be reimbursed to the inviting teacher.
         </p>
         <form id="kick-student-form" method="post" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; margin-top: 20px;">
             {% csrf_token %}
@@ -572,6 +582,46 @@
 </div>
 
 <style>
+    .course-management-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 8px;
+    }
+    .credit-balance-chip {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+        padding: 10px 14px;
+        border-radius: 10px;
+        text-decoration: none;
+        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+        border: 2px solid #2563eb;
+        color: #1e3a8a;
+        min-width: 110px;
+        box-shadow: 0 1px 2px rgba(37, 99, 235, 0.12);
+    }
+    .credit-balance-chip:hover {
+        background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+        border-color: #1d4ed8;
+    }
+    .credit-balance-chip__label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #3b82f6;
+    }
+    .credit-balance-chip__value {
+        font-size: 1.55rem;
+        font-weight: 800;
+        line-height: 1.1;
+        color: #1e40af;
+        font-variant-numeric: tabular-nums;
+    }
     .course-management input[type="text"],
     .course-management input[type="email"] {
         width: 100%;
