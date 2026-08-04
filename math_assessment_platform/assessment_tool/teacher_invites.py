@@ -145,28 +145,41 @@ def lookup_teacher_for_invite(*, course, recipient_raw: str) -> dict:
 
 
 def _notify_teacher_invited(*, invite: TeacherCourseInvitation) -> None:
+    from .mail import absolute_url, send_app_email
     from .notifications import REASON_TEACHER_COURSE_INVITATION, create_notification
 
     course = invite.course
     inviter = invite.invited_by
     path = reverse("teacher_invite_redeem", kwargs={"code": invite.code})
+    inviter_name = user_display_name(inviter) or inviter.username
     create_notification(
         invite.invitee,
         title=f"Co-teacher invitation: {course.name}",
         content={
             "message": (
-                f"{user_display_name(inviter) or inviter.username} invited you to "
+                f"{inviter_name} invited you to "
                 f"co-teach “{course.name}”."
             ),
             "course_id": course.id,
             "course_name": course.name,
-            "inviter_name": user_display_name(inviter) or inviter.username,
+            "inviter_name": inviter_name,
             "invite_path": path,
             "invite_code": invite.code,
         },
         reason=REASON_TEACHER_COURSE_INVITATION,
         sender=inviter,
     )
+    to_email = (getattr(invite.invitee, "user_email", None) or "").strip()
+    if to_email:
+        send_app_email(
+            subject=f"Co-teacher invitation: {course.name}",
+            message=(
+                f"{inviter_name} invited you to co-teach “{course.name}”.\n\n"
+                f"Open this link to accept or decline:\n{absolute_url(path)}\n"
+            ),
+            recipient=to_email,
+            fail_silently=True,
+        )
 
 
 @transaction.atomic

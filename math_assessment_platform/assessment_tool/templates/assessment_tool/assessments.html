@@ -76,6 +76,37 @@
     font-size: 0.88rem; line-height: 1.4;
   }
   .btn-option-settings.has-custom-options { color: #c2410c !important; }
+  .grades-options-print-actions {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .grades-options-print-actions[hidden] { display: none !important; }
+  .grades-options-print-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    border: none;
+    border-radius: 8px;
+    padding: 0.55rem 0.9rem;
+    background: #0f172a;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.92rem;
+    cursor: pointer;
+  }
+  .grades-options-print-btn:hover { background: #1e293b; }
+  .grades-options-print-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #64748b;
+    line-height: 1.4;
+  }
 </style>
 {% endblock %}
 
@@ -274,6 +305,8 @@
                             data-options-save-url="{% url 'course_grades_assessment_options' course.id assessment.id %}"
                             data-options-subset="delivery"
                             data-options-note="Course defaults for these settings are defined in the gear icon on the Grades tab."
+                            data-print-url="{% url 'assessment_print' course.id assessment.id %}"
+                            data-can-print="{% if can_print_assessments %}1{% else %}0{% endif %}"
                             title="Assessment delivery options"
                             style="cursor: pointer; background: none; border: none; color: #64748b; font-size: 1rem; padding: 0.25rem;"
                             {% if row.generating %}disabled{% endif %}

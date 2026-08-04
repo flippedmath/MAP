@@ -148,6 +148,10 @@ def start_email_change(*, user, new_email_raw: str, password: str) -> EmailAuthe
             getattr(user, "user_id", None),
         )
 
+    from .mail import send_verification_code_email
+
+    send_verification_code_email(to_email=auth.temp_email, code=auth.code)
+
     return auth
 
 

@@ -262,21 +262,33 @@ def create_contact_us(
     )
 
 
-def _stub_send_ticket_email(*, ticket: Ticket, kind: str) -> None:
+def _send_ticket_email(*, ticket: Ticket, kind: str) -> None:
+    from .mail import absolute_url, send_app_email
+
     path = ticket_client_path(ticket)
-    # TODO: send ticket client email when SMTP is wired.
-    logger.info(
-        "TICKET_EMAIL_STUB kind=%s to=%s ticket_id=%s path=%s title=%s",
-        kind,
-        ticket.respond_to_email,
-        ticket.id,
-        path,
-        ticket.title,
+    url = absolute_url(path)
+    if kind == "ticket_created":
+        subject = f'Support ticket created: "{ticket.title}"'
+        body = (
+            f'Your support ticket "{ticket.title}" has been created.\n\n'
+            f"View or reply here:\n{url}\n"
+        )
+    else:
+        subject = f'Support ticket updated: "{ticket.title}"'
+        body = (
+            f'Your support ticket "{ticket.title}" has an update.\n\n'
+            f"View it here:\n{url}\n"
+        )
+    send_app_email(
+        subject=subject,
+        message=body,
+        recipient=ticket.respond_to_email,
+        fail_silently=True,
     )
 
 
 def notify_ticket_client(*, ticket: Ticket, kind: str = "ticket_created") -> None:
-    """In-app (if linked user) + email stub. Sets client_notified_at."""
+    """In-app (if linked user) + email. Sets client_notified_at."""
     from .notifications import (
         REASON_TICKET_CREATED,
         REASON_TICKET_UPDATED,
@@ -307,7 +319,7 @@ def notify_ticket_client(*, ticket: Ticket, kind: str = "ticket_created") -> Non
             content=payload,
             reason=reason,
         )
-    _stub_send_ticket_email(ticket=ticket, kind=kind)
+    _send_ticket_email(ticket=ticket, kind=kind)
     ticket.client_notified_at = timezone.now()
     ticket.save(update_fields=["client_notified_at"])
 

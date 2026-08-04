@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block extra_css %}
+<link href="{% static 'assessment_tool/css/assessment_print.css' %}" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="print-toolbar" id="print-toolbar">
+  <div class="print-toolbar-left">
+    <a href="{{ back_url }}" class="print-toolbar-link" id="print-close-link">
+      <i class="fas fa-arrow-left"></i> Back
+    </a>
+    <span class="print-toolbar-title">{{ assessment.name }}</span>
+    <span class="print-toolbar-match">Match key: <strong>{{ match_key }}</strong></span>
+  </div>
+  <div class="print-toolbar-right">
+    <span id="print-status" class="print-status" aria-live="polite">Preparing printout…</span>
+    <button type="button" id="print-btn" class="print-btn" disabled>
+      <i class="fas fa-print"></i> Print / Save PDF
+    </button>
+  </div>
+</div>
+
+{% if print_warnings %}
+<div class="print-warnings" id="print-warnings">
+  {% for w in print_warnings %}
+  <p>{{ w }}</p>
+  {% endfor %}
+</div>
+{% endif %}
+
+<article class="print-document" id="print-document" data-match-key="{{ match_key }}">
+  <header class="print-doc-header print-student-header">
+    <div class="print-name-line">
+      <span>Name: _____________________________</span>
+      <span>Date: ______________</span>
+      <span>Period: _____</span>
+    </div>
+    <h1 class="print-assessment-title">{{ assessment.name }}</h1>
+    <div class="print-corner-meta" aria-hidden="true">
+      <span class="print-match-stamp">{{ match_key }}</span>
+    </div>
+  </header>
+
+  <section id="print-student-problems" class="print-problems print-student-section"></section>
+
+  <div class="print-blank-separator" aria-hidden="true">
+    <div class="print-blank-label">Blank page — separator between assessment and answer key</div>
+  </div>
+
+  <section class="print-answer-key-section">
+    <header class="print-doc-header print-key-header">
+      <p class="print-key-banner">ANSWER KEY</p>
+      <p class="print-key-match">Match key: <strong>{{ match_key }}</strong></p>
+      <h1 class="print-assessment-title">{{ assessment.name }}</h1>
+      <p class="print-key-note">Numbered answers match the assessment pages printed with this match key.</p>
+    </header>
+    <div id="print-key-problems" class="print-key-problems"></div>
+  </section>
+</article>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+{{ print_problems|json_script:"print-problems-data" }}
+<script>
+  window.ASSESSMENT_PRINT_CONFIG = {
+    assessmentName: "{{ assessment.name|escapejs }}",
+    matchKey: "{{ match_key|escapejs }}",
+    source: "{{ print_source|escapejs }}",
+    problemCount: {{ problem_count }},
+    problems: JSON.parse(document.getElementById('print-problems-data').textContent)
+  };
+</script>
+<script type="module" src="{% static 'assessment_tool/js/assessment_print.js' %}"></script>
+{% endblock %}

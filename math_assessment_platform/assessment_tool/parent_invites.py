@@ -248,14 +248,11 @@ def create_parent_invite(*, course, created_by, student, parent_email_raw: str) 
         creation_date=timezone.now(),
     )
 
-    # TODO: send invitation email when SMTP is wired.
+    invite_path = reverse("parent_invite_redeem", kwargs={"code": invite.code})
     if target_user is not None:
         try:
             from .notifications import create_notification, REASON_PARENT_COURSE_INVITATION
 
-            invite_path = reverse(
-                "parent_invite_redeem", kwargs={"code": invite.code}
-            )
             create_notification(
                 target_user,
                 title=f"Parent grade access invitation: {course.name}",
@@ -277,6 +274,25 @@ def create_parent_invite(*, course, created_by, student, parent_email_raw: str) 
             )
         except Exception:
             logger.exception("Failed to notify parent invitee for invite id=%s", invite.pk)
+
+    to_email = (invite.temp_email or "").strip() or (
+        (getattr(target_user, "user_email", None) or "").strip() if target_user else ""
+    )
+    if to_email:
+        from .mail import absolute_url, send_app_email
+
+        student_label = _display_name_for(student)
+        send_app_email(
+            subject=f"Parent grade access invitation: {course.name}",
+            message=(
+                f"You have been invited to view grades for {student_label} "
+                f"in {course.name}.\n\n"
+                f"Open this link to accept:\n{absolute_url(invite_path)}\n\n"
+                "If you did not expect this invitation, you can ignore this message.\n"
+            ),
+            recipient=to_email,
+            fail_silently=True,
+        )
 
     return invite
 

@@ -1,0 +1,470 @@
+/* Compact print-ready assessment + numbered answer key */
+
+:root {
+  --print-ink: #111827;
+  --print-muted: #4b5563;
+  --print-rule: #cbd5e1;
+  --print-accent: #0f172a;
+}
+
+.print-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.print-toolbar-left,
+.print-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.print-toolbar-link {
+  color: #1d4ed8;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.print-toolbar-title {
+  font-weight: 700;
+  color: var(--print-accent);
+}
+
+.print-toolbar-match {
+  font-size: 0.85rem;
+  color: var(--print-muted);
+}
+
+.print-status {
+  font-size: 0.85rem;
+  color: var(--print-muted);
+}
+
+.print-btn {
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  border-radius: 6px;
+  padding: 0.45rem 0.9rem;
+  cursor: pointer;
+}
+
+.print-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.print-btn:not(:disabled):hover {
+  background: #1d4ed8;
+}
+
+.print-warnings {
+  margin: 0;
+  padding: 10px 16px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
+.print-warnings p {
+  margin: 0.2rem 0;
+}
+
+.print-document {
+  max-width: 8.5in;
+  margin: 0 auto;
+  padding: 0.4in 0.5in 0.55in;
+  color: var(--print-ink);
+  font-family: "Times New Roman", Times, "Liberation Serif", serif;
+  font-size: 10pt;
+  line-height: 1.25;
+  background: #fff;
+}
+
+.print-doc-header {
+  position: relative;
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--print-rule);
+}
+
+.print-name-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  font-size: 10pt;
+  margin-bottom: 0.3rem;
+}
+
+.print-assessment-title {
+  margin: 0;
+  font-size: 12pt;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.print-corner-meta {
+  position: absolute;
+  top: 0;
+  right: 0;
+  text-align: right;
+  font-size: 8.5pt;
+  color: var(--print-muted);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.print-match-stamp {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--print-accent);
+}
+
+.print-key-banner {
+  margin: 0 0 0.15rem;
+  font-size: 11pt;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.print-key-match {
+  margin: 0 0 0.25rem;
+  font-size: 10.5pt;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.print-key-note {
+  margin: 0.25rem 0 0;
+  font-size: 8.5pt;
+  color: var(--print-muted);
+}
+
+.print-problems {
+  display: block;
+}
+
+.print-section-banner {
+  margin: 0.45rem 0 0.2rem;
+  font-size: 8.5pt;
+  font-weight: 700;
+  color: var(--print-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  break-after: avoid;
+  page-break-after: avoid;
+}
+
+.print-problem-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem 0.55rem;
+  margin: 0.2rem 0;
+  align-items: start;
+}
+
+.print-problem {
+  display: grid;
+  grid-template-columns: 1.4rem 1fr;
+  column-gap: 0.25rem;
+  margin: 0.28rem 0;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+.print-problem--wide {
+  width: 100%;
+}
+
+.print-problem-num {
+  font-weight: 700;
+  font-size: 10pt;
+  line-height: 1.25;
+  padding-top: 0.05rem;
+}
+
+.print-problem-body {
+  min-width: 0;
+}
+
+.print-preview-target,
+.print-preview-target .ql-editor,
+.print-preview-target .preview-canvas {
+  font-size: 9.5pt !important;
+  line-height: 1.25 !important;
+}
+
+.print-preview-target .ql-editor {
+  padding: 0 !important;
+  border: none !important;
+}
+
+.print-preview-target .ql-container {
+  border: none !important;
+}
+
+.print-preview-target p {
+  margin: 0.15em 0 !important;
+}
+
+.print-preview-target .mc-option-preview-row {
+  margin: 1px 0 !important;
+  font-size: 9pt !important;
+  gap: 4px !important;
+}
+
+.print-mc-letter {
+  font-weight: 700;
+  font-family: "Times New Roman", Times, serif;
+}
+
+/* ---- Tables (mirror practice-test / workspace expand rules) ---- */
+.print-preview-target table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  max-width: 100% !important;
+}
+
+.print-preview-target table td,
+.print-preview-target table th {
+  border: 1px solid #cbd5e1;
+  padding: 4px 6px;
+  vertical-align: top;
+  box-sizing: border-box;
+  overflow: visible !important;
+}
+
+.print-preview-target table.ql-table-compact td,
+.print-preview-target table.ql-table-compact th {
+  padding: 1px 2px;
+  min-width: 14px;
+}
+
+.print-preview-target table.no-border > tr > td,
+.print-preview-target table.no-border > tr > th,
+.print-preview-target table.no-border > tbody > tr > td,
+.print-preview-target table.no-border > tbody > tr > th,
+.print-preview-target .ql-nested-table-inner.no-border > tr > td,
+.print-preview-target .ql-nested-table-inner.no-border > tr > th,
+.print-preview-target .ql-nested-table-inner.no-border > tbody > tr > td,
+.print-preview-target .ql-nested-table-inner.no-border > tbody > tr > th {
+  border: none !important;
+}
+
+.print-preview-target table.ql-table-expand-entities > tr > td,
+.print-preview-target table.ql-table-expand-entities > tr > th,
+.print-preview-target table.ql-table-expand-entities > tbody > tr > td,
+.print-preview-target table.ql-table-expand-entities > tbody > tr > th,
+.print-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tr > td,
+.print-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tr > th,
+.print-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tbody > tr > td,
+.print-preview-target table.ql-nested-table-inner.ql-table-expand-entities > tbody > tr > th {
+  overflow: visible !important;
+  height: auto !important;
+}
+
+.print-preview-target table td img,
+.print-preview-target table th img {
+  max-width: 100%;
+  height: auto;
+  width: auto;
+  display: block;
+}
+
+.print-preview-target .ql-workspace-nested-table {
+  display: block;
+  max-width: 100%;
+}
+
+/* Graphs: fit width, do not force a tiny max-height that clips table graphs */
+.print-preview-target .simulated-live-graph-preview-container,
+.print-preview-target .simulated-live-slope-preview-container,
+.print-preview-target .simulated-gbp-preview-container {
+  max-width: 100% !important;
+}
+
+.print-preview-target canvas,
+.print-preview-target svg.function-plot,
+.print-preview-target .function-plot {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+.print-handwrite-blank {
+  display: inline-block;
+  min-width: 5.5rem;
+  border-bottom: 1px solid #64748b;
+  height: 1.05em;
+  vertical-align: baseline;
+  margin: 0 2px;
+}
+
+.print-handwrite-blank--block {
+  display: block;
+  width: 100%;
+  min-height: 2.4rem;
+  margin: 0.2rem 0 0.15rem;
+  border-bottom: none;
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0,
+      transparent 1.05rem,
+      #94a3b8 1.05rem,
+      #94a3b8 calc(1.05rem + 1px)
+    );
+}
+
+.print-work-space {
+  margin-top: 0.15rem;
+}
+
+.print-work-line {
+  height: 1.05rem;
+  border-bottom: 1px dotted #94a3b8;
+}
+
+.print-stub-host {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Numbered answer key — no problem restatement */
+.print-key-list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.6rem;
+  columns: 2;
+  column-gap: 1.25rem;
+  font-size: 9.5pt;
+  line-height: 1.35;
+}
+
+.print-key-list li {
+  break-inside: avoid;
+  page-break-inside: avoid;
+  margin: 0.12rem 0;
+  padding-left: 0.15rem;
+}
+
+.print-key-list li.is-manual {
+  color: #92400e;
+  font-style: italic;
+}
+
+.print-key-empty {
+  color: #94a3b8;
+}
+
+.print-key-sep {
+  color: var(--print-muted);
+}
+
+.print-blank-separator {
+  break-before: page;
+  page-break-before: always;
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.print-blank-label {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.print-answer-key-section {
+  break-before: page;
+  page-break-before: always;
+}
+
+.print-document input,
+.print-document textarea,
+.print-document select,
+.print-document button {
+  pointer-events: none;
+}
+
+@media print {
+  @page {
+    size: letter;
+    margin: 0.45in 0.5in 0.5in 0.5in;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  header,
+  nav,
+  .navbar,
+  .sidebar,
+  .course-sidebar,
+  footer,
+  .print-toolbar,
+  .print-warnings,
+  .print-blank-label,
+  .messages-container,
+  #problem-workspace-overlay,
+  .problem-workspace-overlay {
+    display: none !important;
+  }
+
+  main.container {
+    max-width: none !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .print-document {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    font-size: 9.5pt;
+  }
+
+  .print-corner-meta {
+    position: fixed;
+    top: 0.12in;
+    right: 0.4in;
+    z-index: 5;
+  }
+
+  .print-blank-separator {
+    min-height: 100vh;
+    height: 100vh;
+  }
+
+  .print-key-header .print-key-match {
+    font-size: 11pt;
+  }
+
+  .print-preview-target table td,
+  .print-preview-target table th {
+    overflow: visible !important;
+  }
+
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
+}

@@ -208,14 +208,11 @@ def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCours
     except CreditError as exc:
         raise ValueError(str(exc)) from exc
 
-    # TODO: send invitation email when SMTP is wired.
+    invite_path = reverse("course_invite_redeem", kwargs={"code": invite.code})
     if target_user is not None:
         try:
             from .notifications import create_notification, REASON_COURSE_INVITATION
 
-            invite_path = reverse(
-                "course_invite_redeem", kwargs={"code": invite.code}
-            )
             create_notification(
                 target_user,
                 title=f"Course invitation: {course.name}",
@@ -235,6 +232,24 @@ def create_course_invite(*, course, created_by, recipient_raw: str) -> UserCours
             )
         except Exception:
             logger.exception("Failed to notify invitee for invite id=%s", invite.pk)
+
+    to_email = (invite.temp_email or "").strip() or (
+        (getattr(target_user, "user_email", None) or "").strip() if target_user else ""
+    )
+    if to_email:
+        from .mail import absolute_url, send_app_email
+
+        send_app_email(
+            subject=f"Course invitation: {course.name}",
+            message=(
+                f"You have been invited to join {course.name}.\n\n"
+                f"Open this link to accept (you are not enrolled until you confirm):\n"
+                f"{absolute_url(invite_path)}\n\n"
+                "If you did not expect this invitation, you can ignore this message.\n"
+            ),
+            recipient=to_email,
+            fail_silently=True,
+        )
 
     return invite
 

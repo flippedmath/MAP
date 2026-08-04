@@ -322,7 +322,9 @@ def register_teacher(request):
                         )
 
                         # 2. Populate email_authentication table
-                        EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                        auth = EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                        from .mail import send_verification_code_email
+                        send_verification_code_email(to_email=auth.temp_email, code=auth.code)
 
                         return redirect('login')
 
@@ -382,7 +384,9 @@ def verify_email(request):
                     messages.error(request, f"The email {new_email} is already associated with an account.")
                 else:
                     # 2. Proceed with update if unique
-                    EmailAuthentication.generate_auth_record(request.user, new_email)
+                    auth = EmailAuthentication.generate_auth_record(request.user, new_email)
+                    from .mail import send_verification_code_email
+                    send_verification_code_email(to_email=auth.temp_email, code=auth.code)
                     messages.success(request, f"Email changed to {new_email}. A new code has been sent.")
                     return redirect('verify_email')
 
@@ -390,7 +394,9 @@ def verify_email(request):
         if 'resend' in request.POST:
             # We use the email currently stored in the auth_record
             if auth_record:
-                EmailAuthentication.generate_auth_record(request.user, auth_record.temp_email)
+                auth = EmailAuthentication.generate_auth_record(request.user, auth_record.temp_email)
+                from .mail import send_verification_code_email
+                send_verification_code_email(to_email=auth.temp_email, code=auth.code)
                 messages.success(request, "A new activation code has been sent!")
                 return redirect('verify_email')
 
@@ -517,8 +523,7 @@ def account_settings_view(request):
                 )
                 messages.success(
                     request,
-                    "Email change started. Enter the verification code to finish "
-                    "(look it up in the database for now).",
+                    "Email change started. Enter the verification code sent to your new email.",
                 )
                 return redirect('verify_email')
             except ValueError as exc:
@@ -2542,14 +2547,15 @@ def course_invite_signup_view(request, code):
                         user_display_name=form.cleaned_data.get('display_name'),
                         unactivated_account=True,
                     )
-                    EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                    auth = EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
                     claim_invite_for_new_user(invite, user)
                     request.session[INVITE_SESSION_KEY] = code
-                    # TODO: send verification email when SMTP is wired.
+                    from .mail import send_verification_code_email
+                    send_verification_code_email(to_email=auth.temp_email, code=auth.code)
                     messages.success(
                         request,
                         "Account created. Log in, then enter the email verification code "
-                        "(look it up in the database for now).",
+                        "sent to your email.",
                     )
                     return redirect('login')
             except ValueError as exc:
@@ -2724,14 +2730,15 @@ def parent_invite_signup_view(request, code):
                         user_display_name=form.cleaned_data.get('display_name'),
                         unactivated_account=True,
                     )
-                    EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
+                    auth = EmailAuthentication.generate_auth_record(user, form.cleaned_data['email'])
                     claim_parent_invite_for_new_user(invite, user)
                     request.session[PARENT_INVITE_SESSION_KEY] = code
-                    # TODO: send verification email when SMTP is wired.
+                    from .mail import send_verification_code_email
+                    send_verification_code_email(to_email=auth.temp_email, code=auth.code)
                     messages.success(
                         request,
                         "Parent account created. Log in, then enter the email verification code "
-                        "(look it up in the database for now).",
+                        "sent to your email.",
                     )
                     return redirect('login')
             except ValueError as exc:
@@ -2973,6 +2980,8 @@ def assessment_view(request, course_id):
         if show_auto_open_column:
             empty_colspan += 1
 
+    from .credits import assert_can_print
+
     context = {
         'course': course,
         'user_type': user_type,
@@ -2985,6 +2994,7 @@ def assessment_view(request, course_id):
         'active_tab': 'assessments',
         'current_time': now,
         'highlight_id': highlight_id,
+        'can_print_assessments': (not is_student) and assert_can_print(request.user),
     }
     return render(request, 'assessment_tool/assessments.html', context)
 

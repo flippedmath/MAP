@@ -27,7 +27,33 @@ SECRET_KEY = 'django-insecure-79=f)8y(0s0&g=qy#++j^sxaycjw%nzx5gy$)fug96w^gc90j*
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# Local + temporary public tunnels (cloudflared trycloudflare / ngrok).
+# Override with ALLOWED_HOSTS=host1,host2 in .env if needed.
+ALLOWED_HOSTS = [
+    h.strip()
+    for h in config(
+        'ALLOWED_HOSTS',
+        default='localhost,127.0.0.1,.trycloudflare.com,.ngrok-free.app,.ngrok.io',
+    ).split(',')
+    if h.strip()
+]
+
+# HTTPS tunnels terminate TLS externally; tell Django the original scheme.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Required for login/forms through temporary https://*.trycloudflare.com (etc.) links.
+CSRF_TRUSTED_ORIGINS = [
+    o.strip()
+    for o in config(
+        'CSRF_TRUSTED_ORIGINS',
+        default=(
+            'https://*.trycloudflare.com,'
+            'https://*.ngrok-free.app,'
+            'https://*.ngrok.io'
+        ),
+    ).split(',')
+    if o.strip()
+]
 
 
 # Application definition
@@ -169,3 +195,17 @@ PRIVATE_FILE_ROOT = os.path.join(BASE_DIR, 'private_files')
 # Allow credit invoice PDFs up to ~25 MB (stored as-is, not resized).
 DATA_UPLOAD_MAX_MEMORY_SIZE = 26 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+
+# Outbound email (SMTP). Credentials live in the repo-root .env.
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = config('OUTGOING_SERVER_HOST')
+EMAIL_PORT = config('OUTGOING_SERVER_PORT_SMTP', cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD')
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=False, cast=bool)
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default=config('EMAIL_HOST_USER'))
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
+
+# Used to build absolute links in emails when no HTTP request is available.
+PUBLIC_BASE_URL = config('PUBLIC_BASE_URL', default='http://127.0.0.1:8000').rstrip('/')

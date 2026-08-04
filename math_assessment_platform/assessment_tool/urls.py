@@ -7,6 +7,7 @@ from . import ticket_views
 from . import collaboration_views
 from . import content_image_views
 from . import credit_views
+from . import assessment_print
 
 urlpatterns = [
     path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
@@ -294,6 +295,11 @@ urlpatterns = [
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/practice-test/', views.assessment_practice_test_view, name='assessment_practice_test'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/practice-test/start/', views.assessment_practice_test_start_ajax, name='assessment_practice_test_start'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/practice-test/grade/', views.assessment_practice_test_grade_ajax, name='assessment_practice_test_grade'),
+    path(
+        'course/<int:course_id>/assessment/<int:assessment_id>/print/',
+        assessment_print.assessment_print_view,
+        name='assessment_print',
+    ),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/create-aqg/', views.create_aqg_ajax, name='create_aqg_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/rename-aqg/', views.rename_aqg_ajax, name='rename_aqg_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/reorder-aqg/', views.reorder_aqg_ajax, name='reorder_aqg_ajax'),

@@ -28,6 +28,7 @@
           <button type="button" class="grades-options-close" id="grades-options-close" aria-label="Close">×</button>
         </div>
         <div id="grades-options-body" class="grades-options-body"></div>
+        <div id="grades-options-print-actions" class="grades-options-print-actions" hidden></div>
         <p class="grades-modal-status" id="grades-options-status" aria-live="polite"></p>
       </div>
     `;
@@ -120,6 +121,40 @@
     wrap.hidden = !show;
   }
 
+  function renderPrintActions() {
+    const el = ensureOverlay();
+    const tray = el.querySelector('#grades-options-print-actions');
+    if (!tray) return;
+    tray.innerHTML = '';
+    tray.hidden = true;
+    if (!pending || pending.subset !== 'delivery' || !pending.printUrl) return;
+
+    tray.hidden = false;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-modal btn-modal-submit grades-options-print-btn';
+    btn.innerHTML = '<i class="fas fa-print"></i> Print assessment + answer key';
+    btn.addEventListener('click', (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      if (pending.canPrint === false) {
+        const statusEl = el.querySelector('#grades-options-status');
+        if (statusEl) {
+          statusEl.textContent =
+            'Printing requires an unlocked teacher account. Buy credits in Account Settings to unlock.';
+        }
+        return;
+      }
+      window.open(pending.printUrl, '_blank', 'noopener');
+    });
+    const hint = document.createElement('p');
+    hint.className = 'grades-options-print-hint';
+    hint.textContent =
+      'Opens a compact printout (assessment, blank page, answer key) with a shared match key. Use the browser Print dialog to save a PDF.';
+    tray.appendChild(btn);
+    tray.appendChild(hint);
+  }
+
   function renderBody(payload) {
     const el = ensureOverlay();
     const body = el.querySelector('#grades-options-body');
@@ -189,6 +224,8 @@
 
       body.appendChild(block);
     });
+
+    renderPrintActions();
   }
 
   function escapeHtml(s) {
@@ -217,6 +254,11 @@
         ? 'These defaults apply to assessments unless an assessment overrides them. Changes apply when you close this panel.'
         : (opts.assessmentName || '') + ' — changes apply when you close this panel.';
     el.querySelector('#grades-options-status').textContent = 'Loading…';
+    const printTray = el.querySelector('#grades-options-print-actions');
+    if (printTray) {
+      printTray.innerHTML = '';
+      printTray.hidden = true;
+    }
     el.classList.add('is-open');
     el.setAttribute('aria-hidden', 'false');
 
@@ -295,6 +337,8 @@
         assessmentName: btn.getAttribute('data-assessment-name') || '',
         loadUrl: btn.getAttribute('data-options-load-url'),
         saveUrl: btn.getAttribute('data-options-save-url'),
+        printUrl: btn.getAttribute('data-print-url') || '',
+        canPrint: btn.getAttribute('data-can-print') !== '0',
       });
     }
   });

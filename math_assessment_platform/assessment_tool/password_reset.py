@@ -69,26 +69,36 @@ def delete_pending_resets_for_user(user) -> int:
     return deleted
 
 
-def _stub_send_password_reset_email(*, user, reset_row: PasswordResetRequest) -> None:
-    """Placeholder until SMTP is wired. Logs the intended payload."""
+def _send_password_reset_email(*, user, reset_row: PasswordResetRequest) -> None:
+    from .mail import absolute_url, send_app_email
+
     reset_path = reverse("password_reset_confirm", kwargs={"code": reset_row.code})
-    # TODO: send password-reset email when SMTP is wired.
-    logger.info(
-        "PASSWORD_RESET_EMAIL_STUB to=%s user_id=%s path=%s expires=%s",
-        getattr(user, "user_email", None) or "(no email on file)",
-        getattr(user, "user_id", None),
-        reset_path,
-        reset_row.timeout,
+    reset_url = absolute_url(reset_path)
+    to_email = (getattr(user, "user_email", None) or "").strip()
+    send_app_email(
+        subject="Password reset — Flipped Math MAP",
+        message=(
+            "A password reset was requested for your account.\n\n"
+            f"Open this link within 15 minutes to choose a new password:\n{reset_url}\n\n"
+            "If you did not request this, you can ignore this message.\n"
+        ),
+        recipient=to_email,
+        fail_silently=True,
     )
 
 
-def _stub_send_password_changed_email(*, user) -> None:
-    """Placeholder until SMTP is wired."""
-    # TODO: send password-changed confirmation email when SMTP is wired.
-    logger.info(
-        "PASSWORD_CHANGED_EMAIL_STUB to=%s user_id=%s",
-        getattr(user, "user_email", None) or "(no email on file)",
-        getattr(user, "user_id", None),
+def _send_password_changed_email(*, user) -> None:
+    from .mail import send_app_email
+
+    to_email = (getattr(user, "user_email", None) or "").strip()
+    send_app_email(
+        subject="Password updated — Flipped Math MAP",
+        message=(
+            "Your account password was changed using a reset link.\n\n"
+            "If you did not make this change, contact IT Support right away.\n"
+        ),
+        recipient=to_email,
+        fail_silently=True,
     )
 
 
@@ -96,7 +106,7 @@ def _stub_send_password_changed_email(*, user) -> None:
 def create_password_reset_request(*, identifier: str) -> PasswordResetRequest | None:
     """
     If a matching user exists, create (or replace) a 15-minute reset token,
-    notify the user, and stub the email. Returns the row, or None if no match.
+    notify the user, and email the reset link. Returns the row, or None if no match.
 
     Callers should always show a generic success message to avoid account enumeration.
     """
@@ -141,7 +151,7 @@ def create_password_reset_request(*, identifier: str) -> PasswordResetRequest | 
             getattr(user, "user_id", None),
         )
 
-    _stub_send_password_reset_email(user=user, reset_row=row)
+    _send_password_reset_email(user=user, reset_row=row)
     return row
 
 
@@ -190,7 +200,7 @@ def complete_password_reset(
 ) -> UserProfile:
     """
     Validate and set a new password from a forgot-password link.
-    Deletes the reset row, notifies the user, and stubs the confirmation email.
+    Deletes the reset row, notifies the user, and emails a confirmation.
     """
     if reset_is_expired(reset_row):
         raise ValueError("This password reset link has expired. Request a new one.")
@@ -244,5 +254,5 @@ def complete_password_reset(
             getattr(user, "user_id", None),
         )
 
-    _stub_send_password_changed_email(user=user)
+    _send_password_changed_email(user=user)
     return user
