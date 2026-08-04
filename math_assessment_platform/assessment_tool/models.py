@@ -437,6 +437,27 @@ class ContactUs(models.Model):
         db_table = 'contact_us'
 
 
+class ContentImage(models.Model):
+    """Append-only Quill/content images under media/content_images/."""
+
+    storage_path = models.CharField(max_length=512, unique=True)
+    original_filename = models.CharField(max_length=255, blank=True, null=True)
+    content_type = models.CharField(max_length=64, blank=True, null=True)
+    byte_size = models.IntegerField(blank=True, null=True)
+    uploaded_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='uploaded_by_id',
+        blank=True,
+        null=True,
+    )
+    creation_date = models.DateTimeField(blank=True, null=True)
+    maybe_unused_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = 'content_image'
+
 
 class Course(models.Model):
     # TODO: use the ProcessedImageField, description here: https://pypi.org/project/django-imagekit/

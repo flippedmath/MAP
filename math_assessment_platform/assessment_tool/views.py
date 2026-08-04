@@ -55,6 +55,7 @@ from .models import (
     QaTag,
     QaTagAssignment,
     ContactUs,
+    ContentImage,
     Ticket,
     TicketDiscussion,
     TicketAdminFilterPref,
@@ -581,6 +582,7 @@ def database_viewer(request):
         'assessment_generation_job': AssessmentGenerationJob,
         'notification': Notification,
         'contact_us': ContactUs,
+        'content_image': ContentImage,
         'ticket': Ticket,
         'ticket_discussion': TicketDiscussion,
         'ticket_admin_filter_pref': TicketAdminFilterPref,
@@ -1781,9 +1783,15 @@ def course_detail_view(request, course_id):
         raw_json_str = request.POST.get('introduction_payload')
         try:
             # Ensure incoming transmission is validated JSON structured block
-            json.loads(raw_json_str) 
+            json.loads(raw_json_str)
+            previous_introduction = course.introduction or ""
             course.introduction = raw_json_str
             course.save()
+            from .content_images import track_content_image_html_change
+            track_content_image_html_change(
+                previous_html=previous_introduction,
+                new_html=raw_json_str,
+            )
             messages.success(request, "Course introduction update saved successfully!")
         except json.JSONDecodeError:
             messages.error(request, "Failed parsing document data validation framework structure.")
@@ -6296,13 +6304,21 @@ def save_problem_workspace(request, problem_id):
             problem.branch_location.save()
 
         structured_json_string = json.dumps({"html_content": body_html})
+        previous_block_content = ""
         q_block, created = QuestionBlock.objects.get_or_create(
             problem=problem,
             defaults={'content': structured_json_string}
         )
         if not created:
+            previous_block_content = q_block.content or ""
             q_block.content = structured_json_string
             q_block.save()
+
+        from .content_images import track_content_image_html_change
+        track_content_image_html_change(
+            previous_html=previous_block_content,
+            new_html=structured_json_string,
+        )
 
         EntitySegment.objects.filter(problem=problem).delete()
 

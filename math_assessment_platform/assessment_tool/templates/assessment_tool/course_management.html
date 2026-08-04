@@ -1,4 +1,5 @@
 {% extends "assessment_tool/components/course_sidebar.html" %}
+{% load static %}
 
 {% block course_sub_content %}
 <div class="course-management">
@@ -289,12 +290,21 @@
                                     {% endif %}
                                 </td>
                                 <td style="padding: 8px;">
-                                    <button type="button"
-                                            class="btn copy-invite-link-btn"
-                                            data-invite-url="{{ row.redeem_url }}"
-                                            style="background: #334155; padding: 6px 10px; font-size: 0.8rem;">
-                                        Copy invite link
-                                    </button>
+                                    <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+                                        <button type="button"
+                                                class="btn copy-invite-link-btn"
+                                                data-invite-url="{{ row.redeem_url }}"
+                                                style="background: #334155; padding: 6px 10px; font-size: 0.8rem;">
+                                            Copy invite link
+                                        </button>
+                                        <button type="button"
+                                                class="btn view-invite-qr-btn"
+                                                data-invite-url="{{ row.redeem_url }}"
+                                                data-invite-recipient="{{ row.recipient|escape }}"
+                                                style="background: #2563eb; padding: 6px 10px; font-size: 0.8rem;">
+                                            View QR Code
+                                        </button>
+                                    </div>
                                 </td>
                                 <td style="padding: 8px;">
                                     {% if row.can_void %}
@@ -518,6 +528,23 @@
 </div>
 {% endif %}
 
+<div id="invite-qr-overlay" class="kick-modal-overlay" hidden aria-hidden="true">
+    <div class="kick-modal invite-qr-modal" role="dialog" aria-modal="true" aria-labelledby="invite-qr-title">
+        <h3 id="invite-qr-title" style="margin-top: 0;">Invite QR code</h3>
+        <p id="invite-qr-subtitle" style="color: #64748b; font-size: 0.9rem; line-height: 1.45;"></p>
+        <div class="invite-qr-canvas-wrap" id="invite-qr-click-target" title="Click to copy QR image">
+            <div id="invite-qr-code"></div>
+        </div>
+        <p id="invite-qr-copy-status" class="invite-qr-copy-status" aria-live="polite" hidden></p>
+        <p style="color: #94a3b8; font-size: 0.85rem; margin: 8px 0 0;">
+            Click the QR code to copy the image to your clipboard.
+        </p>
+        <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+            <button type="button" class="btn" id="invite-qr-close" style="background: #64748b;">Close</button>
+        </div>
+    </div>
+</div>
+
 <div id="kick-student-overlay" class="kick-modal-overlay" hidden aria-hidden="true">
     <div class="kick-modal" role="dialog" aria-modal="true" aria-labelledby="kick-student-title">
         <h3 id="kick-student-title" style="margin-top: 0;">Remove student from course?</h3>
@@ -579,7 +606,37 @@
         padding: 24px;
         box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
     }
+    .invite-qr-modal {
+        max-width: 360px;
+        text-align: center;
+    }
+    .invite-qr-canvas-wrap {
+        display: inline-flex;
+        padding: 12px;
+        background: #fff;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        cursor: pointer;
+        line-height: 0;
+    }
+    .invite-qr-canvas-wrap:hover {
+        border-color: #2563eb;
+    }
+    .invite-qr-canvas-wrap canvas,
+    .invite-qr-canvas-wrap img {
+        display: block;
+        width: 256px;
+        height: 256px;
+        max-width: 100%;
+    }
+    .invite-qr-copy-status {
+        margin: 12px 0 0;
+        color: #047857;
+        font-size: 0.9rem;
+        font-weight: 600;
+    }
 </style>
+<script src="{% static 'assessment_tool/js/qrcode.min.js' %}"></script>
 <script>
 (function () {
     document.querySelectorAll('.copy-invite-link-btn').forEach(function (btn) {
@@ -723,6 +780,152 @@
     });
     document.addEventListener('keydown', function (evt) {
         if (evt.key === 'Escape' && !overlay.hidden) closeCloseOverlay();
+    });
+})();
+
+(function () {
+    var overlay = document.getElementById('invite-qr-overlay');
+    var qrHost = document.getElementById('invite-qr-code');
+    var subtitle = document.getElementById('invite-qr-subtitle');
+    var statusEl = document.getElementById('invite-qr-copy-status');
+    var closeBtn = document.getElementById('invite-qr-close');
+    var canvasWrap = document.getElementById('invite-qr-click-target');
+    var statusTimer = null;
+    var qrInstance = null;
+    var lastOpener = null;
+
+    if (!overlay || !qrHost) return;
+
+    function setStatus(text, isError) {
+        if (!statusEl) return;
+        statusEl.hidden = !text;
+        statusEl.textContent = text || '';
+        statusEl.style.color = isError ? '#b91c1c' : '#047857';
+        if (statusTimer) window.clearTimeout(statusTimer);
+        if (text && !isError) {
+            statusTimer = window.setTimeout(function () {
+                statusEl.hidden = true;
+                statusEl.textContent = '';
+            }, 2500);
+        }
+    }
+
+    function closeQrOverlay() {
+        // Move focus out before aria-hidden, or browsers warn that a focused
+        // control is being hidden from assistive technology.
+        if (lastOpener && typeof lastOpener.focus === 'function') {
+            lastOpener.focus();
+        } else if (document.activeElement && overlay.contains(document.activeElement)) {
+            document.activeElement.blur();
+        }
+        overlay.hidden = true;
+        overlay.setAttribute('aria-hidden', 'true');
+        setStatus('');
+        lastOpener = null;
+    }
+
+    function openQrOverlay(url, recipient, opener) {
+        if (!url) return;
+        if (typeof QRCode === 'undefined') {
+            window.alert('QR code library failed to load. Refresh the page and try again.');
+            return;
+        }
+        lastOpener = opener || null;
+        setStatus('');
+        if (subtitle) {
+            subtitle.textContent = recipient
+                ? ('Scan to open the invite link for ' + recipient + '.')
+                : 'Scan to open the invite link.';
+        }
+        qrHost.replaceChildren();
+        try {
+            qrInstance = new QRCode(qrHost, {
+                text: url,
+                width: 256,
+                height: 256,
+                colorDark: '#0f172a',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.M
+            });
+        } catch (err) {
+            setStatus('Could not generate QR code.', true);
+            return;
+        }
+        overlay.hidden = false;
+        overlay.setAttribute('aria-hidden', 'false');
+        if (closeBtn && typeof closeBtn.focus === 'function') {
+            closeBtn.focus();
+        }
+    }
+
+    function qrImageElement() {
+        return qrHost.querySelector('canvas') || qrHost.querySelector('img');
+    }
+
+    function copyQrImage() {
+        var el = qrImageElement();
+        if (!el) {
+            setStatus('QR image is not ready yet.', true);
+            return;
+        }
+
+        function writeBlob(blob) {
+            if (!blob) {
+                setStatus('Could not prepare QR image.', true);
+                return;
+            }
+            if (navigator.clipboard && window.ClipboardItem) {
+                navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': blob })
+                ]).then(function () {
+                    setStatus('QR image copied to the clipboard.');
+                }).catch(function () {
+                    setStatus('Could not copy image. Try again or use a secure (HTTPS) connection.', true);
+                });
+            } else {
+                setStatus('Clipboard image copy is not supported in this browser.', true);
+            }
+        }
+
+        if (el.tagName === 'CANVAS' && el.toBlob) {
+            el.toBlob(writeBlob, 'image/png');
+            return;
+        }
+        if (el.tagName === 'IMG') {
+            var canvas = document.createElement('canvas');
+            canvas.width = el.naturalWidth || 256;
+            canvas.height = el.naturalHeight || 256;
+            var ctx = canvas.getContext('2d');
+            try {
+                ctx.drawImage(el, 0, 0);
+                canvas.toBlob(writeBlob, 'image/png');
+            } catch (err) {
+                setStatus('Could not copy image from QR code.', true);
+            }
+            return;
+        }
+        setStatus('Could not prepare QR image.', true);
+    }
+
+    document.querySelectorAll('.view-invite-qr-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            openQrOverlay(
+                btn.getAttribute('data-invite-url') || '',
+                btn.getAttribute('data-invite-recipient') || '',
+                btn
+            );
+        });
+    });
+
+    if (canvasWrap) {
+        canvasWrap.addEventListener('click', copyQrImage);
+    }
+    if (closeBtn) closeBtn.addEventListener('click', closeQrOverlay);
+    overlay.addEventListener('click', function (evt) {
+        if (evt.target === overlay) closeQrOverlay();
+    });
+    document.addEventListener('keydown', function (evt) {
+        if (evt.key === 'Escape' && !overlay.hidden) closeQrOverlay();
     });
 })();
 </script>

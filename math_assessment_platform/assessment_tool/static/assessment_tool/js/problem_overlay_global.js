@@ -3132,6 +3132,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
                 });
                 setupWorkspaceTableCellPasteHandler();
+                setupWorkspaceImagePasteDropHandlers();
                 setupWorkspaceTableContextMenu();
                 setupEmptyOuterTableCellClick();
                 setupWorkspaceTableResize();
@@ -3410,31 +3411,52 @@ document.addEventListener('DOMContentLoaded', function() {
             const file = input.files && input.files[0];
             input.remove();
             if (!file || !String(file.type || '').startsWith('image/')) return;
-            const reader = new FileReader();
-            reader.onload = function() {
-                const src = reader.result;
-                if (!isSafeNestedImageSrc(src)) return;
-                if (nestedTarget) {
-                    insertNestedImageAt(nestedTarget.embed, nestedTarget.cell, nestedTarget.range, src);
-                    return;
-                }
-                try {
-                    const range = workspaceQuillInstance.getSelection(true)
-                        || { index: workspaceQuillInstance.getLength(), length: 0 };
-                    if (range.length > 0) {
-                        workspaceQuillInstance.deleteText(range.index, range.length, Quill.sources.USER);
-                    }
-                    workspaceQuillInstance.insertEmbed(range.index, 'image', src, Quill.sources.USER);
-                    workspaceQuillInstance.setSelection(range.index + 1, 0, Quill.sources.USER);
-                    updateWorkspaceSimulationPreview();
-                    if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
-                } catch (err) {
-                    console.error('Failed inserting workspace image:', err);
-                }
-            };
-            reader.readAsDataURL(file);
+            uploadWorkspaceImageFile(file, nestedTarget);
         });
         input.click();
+    }
+
+    function uploadWorkspaceImageFile(file, nestedTarget) {
+        const uploader = window.MAPContentImages;
+        if (!uploader || typeof uploader.uploadImageFile !== 'function') {
+            console.error('MAPContentImages upload helper is not loaded.');
+            window.alert('Image upload is unavailable. Refresh the page and try again.');
+            return;
+        }
+        const prevStatus = saveStatusSpan ? saveStatusSpan.innerHTML : '';
+        if (saveStatusSpan) {
+            saveStatusSpan.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading image...`;
+        }
+        uploader.uploadImageFile(file).then((data) => {
+            const src = data && data.url;
+            if (!isSafeNestedImageSrc(src)) {
+                throw new Error('Uploaded image URL was rejected.');
+            }
+            if (nestedTarget) {
+                insertNestedImageAt(nestedTarget.embed, nestedTarget.cell, nestedTarget.range, src);
+                return;
+            }
+            try {
+                const range = workspaceQuillInstance.getSelection(true)
+                    || { index: workspaceQuillInstance.getLength(), length: 0 };
+                if (range.length > 0) {
+                    workspaceQuillInstance.deleteText(range.index, range.length, Quill.sources.USER);
+                }
+                workspaceQuillInstance.insertEmbed(range.index, 'image', src, Quill.sources.USER);
+                workspaceQuillInstance.setSelection(range.index + 1, 0, Quill.sources.USER);
+                updateWorkspaceSimulationPreview();
+                if (saveStatusSpan) saveStatusSpan.innerHTML = `<i class="fas fa-cloud"></i> Unsaved changes`;
+            } catch (err) {
+                console.error('Failed inserting workspace image:', err);
+                if (saveStatusSpan && prevStatus) saveStatusSpan.innerHTML = prevStatus;
+            }
+        }).catch((err) => {
+            console.error('Workspace image upload failed:', err);
+            window.alert((err && err.message) || 'Image upload failed.');
+            if (saveStatusSpan) {
+                saveStatusSpan.innerHTML = prevStatus || `<i class="fas fa-cloud"></i> Unsaved changes`;
+            }
+        });
     }
 
     function insertWorkspaceLatexFormula() {
@@ -4330,11 +4352,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 String(f.type || '').startsWith('image/')
             );
             if (!file) return;
-            const reader = new FileReader();
-            reader.onload = () => {
-                insertNestedImageAt(node, td, null, reader.result);
-            };
-            reader.readAsDataURL(file);
+            uploadWorkspaceImageFile(file, { embed: node, cell: td, range: null });
         });
         td.addEventListener('keydown', (e) => {
             e.stopPropagation();
@@ -4370,9 +4388,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (imageItem) {
                 const file = imageItem.getAsFile();
                 if (file) {
-                    const reader = new FileReader();
-                    reader.onload = () => insertNestedImageAt(node, td, null, reader.result);
-                    reader.readAsDataURL(file);
+                    uploadWorkspaceImageFile(file, { embed: node, cell: td, range: null });
                     return;
                 }
             }
@@ -5124,6 +5140,48 @@ document.addEventListener('DOMContentLoaded', function() {
             workspaceQuillInstance.setSelection(cursor, 0, Quill.sources.SILENT);
             markWorkspaceUnsavedAndPreview();
         }, true);
+    }
+
+    function setupWorkspaceImagePasteDropHandlers() {
+        if (!workspaceQuillInstance || workspaceQuillInstance.root.dataset.imageUploadBound === '1') return;
+        workspaceQuillInstance.root.dataset.imageUploadBound = '1';
+        const root = workspaceQuillInstance.root;
+
+        root.addEventListener('paste', function(e) {
+            // Nested cells handle their own image paste
+            if (isFocusInsideNestedTable()) return;
+            const items = e.clipboardData && e.clipboardData.items
+                ? Array.from(e.clipboardData.items)
+                : [];
+            const imageItem = items.find(item => item && item.type && item.type.startsWith('image/'));
+            if (!imageItem) return;
+            const file = imageItem.getAsFile();
+            if (!file) return;
+            e.preventDefault();
+            e.stopPropagation();
+            uploadWorkspaceImageFile(file, null);
+        }, true);
+
+        root.addEventListener('dragover', function(e) {
+            if (isFocusInsideNestedTable()) return;
+            const types = e.dataTransfer && e.dataTransfer.types
+                ? Array.from(e.dataTransfer.types)
+                : [];
+            if (types.includes('Files')) {
+                e.preventDefault();
+            }
+        });
+
+        root.addEventListener('drop', function(e) {
+            if (isFocusInsideNestedTable()) return;
+            const file = e.dataTransfer && e.dataTransfer.files && Array.from(e.dataTransfer.files).find(f =>
+                String(f.type || '').startsWith('image/')
+            );
+            if (!file) return;
+            e.preventDefault();
+            e.stopPropagation();
+            uploadWorkspaceImageFile(file, null);
+        });
     }
 
     function makeQuillTableRowId(seed = '') {

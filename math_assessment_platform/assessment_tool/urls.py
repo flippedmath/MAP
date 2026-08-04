@@ -5,6 +5,7 @@ from . import views
 from . import help_views
 from . import ticket_views
 from . import collaboration_views
+from . import content_image_views
 
 urlpatterns = [
     path('', RedirectView.as_view(pattern_name='dashboard', permanent=False), name='home'),
@@ -288,6 +289,11 @@ urlpatterns = [
     path('course/api/assessment/<int:assessment_id>/submit-evaluation/', views.submit_student_assessment_evaluation, name='submit_assessment_evaluation'),
     path('api/problem/<int:problem_id>/save-workspace/', views.save_problem_workspace, name='save_problem_workspace'),
     path('api/problem/<int:problem_id>/grade-workspace-preview/', views.grade_problem_workspace_preview, name='grade_problem_workspace_preview'),
+    path(
+        'api/content-images/upload/',
+        content_image_views.content_image_upload_view,
+        name='content_image_upload',
+    ),
     path('problem/<int:problem_id>/workspace/', views.problem_workspace_editor, name='problem_workspace_editor'),
     path('assessment/api/validate-component-preview/', views.validate_component_preview, name='validate_component_preview'),
 ]

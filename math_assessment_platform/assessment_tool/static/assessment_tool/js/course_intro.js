@@ -52,16 +52,52 @@ function toggleIntroEditor(showEditor) {
                 theme: 'snow',
                 modules: {
                     table: { operationMenu: true },
-                    toolbar: [
-                        [{ 'font': [] }, { 'size': [] }],
-                        ['bold', 'italic', 'underline', 'strike'],
-                        [{ 'color': [] }, { 'background': [] }],
-                        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
-                        [{ 'indent': '-1'}, { 'indent': '+1' }, { 'align': [] }],
-                        ['link', 'image', 'formula'],
-                        ['table'], 
-                        ['clean']
-                    ],
+                    toolbar: {
+                        container: [
+                            [{ 'font': [] }, { 'size': [] }],
+                            ['bold', 'italic', 'underline', 'strike'],
+                            [{ 'color': [] }, { 'background': [] }],
+                            [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                            [{ 'indent': '-1'}, { 'indent': '+1' }, { 'align': [] }],
+                            ['link', 'image', 'formula'],
+                            ['table'],
+                            ['clean']
+                        ],
+                        handlers: {
+                            image: function () {
+                                const input = document.createElement('input');
+                                input.setAttribute('type', 'file');
+                                input.setAttribute('accept', 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml');
+                                input.style.display = 'none';
+                                document.body.appendChild(input);
+                                input.addEventListener('change', function () {
+                                    const file = input.files && input.files[0];
+                                    input.remove();
+                                    if (!file || !String(file.type || '').startsWith('image/')) return;
+                                    const uploader = window.MAPContentImages;
+                                    if (!uploader || typeof uploader.uploadImageFile !== 'function') {
+                                        window.alert('Image upload is unavailable. Refresh the page and try again.');
+                                        return;
+                                    }
+                                    uploader.uploadImageFile(file).then(function (data) {
+                                        const url = data && data.url;
+                                        if (!url) throw new Error('Upload did not return a URL.');
+                                        const range = quillInstance.getSelection(true)
+                                            || { index: quillInstance.getLength(), length: 0 };
+                                        if (range.length > 0) {
+                                            quillInstance.deleteText(range.index, range.length, 'user');
+                                        }
+                                        quillInstance.insertEmbed(range.index, 'image', url, 'user');
+                                        quillInstance.setSelection(range.index + 1, 0, 'user');
+                                    }).catch(function (err) {
+                                        console.error('Course intro image upload failed:', err);
+                                        window.alert((err && err.message) || 'Image upload failed.');
+                                    });
+                                });
+                                input.click();
+                            }
+                        }
+                    },
                     clipboard: {
                         matchers: [
                             // 🎯 FIX 1: Robust Table cell fallback catcher to keep layout parser from crashing
