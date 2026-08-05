@@ -57,4 +57,26 @@ WHERE NOT EXISTS (
   WHERE title = 'Under Construction' AND show_on_landing = true
 );
 
+-- Production app role (no-op when the role does not exist, e.g. local postgres).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'map_app') THEN
+    EXECUTE 'ALTER TABLE site_announcement OWNER TO map_app';
+    EXECUTE 'GRANT ALL ON TABLE site_announcement TO map_app';
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'editor_user') THEN
+      EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE site_announcement TO editor_user';
+    END IF;
+    IF pg_get_serial_sequence('site_announcement', 'id') IS NOT NULL THEN
+      EXECUTE format(
+        'ALTER SEQUENCE %s OWNER TO map_app',
+        pg_get_serial_sequence('site_announcement', 'id')
+      );
+      EXECUTE format(
+        'GRANT ALL ON SEQUENCE %s TO map_app',
+        pg_get_serial_sequence('site_announcement', 'id')
+      );
+    END IF;
+  END IF;
+END $$;
+
 COMMIT;
