@@ -147,3 +147,82 @@ def delete_active_focus_lock(attempt) -> int:
         unlocked_at__isnull=True,
     ).delete()
     return deleted
+
+
+def sync_focus_locks_for_assessment_option(
+    assessment, *, enabled: bool, actor=None
+) -> dict:
+    """
+    When Lock on focus leave is toggled mid-session:
+    - Off: release every active lock on in-progress takes for this assessment.
+    - On: leave locking to student clients (they lock if the take tab is not visible).
+    """
+    from . import models as m
+    from .student_attempts import attempts_qs_for_template, course_template_assessment
+
+    template = course_template_assessment(assessment) or assessment
+    if enabled:
+        return {
+            "success": True,
+            "focus_lock_enabled": True,
+            "released_count": 0,
+            "locked_count": 0,
+        }
+
+    open_attempts = list(
+        attempts_qs_for_template(template)
+        .filter(status=m.StudentAssessmentAttempt.STATUS_IN_PROGRESS)
+        .select_related("user", "assessment")
+        .order_by("id")
+    )
+    released = 0
+    for attempt in open_attempts:
+        if active_focus_lock(attempt) is None:
+            continue
+        # Prefer release_focus_lock so unlock metadata is recorded; fall back
+        # to close_active_focus_lock if no actor is available.
+        if actor is not None:
+            result = release_focus_lock(
+                attempt,
+                released_by=actor,
+                reason="option_disabled",
+            )
+            if result.get("success"):
+                released += 1
+        else:
+            close_active_focus_lock(attempt, reason="option_disabled")
+            released += 1
+    return {
+        "success": True,
+        "focus_lock_enabled": False,
+        "released_count": released,
+        "locked_count": 0,
+    }
+
+
+def sync_focus_locks_for_course_default(course, *, actor=None) -> dict:
+    """Re-apply lock option for every template assessment that inherits course default."""
+    from . import models as m
+
+    assessments = m.Assessment.objects.filter(
+        course=course,
+        parent_assessment__isnull=True,
+        user__isnull=True,
+    ).exclude(status="deleted")
+    overridden = set(
+        m.AssessmentOptions.objects.filter(
+            assessment__in=assessments,
+            option_type_id=GROUP_LOCK_FOCUS,
+        ).values_list("assessment_id", flat=True)
+    )
+    released = 0
+    for assessment in assessments:
+        if assessment.id in overridden:
+            continue
+        result = sync_focus_locks_for_assessment_option(
+            assessment,
+            enabled=focus_lock_enabled(assessment),
+            actor=actor,
+        )
+        released += int(result.get("released_count") or 0)
+    return {"success": True, "released_count": released}

@@ -149,6 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function showFocusLockOverlay() {
     focusLocked = true;
+    document.body.classList.add('student-focus-lock-active');
     if (problemsEl) problemsEl.inert = true;
     if (submitBtn) submitBtn.disabled = true;
     if (focusLockOverlay) {
@@ -161,6 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function hideFocusLockOverlay() {
     focusLocked = false;
+    document.body.classList.remove('student-focus-lock-active');
     if (problemsEl) problemsEl.inert = false;
     if (focusLockOverlay) {
       focusLockOverlay.classList.remove('is-visible');
@@ -178,7 +180,9 @@ document.addEventListener('DOMContentLoaded', () => {
     focusLockEnabled = data?.focus_lock_enabled === true;
     if (data?.focus_locked === true) {
       showFocusLockOverlay();
-    } else if (focusLocked) {
+      return;
+    }
+    if (focusLocked) {
       hideFocusLockOverlay();
       setStatus('Your teacher unlocked the assessment. You may continue.');
     }
@@ -483,6 +487,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await res.json();
       if (!res.ok || !data.success) return;
       applyFocusLockState(data);
+      // Teacher may have just enabled lock while this tab is not visible.
+      if (
+        data.focus_lock_enabled === true
+        && data.focus_locked !== true
+        && document.visibilityState !== 'visible'
+      ) {
+        requestFocusLock(api);
+      }
       // End only when THIS student may no longer continue. Class `closed` alone
       // must not kill an authorized per-student retake.
       const shouldForceClose =

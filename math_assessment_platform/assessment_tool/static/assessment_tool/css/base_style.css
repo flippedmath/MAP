@@ -503,6 +503,29 @@ button:hover { background-color: #1d4ed8; }
     display: none;
 }
 
+.nav-focus-lock-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #dc2626;
+    flex-shrink: 0;
+}
+
+.nav-focus-lock-dot--trigger {
+    position: absolute;
+    top: 2px;
+    right: 12px;
+}
+
+.nav-focus-lock-dot.is-hidden {
+    display: none;
+}
+
+.nav-focus-lock-menu-item {
+    color: #991b1b;
+    font-weight: 600;
+}
+
 /* Notifications page */
 .notifications-list {
     display: flex;

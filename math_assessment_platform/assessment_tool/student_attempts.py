@@ -8,6 +8,7 @@ import copy
 import json
 import logging
 import threading
+from datetime import timedelta
 
 from django.db import close_old_connections, transaction
 from django.utils import timezone
@@ -204,26 +205,69 @@ def resolve_series_for_new_attempt(template, student, prior_attempts) -> int:
         return active
 
     if status == "retake" and student_has_submitted_in_series(prior_attempts, active):
-        # First starter under this class retake cycle advances the class series.
-        m = _models()
-        locked = (
-            m.Assessment.objects.select_for_update()
-            .filter(pk=template.pk)
-            .first()
-        )
-        if locked is None:
-            return active + 1
-        current = assessment_active_retake_series(locked)
-        # Re-check against possibly advanced value under the lock.
-        if student_has_submitted_in_series(prior_attempts, current):
-            next_series = current + 1
-            if assessment_active_retake_series(locked) < next_series:
-                locked.active_retake_series = next_series
-                locked.save(update_fields=["active_retake_series"])
-            return next_series
-        return current
+        # Assign the next series for this take, but do not advance the class
+        # active_retake_series until a student actually starts (begin_attempt).
+        # That way an unused open→close / retake→close can discard READY takes
+        # and leave the class series unchanged.
+        return active + 1
 
     return active
+
+
+def maybe_advance_active_retake_series_on_start(template, attempt) -> None:
+    """
+    Persist class active_retake_series when the first student starts a take in a
+    newer series under class ``retake`` (not per-student grants).
+    """
+    if template is None or attempt is None:
+        return
+    if normalize_assessment_status(getattr(template, "status", None)) != "retake":
+        return
+    from .student_assessment_actions import student_has_open_retake
+
+    if student_has_open_retake(template, attempt.user):
+        return
+    series = attempt_retake_series(attempt)
+    m = _models()
+    locked = (
+        m.Assessment.objects.select_for_update()
+        .filter(pk=template.pk)
+        .first()
+    )
+    if locked is None:
+        return
+    current = assessment_active_retake_series(locked)
+    if series > current:
+        locked.active_retake_series = series
+        locked.save(update_fields=["active_retake_series"])
+
+
+def revert_active_retake_series_to_used(template) -> int:
+    """
+    Snap active_retake_series back to the highest series that has real student
+    work (started / submitted). Used after discarding an unused class session.
+    """
+    template = course_template_assessment(template) or template
+    m = _models()
+    max_used = 1
+    for att in attempts_qs_for_template(template).iterator():
+        if (
+            att.started_at is not None
+            or att.auto_graded_at is not None
+            or att.status
+            in (
+                m.StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+                m.StudentAssessmentAttempt.STATUS_SUBMITTED,
+            )
+        ):
+            max_used = max(max_used, attempt_retake_series(att))
+    current = assessment_active_retake_series(template)
+    if current > max_used:
+        template.active_retake_series = max_used
+        template.modified_date = timezone.now()
+        template.save(update_fields=["active_retake_series", "modified_date"])
+        return max_used
+    return current
 
 
 def assessment_is_hidden_from_students(assessment) -> bool:
@@ -336,7 +380,8 @@ def force_submit_unsubmitted_attempts(template, *, reason: str = "closed") -> di
     Compile saved answers for every ready/in_progress attempt on this template
     into graded submissions.
 
-    Per-student retakes are left alone — those end only via Close retake.
+    Per-student open-retake grants are left alone — those end only via Close retake.
+    Class-wide retake/open takes are force-submitted when the class closes.
     """
     m = _models()
     template = course_template_assessment(template) or template
@@ -407,9 +452,14 @@ def close_assessment_and_finalize_attempts(
     """
     Mark the course assessment closed (optional) and finalize open takes.
 
-    If nobody has started or submitted, discard generated ready attempts and
-    write no grade rows (throws an experimental open→close with no student work).
-    Otherwise force-submit open non-retake attempts as usual (absentees → 0).
+    Session rules (open / retake / upcoming window that is being closed):
+    - If nobody started during the current session, discard generated READY
+      attempts (as if the window never opened) and do not write new grades.
+      Per-student open-retake grants are left alone.
+    - If at least one student started, force-submit unfinished class attempts
+      and score them (per-student grants still left alone).
+
+    When no session stamp exists (legacy), fall back to lifetime engagement.
     """
     from .course_enrollment import record_zeros_on_assessment_close
 
@@ -423,13 +473,63 @@ def close_assessment_and_finalize_attempts(
             template.save(update_fields=["status", "modified_date"])
             status_changed = True
 
+    # Capture before finalize_class_session_on_close clears the pending stamp.
+    pending = _aware(getattr(template, "open_session_pending_at", None))
+    session_had_start = (
+        session_had_student_start(template, since=pending)
+        if pending is not None
+        else None
+    )
+
+    cancel_active_generation_jobs(
+        template, reason="Cancelled because the assessment was closed."
+    )
     finalize_class_session_on_close(template)
 
-    if not assessment_has_student_engagement(template):
-        discard_result = discard_all_unstarted_attempts(template)
-        # Defensive: drop any accidental grade rows for this unused assessment.
+    throw_unused_session = False
+    if session_had_start is False:
+        throw_unused_session = True
+    elif session_had_start is True:
+        throw_unused_session = False
+    else:
+        # No pending stamp (already closed / legacy). If the only open class
+        # takes are never-started READY rows, throw them away — including the
+        # leftover class-retake case after a prior closed→retake→closed cycle.
         m = _models()
-        m.FinalGradeCalculation.objects.filter(assessment_id=template.id).delete()
+        has_in_progress = False
+        has_ready = False
+        for att in (
+            attempts_qs_for_template(template)
+            .filter(
+                status__in=(
+                    m.StudentAssessmentAttempt.STATUS_READY,
+                    m.StudentAssessmentAttempt.STATUS_IN_PROGRESS,
+                )
+            )
+            .select_related("user")
+            .iterator()
+        ):
+            if attempt_may_continue_while_closed(att, template, att.user):
+                continue
+            if att.status == m.StudentAssessmentAttempt.STATUS_IN_PROGRESS:
+                has_in_progress = True
+            else:
+                has_ready = True
+        if has_ready and not has_in_progress:
+            throw_unused_session = True
+        elif not assessment_has_student_engagement(template):
+            throw_unused_session = True
+        else:
+            throw_unused_session = False
+
+    if throw_unused_session:
+        discard_result = discard_unstarted_class_attempts(template)
+        reverted_series = revert_active_retake_series_to_used(template)
+        # Defensive: drop accidental grade rows only when the assessment never
+        # had real engagement at all.
+        m = _models()
+        if not assessment_has_student_engagement(template):
+            m.FinalGradeCalculation.objects.filter(assessment_id=template.id).delete()
         return {
             "reason": reason,
             "thrown": True,
@@ -440,6 +540,7 @@ def close_assessment_and_finalize_attempts(
             "skipped_retake_ids": [],
             "errors": [],
             "zeros_recorded": 0,
+            "reverted_active_retake_series": reverted_series,
             **discard_result,
         }
 
@@ -515,7 +616,18 @@ def assessment_has_student_engagement(template) -> bool:
 
 
 def discard_all_unstarted_attempts(template) -> dict:
-    """Remove every READY attempt (and take artifacts) for a course assessment."""
+    """Remove every READY class attempt (and take artifacts) for a course assessment."""
+    return discard_unstarted_class_attempts(template)
+
+
+def discard_unstarted_class_attempts(template) -> dict:
+    """
+    Remove READY attempts that were never started.
+
+    Per-student open-retake grants are preserved (those end via Close retake).
+    """
+    from .student_assessment_actions import student_has_open_retake
+
     m = _models()
     template = course_template_assessment(template) or template
     ready = list(
@@ -525,12 +637,17 @@ def discard_all_unstarted_attempts(template) -> dict:
         .order_by("id")
     )
     discarded_ids = []
+    skipped_grant_ids = []
     for attempt in ready:
+        if student_has_open_retake(template, attempt.user):
+            skipped_grant_ids.append(attempt.id)
+            continue
         if discard_unstarted_attempt(attempt):
             discarded_ids.append(attempt.id)
     return {
         "discarded_count": len(discarded_ids),
         "discarded_attempt_ids": discarded_ids,
+        "skipped_grant_attempt_ids": skipped_grant_ids,
     }
 
 def close_expired_upcoming_assessments(*, now=None) -> dict:
@@ -667,7 +784,91 @@ def student_may_start_attempt(assessment, student, attempts=None, *, now=None) -
         return False
     return True
 
+# Daemon generation workers can die on runserver reload / gunicorn recycle and
+# leave rows stuck in pending/running, which blocks all further status edits.
+# Pending should flip to running almost immediately; treat longer as dead.
+_GENERATION_PENDING_STALE = timedelta(seconds=15)
+_GENERATION_RUNNING_STALE = timedelta(minutes=5)
+
+
+def cancel_active_generation_jobs(assessment, *, reason: str = "cancelled") -> int:
+    """Mark any pending/running generation jobs for this assessment as failed."""
+    m = _models()
+    template = course_template_assessment(assessment) or assessment
+    now = timezone.now()
+    qs = m.AssessmentGenerationJob.objects.filter(
+        assessment=template,
+        status__in=(
+            m.AssessmentGenerationJob.STATUS_PENDING,
+            m.AssessmentGenerationJob.STATUS_RUNNING,
+        ),
+    )
+    count = 0
+    for job in qs.iterator():
+        job.status = m.AssessmentGenerationJob.STATUS_FAILED
+        job.error_message = str(reason or "cancelled")[:4000]
+        job.finished_at = now
+        job.save(update_fields=["status", "error_message", "finished_at"])
+        count += 1
+    return count
+
+
+def fail_stale_generation_jobs(assessment=None) -> int:
+    """
+    Mark abandoned generation jobs as failed so teachers can change status again.
+
+    Pending jobs should move to running almost immediately; if they do not, the
+    worker never started. Long-running jobs are treated as abandoned workers.
+    Jobs that already counted every student but never flipped to complete/failed
+    are also treated as abandoned (worker died after the loop).
+    """
+    m = _models()
+    now = timezone.now()
+    qs = m.AssessmentGenerationJob.objects.filter(
+        status__in=(
+            m.AssessmentGenerationJob.STATUS_PENDING,
+            m.AssessmentGenerationJob.STATUS_RUNNING,
+        )
+    )
+    if assessment is not None:
+        qs = qs.filter(assessment=assessment)
+
+    failed = 0
+    for job in qs.iterator():
+        started = _aware(job.started_at) or now
+        age = now - started
+        total = int(job.total_students or 0)
+        completed = int(job.completed_students or 0)
+        finished_counts = total > 0 and completed >= total
+        if job.status == m.AssessmentGenerationJob.STATUS_PENDING:
+            stale = age >= _GENERATION_PENDING_STALE or finished_counts
+        else:
+            stale = age >= _GENERATION_RUNNING_STALE or finished_counts
+        if not stale:
+            continue
+        prior_status = job.status
+        job.status = m.AssessmentGenerationJob.STATUS_FAILED
+        job.error_message = (
+            "Generation worker did not finish (timed out or interrupted)."
+        )[:4000]
+        job.finished_at = now
+        job.save(update_fields=["status", "error_message", "finished_at"])
+        failed += 1
+        logger.warning(
+            "Failed stale assessment generation job id=%s assessment_id=%s "
+            "prior_status=%s age_s=%.0f completed=%s/%s",
+            job.id,
+            job.assessment_id,
+            prior_status,
+            age.total_seconds(),
+            completed,
+            total,
+        )
+    return failed
+
+
 def generation_job_blocks_edits(assessment) -> bool:
+    fail_stale_generation_jobs(assessment)
     m = _models()
     return m.AssessmentGenerationJob.objects.filter(
         assessment=assessment,
@@ -679,6 +880,7 @@ def generation_job_blocks_edits(assessment) -> bool:
 
 
 def latest_generation_job(assessment):
+    fail_stale_generation_jobs(assessment)
     m = _models()
     return (
         m.AssessmentGenerationJob.objects.filter(assessment=assessment)
@@ -1113,13 +1315,16 @@ def attempt_is_retake(attempt, template=None) -> bool:
 
 
 def attempt_may_continue_while_closed(attempt, template, student) -> bool:
-    """Allow an in-flight take on a closed class assessment (retake / grant)."""
-    if attempt is None:
+    """
+    Allow an in-flight take on a closed class assessment only when the teacher
+    granted a per-student open retake (REDO). Class-wide open/retake takes end
+    when the class assessment is closed.
+    """
+    if attempt is None or student is None:
         return False
-    if attempt_is_retake(attempt, template):
-        return True
     from .student_assessment_actions import student_has_open_retake
 
+    template = course_template_assessment(template) or template
     return student_has_open_retake(template, student)
 
 
@@ -1423,15 +1628,33 @@ def begin_attempt_for_student(attempt) -> object:
     if attempt.status != m.StudentAssessmentAttempt.STATUS_READY:
         return attempt
 
-    attempt.status = m.StudentAssessmentAttempt.STATUS_IN_PROGRESS
-    if attempt.started_at is None:
-        attempt.started_at = timezone.now()
-    attempt.save(update_fields=["status", "started_at"])
+    with transaction.atomic():
+        locked = (
+            m.StudentAssessmentAttempt.objects.select_for_update()
+            .filter(pk=attempt.pk)
+            .first()
+        )
+        if locked is None or locked.status != m.StudentAssessmentAttempt.STATUS_READY:
+            return locked or attempt
+
+        locked.status = m.StudentAssessmentAttempt.STATUS_IN_PROGRESS
+        if locked.started_at is None:
+            locked.started_at = timezone.now()
+        locked.save(update_fields=["status", "started_at"])
+
+        template = course_template_assessment(
+            m.Assessment.objects.filter(pk=locked.assessment_id).first()
+        )
+        if template is not None:
+            maybe_advance_active_retake_series_on_start(template, locked)
+        attempt = locked
+
     if attempt.user_id:
         m.UserProfile.objects.filter(pk=attempt.user_id).update(
             ongoing_assessment=True
         )
-        attempt.user.ongoing_assessment = True
+        if getattr(attempt, "user", None) is not None:
+            attempt.user.ongoing_assessment = True
     return attempt
 
 
@@ -1509,54 +1732,99 @@ def run_generation_job(job_id: int):
         job.save(update_fields=["status", "error_message", "finished_at"])
         return
 
+    # Bail out if the class was closed (or the job was cancelled) before we start.
+    job.refresh_from_db(fields=["status"])
+    if job.status not in (
+        m.AssessmentGenerationJob.STATUS_PENDING,
+        m.AssessmentGenerationJob.STATUS_RUNNING,
+    ):
+        return
+
     job.status = m.AssessmentGenerationJob.STATUS_RUNNING
     job.save(update_fields=["status"])
 
-    enrollments = _active_enrollments_for_course(assessment.course)
-    job.total_students = len(enrollments)
-    job.completed_students = 0
-    job.save(update_fields=["total_students", "completed_students"])
+    try:
+        enrollments = _active_enrollments_for_course(assessment.course)
+        job.total_students = len(enrollments)
+        job.completed_students = 0
+        job.save(update_fields=["total_students", "completed_students"])
 
-    # Mint the shared attempt-1 form once before cloning to every student.
-    from .assessment_sync import ensure_synchronized_form, synchronized_tests_enabled
+        # Mint the shared attempt-1 form once before cloning to every student.
+        from .assessment_sync import ensure_synchronized_form, synchronized_tests_enabled
 
-    if synchronized_tests_enabled(assessment):
-        try:
-            ensure_synchronized_form(assessment, 1)
-        except Exception as exc:
-            job.status = m.AssessmentGenerationJob.STATUS_FAILED
-            job.error_message = f"Synchronized form generation failed: {exc}"[:4000]
-            job.finished_at = timezone.now()
-            job.save(update_fields=["status", "error_message", "finished_at"])
+        if synchronized_tests_enabled(assessment):
+            try:
+                ensure_synchronized_form(assessment, 1)
+            except Exception as exc:
+                job.status = m.AssessmentGenerationJob.STATUS_FAILED
+                job.error_message = (
+                    f"Synchronized form generation failed: {exc}"
+                )[:4000]
+                job.finished_at = timezone.now()
+                job.save(update_fields=["status", "error_message", "finished_at"])
+                return
+
+        # Re-check: teacher may have closed/cancelled while we were syncing.
+        job.refresh_from_db(fields=["status"])
+        if job.status != m.AssessmentGenerationJob.STATUS_RUNNING:
             return
 
-    errors = []
-    for enrollment in enrollments:
-        try:
-            generate_attempt_for_student(assessment, enrollment.user, enrollment)
-        except Exception as exc:
-            logger.exception(
-                "Failed generating attempt assessment=%s student=%s",
-                assessment.id,
-                enrollment.user_id,
-            )
-            errors.append(f"user {enrollment.user_id}: {exc}")
-        job.completed_students = (job.completed_students or 0) + 1
-        job.save(update_fields=["completed_students"])
+        assessment.refresh_from_db(fields=["status"])
+        # Class-wide retake must mint a new take for students who already submitted.
+        force_new = normalize_assessment_status(assessment.status) == "retake"
 
-    job.finished_at = timezone.now()
-    if errors:
-        job.status = m.AssessmentGenerationJob.STATUS_FAILED
-        job.error_message = "; ".join(errors)[:4000]
-    else:
-        job.status = m.AssessmentGenerationJob.STATUS_COMPLETE
-        job.error_message = None
-    job.save(update_fields=["status", "error_message", "finished_at"])
+        errors = []
+        for enrollment in enrollments:
+            job.refresh_from_db(fields=["status"])
+            if job.status != m.AssessmentGenerationJob.STATUS_RUNNING:
+                return
+            try:
+                generate_attempt_for_student(
+                    assessment,
+                    enrollment.user,
+                    enrollment,
+                    force_new=force_new,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Failed generating attempt assessment=%s student=%s",
+                    assessment.id,
+                    enrollment.user_id,
+                )
+                errors.append(f"user {enrollment.user_id}: {exc}")
+            job.completed_students = (job.completed_students or 0) + 1
+            job.save(update_fields=["completed_students"])
+
+        job.finished_at = timezone.now()
+        if errors:
+            job.status = m.AssessmentGenerationJob.STATUS_FAILED
+            job.error_message = "; ".join(errors)[:4000]
+        else:
+            job.status = m.AssessmentGenerationJob.STATUS_COMPLETE
+            job.error_message = None
+        job.save(update_fields=["status", "error_message", "finished_at"])
+    except Exception as exc:
+        logger.exception("Assessment generation job %s crashed", job_id)
+        try:
+            job.refresh_from_db()
+            if job.status in (
+                m.AssessmentGenerationJob.STATUS_PENDING,
+                m.AssessmentGenerationJob.STATUS_RUNNING,
+            ):
+                job.status = m.AssessmentGenerationJob.STATUS_FAILED
+                job.error_message = f"Generation crashed: {exc}"[:4000]
+                job.finished_at = timezone.now()
+                job.save(update_fields=["status", "error_message", "finished_at"])
+        except Exception:
+            logger.exception(
+                "Could not mark generation job %s failed after crash", job_id
+            )
 
 
 def start_generation_job(parent_assessment):
     """Create a job row and kick an async worker after commit."""
     m = _models()
+    fail_stale_generation_jobs(parent_assessment)
     if generation_job_blocks_edits(parent_assessment):
         return latest_generation_job(parent_assessment)
 
@@ -1571,13 +1839,27 @@ def start_generation_job(parent_assessment):
     job_id = job.id
 
     def _spawn():
-        t = threading.Thread(
-            target=run_generation_job,
-            args=(job_id,),
-            name=f"assessment-gen-{job_id}",
-            daemon=True,
-        )
-        t.start()
+        try:
+            t = threading.Thread(
+                target=run_generation_job,
+                args=(job_id,),
+                name=f"assessment-gen-{job_id}",
+                daemon=True,
+            )
+            t.start()
+        except Exception as exc:
+            logger.exception("Failed to start generation worker for job %s", job_id)
+            try:
+                m.AssessmentGenerationJob.objects.filter(pk=job_id).update(
+                    status=m.AssessmentGenerationJob.STATUS_FAILED,
+                    error_message=f"Could not start generation worker: {exc}"[:4000],
+                    finished_at=timezone.now(),
+                )
+            except Exception:
+                logger.exception(
+                    "Could not mark generation job %s failed after spawn error",
+                    job_id,
+                )
 
     transaction.on_commit(_spawn)
     return job
@@ -2216,6 +2498,8 @@ def _notify_teacher_manual_grading(attempt):
 
 def open_takeable_assessments_for_student(student) -> list[dict]:
     """Dashboard rows: assessments the student may start or continue."""
+    from .student_assessment_actions import student_has_open_retake
+
     m = _models()
 
     enrollments = list(
@@ -2235,10 +2519,12 @@ def open_takeable_assessments_for_student(student) -> list[dict]:
             user__isnull=True,
         ).exclude(status__in=("deleted", "hidden"))
         for assessment in assessments:
+            # Include historic take/retake rows under the course template — not
+            # just attempts that still point at the template itself.
             attempts = list(
-                m.StudentAssessmentAttempt.objects.filter(
-                    enrollment=enr, assessment=assessment
-                ).order_by("id")
+                attempts_qs_for_template(assessment)
+                .filter(enrollment=enr)
+                .order_by("id")
             )
             if not student_may_start_attempt(
                 assessment, student, attempts, now=now
@@ -2252,6 +2538,11 @@ def open_takeable_assessments_for_student(student) -> list[dict]:
             if window_open and end is not None:
                 remaining_seconds = max(0, int((end - now).total_seconds()))
                 window_ends_at = end.isoformat()
+            facing = student_facing_assessment_status(assessment, now=now)
+            is_redo = bool(
+                student_has_open_retake(assessment, student)
+                and not assessment_is_takeable(assessment, now=now)
+            )
             rows.append(
                 {
                     "course_id": enr.course_id,
@@ -2259,9 +2550,8 @@ def open_takeable_assessments_for_student(student) -> list[dict]:
                     "assessment_id": assessment.id,
                     "assessment_name": assessment.name,
                     "attempt_status": attempt.status if attempt else None,
-                    "display_status": student_facing_assessment_status(
-                        assessment, now=now
-                    ),
+                    "display_status": "REDO" if is_redo else facing,
+                    "is_redo": is_redo,
                     "window_ends_at": window_ends_at,
                     "remaining_seconds": remaining_seconds,
                 }

@@ -697,3 +697,45 @@ def teacher_focus_unlocks_for_user(user):
             }
         )
     return rows
+
+
+def teacher_focus_unlock_courses_summary(rows) -> list[dict]:
+    """
+    Collapse per-attempt lock rows into one summary per course for nav indicators.
+    """
+    by_course: dict[int, dict] = {}
+    for row in rows or []:
+        course_id = row.get("course_id")
+        if course_id is None:
+            continue
+        bucket = by_course.get(course_id)
+        if bucket is None:
+            bucket = {
+                "course_id": course_id,
+                "course_name": row.get("course_name") or f"Course {course_id}",
+                "count": 0,
+                "assessment_ids": set(),
+            }
+            by_course[course_id] = bucket
+        bucket["count"] += 1
+        aid = row.get("assessment_id")
+        if aid is not None:
+            bucket["assessment_ids"].add(aid)
+    out = []
+    for course_id in sorted(
+        by_course.keys(), key=lambda cid: (by_course[cid]["course_name"], cid)
+    ):
+        bucket = by_course[course_id]
+        assessment_ids = sorted(bucket["assessment_ids"])
+        out.append(
+            {
+                "course_id": course_id,
+                "course_name": bucket["course_name"],
+                "count": bucket["count"],
+                "assessment_ids": assessment_ids,
+                # Prefer the assessment unlock page when only one assessment is locked.
+                "url_kind": "assessment" if len(assessment_ids) == 1 else "grades",
+                "assessment_id": assessment_ids[0] if len(assessment_ids) == 1 else None,
+            }
+        )
+    return out

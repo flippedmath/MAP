@@ -147,6 +147,25 @@
     pointer-events: none;
   }
   .curve-tooltip-popover.is-visible { display: block; }
+  .grades-view-assessments-link {
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .grades-assessment-name-cell {
+    display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+  }
+  .grades-assessment-name-cell .grades-assessment-name {
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .grades-lock-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.1rem; height: 1.1rem; padding: 0 4px;
+    border-radius: 999px; background: #dc2626; color: #fff;
+    font-size: 0.7rem; font-weight: 800; line-height: 1; flex-shrink: 0;
+  }
+  .grades-lock-badge[hidden] { display: none !important; }
+  tr.has-focus-lock-alert td:first-child {
+    box-shadow: inset 3px 0 0 #dc2626;
+  }
 </style>
 {% endblock %}
 
@@ -216,8 +235,19 @@
     </thead>
     <tbody>
       {% for row in grade_rows %}
-      <tr>
-        <td>{{ row.name }}</td>
+      <tr data-grades-overview-row data-assessment-id="{{ row.assessment_id }}">
+        <td>
+          <span class="grades-assessment-name-cell">
+            <span class="grades-assessment-name">{{ row.name }}</span>
+            <span
+              class="grades-lock-badge"
+              data-assessment-name-lock-badge
+              hidden
+              title="Students awaiting unlock — scroll right to View Student Assessments"
+              aria-label="Students awaiting unlock"
+            >!</span>
+          </span>
+        </td>
         <td>{{ row.status|default:"—" }}</td>
         <td>{{ row.submitted_count }} / {{ row.attempt_count }}</td>
         <td>
@@ -328,9 +358,11 @@
         </td>
         <td style="white-space:nowrap;">
           <a
-            class="grades-link{% if row.unfinished_manual_count %} manual-required{% endif %}"
+            class="grades-link grades-view-assessments-link{% if row.unfinished_manual_count %} manual-required{% endif %}"
             href="{% url 'course_grades_assessment' course.id row.assessment_id %}"
-          >View Student Assessments</a>
+            data-view-student-assessments
+            data-assessment-id="{{ row.assessment_id }}"
+          >View Student Assessments<span class="grades-lock-badge" data-view-assessments-lock-badge hidden aria-label="Students awaiting unlock">!</span></a>
         </td>
       </tr>
       {% empty %}

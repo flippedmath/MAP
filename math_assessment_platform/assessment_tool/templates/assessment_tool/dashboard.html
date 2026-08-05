@@ -380,8 +380,12 @@
                     </div>
                     <div class="dashboard-course-meta">
                         <span class="dashboard-course-status">{{ row.course_name }}</span>
-                        {% if row.attempt_status == 'in_progress' %}
+                        {% if row.is_redo %}
+                        <span class="dashboard-course-teachers">Open for retake (REDO)</span>
+                        {% elif row.attempt_status == 'in_progress' %}
                         <span class="dashboard-course-teachers">In progress</span>
+                        {% elif row.display_status %}
+                        <span class="dashboard-course-teachers">{{ row.display_status }}</span>
                         {% endif %}
                         {% if row.window_ends_at %}
                         <span class="dashboard-course-teachers dashboard-open-remaining"

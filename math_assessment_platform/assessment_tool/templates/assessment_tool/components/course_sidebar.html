@@ -42,9 +42,10 @@
                 <span class="nav-label">Assessments</span>
             </a>
 
-            <a href="{% url 'course_grades' course.id %}" class="nav-item {% if active_tab == 'grades' %}active{% endif %}">
+            <a href="{% url 'course_grades' course.id %}" class="nav-item {% if active_tab == 'grades' %}active{% endif %}" data-sidebar-grades="true">
                 <span class="nav-icon">📈</span>
                 <span class="nav-label">Grades</span>
+                <span class="nav-lock-badge" data-grades-lock-badge hidden></span>
             </a>
             
             {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}

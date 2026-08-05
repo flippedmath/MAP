@@ -133,6 +133,10 @@
   }
   .grades-live-unlock-box ul { margin: 6px 0 0; padding-left: 20px; }
   .grades-live-unlock-box a { color: #991b1b; font-weight: 700; }
+  .grades-live-unlock-note {
+    margin: 8px 0 0; font-size: 0.88rem; line-height: 1.45; font-weight: 500;
+    color: #7f1d1d;
+  }
 </style>
 {% endblock %}
 
@@ -186,6 +190,12 @@
 
 <div class="grades-live-unlock-box" id="grades-live-unlock-box" hidden>
   <strong>Students awaiting unlock</strong>
+  <p class="grades-live-unlock-note">
+    You can turn locking off for an assessment via the gear icon on the Grades page
+    (course defaults) or the assessment Settings / Assessments delivery gear.
+    Changing that setting while a test is ongoing unlocks locked students immediately
+    if turned off, or locks students who leave the take tab if turned on.
+  </p>
   <ul id="grades-live-unlock-list"></ul>
 </div>
 

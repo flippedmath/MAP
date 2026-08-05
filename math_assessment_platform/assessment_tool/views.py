@@ -17,6 +17,7 @@ from .dashboard import (
     dashboard_courses_for_user,
     dashboard_parent_groups_for_user,
     dashboard_student_closed_grades_for_user,
+    teacher_focus_unlock_courses_summary,
     teacher_focus_unlocks_for_user,
     teacher_grade_releases_for_user,
     teacher_manual_grading_for_user,
@@ -257,7 +258,35 @@ def teacher_live_attention_ajax(request):
                 ),
             }
         )
-    return JsonResponse({"success": True, "focus_unlock_requests": payload})
+    courses = []
+    for summary in teacher_focus_unlock_courses_summary(rows):
+        course_id = summary["course_id"]
+        if summary["url_kind"] == "assessment" and summary.get("assessment_id"):
+            manage_url = reverse(
+                "course_grades_assessment",
+                kwargs={
+                    "course_id": course_id,
+                    "assessment_id": summary["assessment_id"],
+                },
+            )
+        else:
+            manage_url = reverse("course_grades", kwargs={"course_id": course_id})
+        courses.append(
+            {
+                "course_id": course_id,
+                "course_name": summary["course_name"],
+                "count": summary["count"],
+                "assessment_ids": summary["assessment_ids"],
+                "manage_url": manage_url,
+            }
+        )
+    return JsonResponse(
+        {
+            "success": True,
+            "focus_unlock_requests": payload,
+            "focus_unlock_courses": courses,
+        }
+    )
 
 
 @login_required
@@ -2883,6 +2912,7 @@ def assessment_view(request, course_id):
         for assessment in assessments:
             attempts = attempts_by_assessment.get(assessment.id) or []
             counting_list = select_counting_attempts_by_series(attempts, assessment)
+            counting_ids = {a.id for a in counting_list}
             counting = counting_list[-1] if counting_list else None
             submitted_attempts = [
                 a
@@ -2933,7 +2963,7 @@ def assessment_view(request, course_id):
                         else None,
                         "earned_points": a.earned_points,
                         "max_points": a.max_points,
-                        "is_counting": counting is not None and a.id == counting.id,
+                        "is_counting": a.id in counting_ids,
                         "can_open": can_open,
                         "review_url": (
                             reverse(
@@ -3328,7 +3358,11 @@ def update_assessment_status_ajax(request, course_id):
         mark_class_session_opened(assessment, at=session_at)
 
     job_payload = None
-    if new_status in ('open', 'retake'):
+    if new_status == 'open':
+        # Pre-generate unique takes while the class is open.
+        # Class-wide retake intentionally skips this: attempts are minted when a
+        # student starts, so a dead background worker cannot leave the status
+        # dropdown stuck and silently block retake→closed round-trips.
         job = start_generation_job(assessment)
         job_payload = job_status_payload(assessment) if job else None
 

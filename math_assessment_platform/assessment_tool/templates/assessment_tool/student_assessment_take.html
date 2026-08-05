@@ -84,9 +84,12 @@
     align-items: center;
     justify-content: center;
     padding: 24px;
-    background: rgba(15, 23, 42, 0.72);
+    background: #64748b;
   }
   .student-focus-lock-overlay.is-visible { display: flex; }
+  body.student-focus-lock-active {
+    overflow: hidden !important;
+  }
   .student-focus-lock-card {
     width: min(560px, 100%);
     padding: 28px;

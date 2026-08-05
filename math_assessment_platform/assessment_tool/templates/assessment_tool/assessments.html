@@ -703,6 +703,7 @@ document.addEventListener("DOMContentLoaded", function() {
             const okBtn = document.getElementById('class-retake-confirm-ok');
             const cancelBtn = document.getElementById('class-retake-confirm-cancel');
             const cleanup = (value) => {
+                classRetakeOverlay.classList.remove('is-open');
                 classRetakeOverlay.hidden = true;
                 classRetakeOverlay.setAttribute('aria-hidden', 'true');
                 okBtn.removeEventListener('click', onOk);
@@ -714,6 +715,7 @@ document.addEventListener("DOMContentLoaded", function() {
             okBtn.addEventListener('click', onOk);
             cancelBtn.addEventListener('click', onCancel);
             classRetakeOverlay.hidden = false;
+            classRetakeOverlay.classList.add('is-open');
             classRetakeOverlay.setAttribute('aria-hidden', 'false');
         });
     }
@@ -753,7 +755,15 @@ document.addEventListener("DOMContentLoaded", function() {
                         },
                         body: JSON.stringify(body)
                     });
-                    return { response, data: await response.json() };
+                    let data = {};
+                    try {
+                        data = await response.json();
+                    } catch (_) {
+                        data = {
+                            error: `Status update failed (HTTP ${response.status}).`
+                        };
+                    }
+                    return { response, data };
                 }
 
                 let result = await submitStatus('');
@@ -789,7 +799,11 @@ document.addEventListener("DOMContentLoaded", function() {
                         handleStatusFieldMutation(assessmentId, targetState);
                     }
                 } else {
-                    alert(data.error || 'Failed saving status update.');
+                    const message = data.error
+                        || (data.code === 'generation_in_progress'
+                            ? 'Unique student assessments are still being generated. Wait a moment, then try again.'
+                            : 'Failed saving status update.');
+                    alert(message);
                     this.value = previousState;
                 }
             } catch(err) {

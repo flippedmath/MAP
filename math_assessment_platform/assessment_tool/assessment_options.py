@@ -94,6 +94,7 @@ ASSESSMENT_GRADES_OPTION_GROUPS = frozenset(
         GROUP_STUDENT_VIEW,
         GROUP_RETAKE_SCORING,
         GROUP_SCORE_RELEASE,
+        GROUP_LOCK_FOCUS,
     }
 )
 
@@ -425,6 +426,11 @@ def save_course_default_options(
                         continue
                     sync_assessment_release_mode_from_options(assessment)
 
+            if group_num == GROUP_LOCK_FOCUS:
+                from .assessment_focus_lock import sync_focus_locks_for_course_default
+
+                sync_focus_locks_for_course_default(course)
+
         if default_time_limit_minutes is not None and hasattr(
             course, "default_time_limit_minutes"
         ):
@@ -457,6 +463,7 @@ def save_assessment_options(
     with transaction.atomic():
         student_view_touched = False
         score_release_touched = False
+        lock_focus_touched = False
         for item in selections:
             if not isinstance(item, dict):
                 continue
@@ -476,6 +483,8 @@ def save_assessment_options(
                 student_view_touched = True
             if group_num == GROUP_SCORE_RELEASE:
                 score_release_touched = True
+            if group_num == GROUP_LOCK_FOCUS:
+                lock_focus_touched = True
 
             if item.get("clear") or item.get("choice") is None:
                 m.AssessmentOptions.objects.filter(
@@ -529,6 +538,15 @@ def save_assessment_options(
             from .assessment_grades import sync_assessment_release_mode_from_options
 
             sync_assessment_release_mode_from_options(assessment)
+
+        if lock_focus_touched:
+            from .assessment_focus_lock import sync_focus_locks_for_assessment_option
+
+            sync_focus_locks_for_assessment_option(
+                assessment,
+                enabled=resolved_assessment_option(assessment, GROUP_LOCK_FOCUS)
+                == CHOICE_LOCK_ON,
+            )
 
     return assessment_options_payload(assessment, subset=subset)
 
