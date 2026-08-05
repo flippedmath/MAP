@@ -22,6 +22,7 @@ TITLE_GRADES_CONTROL = "Grades control: weights, curves, retakes, and score rele
 TITLE_EXPLORER = "Explorer, collaboration, and the Public Library"
 TITLE_CREDITS = "Seat credits, course unlock, and student invites"
 TITLE_ROLES = "Co-teachers, parents, and course roles"
+TITLE_DATA_PRIVACY = "Data privacy: how MAP handles school and student information"
 
 ABOUT_ARTICLE_TITLES = (
     TITLE_MAP_AND_FLIPPEDMATH,
@@ -36,6 +37,7 @@ ABOUT_ARTICLE_TITLES = (
     TITLE_EXPLORER,
     TITLE_CREDITS,
     TITLE_ROLES,
+    TITLE_DATA_PRIVACY,
 )
 
 # About page claim blocks: short copy + canonical article title.
@@ -138,6 +140,15 @@ ABOUT_CLAIM_BLOCKS = (
             "lifecycle from developing draft through closed archive."
         ),
         "article_title": TITLE_ROLES,
+    },
+    {
+        "key": "privacy",
+        "title": "Built with school data privacy in mind",
+        "body": (
+            "Role-scoped access, invite-based enrollment, teacher-controlled score release, "
+            "and course-limited parent grade links—without selling student data for ads."
+        ),
+        "article_title": TITLE_DATA_PRIVACY,
     },
 )
 

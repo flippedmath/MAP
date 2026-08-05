@@ -69,14 +69,29 @@ urlpatterns = [
         name='contact_delete',
     ),
     path(
+        'tickets/contact/<int:contact_id>/attachments/<int:attachment_id>/',
+        ticket_views.contact_attachment_download,
+        name='contact_attachment_download',
+    ),
+    path(
         'tickets/api/qa-search/',
         ticket_views.ticket_qa_search_api,
         name='ticket_qa_search_api',
     ),
     path(
+        'tickets/t/<str:access_token>/attachments/<int:attachment_id>/',
+        ticket_views.ticket_client_attachment_download,
+        name='ticket_client_attachment_download',
+    ),
+    path(
         'tickets/t/<str:access_token>/',
         ticket_views.ticket_client_view,
         name='ticket_client',
+    ),
+    path(
+        'tickets/<int:ticket_id>/attachments/<int:attachment_id>/',
+        ticket_views.ticket_attachment_download,
+        name='ticket_attachment_download',
     ),
     path(
         'tickets/<int:ticket_id>/',

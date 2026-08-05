@@ -6,14 +6,15 @@ from django.contrib import messages
 from django.contrib.auth.decorators import user_passes_test
 from django.core.exceptions import ValidationError
 from django.db.models import Q
-from django.http import JsonResponse, QueryDict
+from django.http import FileResponse, Http404, JsonResponse, QueryDict
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .dashboard import user_display_name
-from .models import ContactUs, Ticket, UserProfile
+from .models import ContactUs, ContactUsAttachment, Ticket, TicketAttachment, UserProfile
+from . import ticket_attachments as attach_lib
 from . import tickets as ticket_lib
 
 
@@ -41,7 +42,54 @@ def _form_defaults_from_user(user):
     }
 
 
-def _serialize_discussion(row):
+def _format_bytes(n) -> str:
+    try:
+        size = int(n or 0)
+    except (TypeError, ValueError):
+        return ""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _contact_attachment_payload(att: ContactUsAttachment) -> dict:
+    return {
+        "id": att.id,
+        "filename": att.original_filename or f"attachment-{att.id}.pdf",
+        "size_label": _format_bytes(att.byte_size),
+        "url": reverse(
+            "contact_attachment_download",
+            kwargs={"contact_id": att.contact_us_id, "attachment_id": att.id},
+        ),
+    }
+
+
+def _ticket_attachment_payload(
+    att: TicketAttachment,
+    *,
+    access_token: str | None = None,
+) -> dict:
+    if access_token:
+        url = reverse(
+            "ticket_client_attachment_download",
+            kwargs={"access_token": access_token, "attachment_id": att.id},
+        )
+    else:
+        url = reverse(
+            "ticket_attachment_download",
+            kwargs={"ticket_id": att.ticket_id, "attachment_id": att.id},
+        )
+    return {
+        "id": att.id,
+        "filename": att.original_filename or f"attachment-{att.id}.pdf",
+        "size_label": _format_bytes(att.byte_size),
+        "url": url,
+    }
+
+
+def _serialize_discussion(row, attachments=None):
     return {
         "id": row.id,
         "email": row.commentor_email,
@@ -51,7 +99,38 @@ def _serialize_discussion(row):
         "author": (
             getattr(row.author_user, "username", None) if row.author_user_id else None
         ),
+        "attachments": attachments or [],
     }
+
+
+def _discussions_with_attachments(ticket: Ticket, *, access_token: str | None = None):
+    by_disc = attach_lib.attachments_by_discussion_id(ticket)
+    rows = []
+    for d in ticket_lib.discussions_for_ticket(ticket):
+        atts = [
+            _ticket_attachment_payload(a, access_token=access_token)
+            for a in by_disc.get(d.id, [])
+        ]
+        rows.append(_serialize_discussion(d, attachments=atts))
+    orphan = by_disc.get(None) or []
+    return rows, [
+        _ticket_attachment_payload(a, access_token=access_token) for a in orphan
+    ]
+
+
+def _serve_pdf_attachment(*, storage_path: str, content_type: str | None, filename: str):
+    path = attach_lib.absolute_path_for_storage(storage_path)
+    if not path.is_file():
+        raise Http404("Attachment file is missing.")
+    response = FileResponse(
+        path.open("rb"),
+        content_type=content_type or "application/pdf",
+        as_attachment=False,
+        filename=filename,
+    )
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    return response
 
 
 @require_http_methods(["GET", "POST"])
@@ -80,6 +159,7 @@ def contact_us_view(request):
                 respond_to_email=form["respond_to_email"],
                 inquiry=form["inquiry"],
                 user=request.user if request.user.is_authenticated else None,
+                attachment_file=request.FILES.get("attachment"),
             )
         except ValidationError as exc:
             messages.error(request, "; ".join(exc.messages) if hasattr(exc, "messages") else str(exc))
@@ -104,6 +184,7 @@ def contact_us_view(request):
             "max_first_name": ticket_lib.MAX_FIRST_NAME,
             "max_email": ticket_lib.MAX_EMAIL,
             "max_body": ticket_lib.MAX_BODY,
+            "max_attachment_mb": attach_lib.MAX_ATTACHMENT_MB,
         },
     )
 
@@ -169,6 +250,10 @@ def tickets_admin_view(request):
         )
     contact_rows = []
     for c in contacts[:100]:
+        attachments = [
+            _contact_attachment_payload(a)
+            for a in attach_lib.attachments_for_contact(c)
+        ]
         contact_rows.append(
             {
                 "contact": c,
@@ -176,6 +261,7 @@ def tickets_admin_view(request):
                 "requester": (
                     c.username.username if c.username_id else "—"
                 ),
+                "attachments": attachments,
             }
         )
     return render(
@@ -345,12 +431,17 @@ def contact_convert_view(request, contact_id: int):
             )
             return redirect("ticket_admin_detail", ticket_id=ticket.id)
 
+    contact_attachments = [
+        _contact_attachment_payload(a)
+        for a in attach_lib.attachments_for_contact(contact)
+    ]
     return render(
         request,
         "assessment_tool/ticket_form.html",
         {
             "mode": "convert",
             "contact": contact,
+            "contact_attachments": contact_attachments,
             "form": form,
             "purposes": ticket_lib.CONTACT_PURPOSES,
             "priorities": ticket_lib.TICKET_PRIORITIES,
@@ -412,6 +503,7 @@ def ticket_admin_detail_view(request, ticket_id: int):
                     actor=request.user,
                     body=request.POST.get("body") or "",
                     notify_client=request.POST.get("notify_client") == "on",
+                    attachment_file=request.FILES.get("attachment"),
                 )
                 messages.success(request, "Comment posted.")
             elif action == "delete_comment":
@@ -437,15 +529,14 @@ def ticket_admin_detail_view(request, ticket_id: int):
             )
         return redirect("ticket_admin_detail", ticket_id=ticket.id)
 
-    discussions = [
-        _serialize_discussion(d) for d in ticket_lib.discussions_for_ticket(ticket)
-    ]
+    discussions, orphan_attachments = _discussions_with_attachments(ticket)
     return render(
         request,
         "assessment_tool/ticket_detail_admin.html",
         {
             "ticket": ticket,
             "discussions": discussions,
+            "orphan_attachments": orphan_attachments,
             "purpose_label": ticket_lib.purpose_label(ticket.contact_purpose),
             "status_label": ticket_lib.status_label(ticket.status),
             "priority_label": ticket_lib.priority_label(ticket.priority),
@@ -457,6 +548,7 @@ def ticket_admin_detail_view(request, ticket_id: int):
             "can_delete": ticket_lib.can_delete_ticket(ticket),
             "qa_search_url": reverse("ticket_qa_search_api"),
             "max_body": ticket_lib.MAX_BODY,
+            "max_attachment_mb": attach_lib.MAX_ATTACHMENT_MB,
         },
     )
 
@@ -491,6 +583,7 @@ def ticket_client_view(request, access_token: str):
                 ticket=ticket,
                 body=request.POST.get("body") or "",
                 author_user=author,
+                attachment_file=request.FILES.get("attachment"),
             )
         except ValidationError as exc:
             messages.error(
@@ -501,15 +594,16 @@ def ticket_client_view(request, access_token: str):
             messages.success(request, "Your comment was posted.")
         return redirect("ticket_client", access_token=access_token)
 
-    discussions = [
-        _serialize_discussion(d) for d in ticket_lib.discussions_for_ticket(ticket)
-    ]
+    discussions, orphan_attachments = _discussions_with_attachments(
+        ticket, access_token=access_token
+    )
     return render(
         request,
         "assessment_tool/ticket_detail_client.html",
         {
             "ticket": ticket,
             "discussions": discussions,
+            "orphan_attachments": orphan_attachments,
             "purpose_label": ticket_lib.purpose_label(ticket.contact_purpose),
             "status_label": ticket_lib.status_label(ticket.status),
             "priority_label": ticket_lib.priority_label(ticket.priority),
@@ -518,5 +612,51 @@ def ticket_client_view(request, access_token: str):
                 ticket.username.username if ticket.username_id else None
             ),
             "max_body": ticket_lib.MAX_BODY,
+            "max_attachment_mb": attach_lib.MAX_ATTACHMENT_MB,
         },
+    )
+
+
+@it_required
+@require_GET
+def contact_attachment_download(request, contact_id: int, attachment_id: int):
+    att = get_object_or_404(
+        ContactUsAttachment,
+        pk=attachment_id,
+        contact_us_id=contact_id,
+    )
+    return _serve_pdf_attachment(
+        storage_path=att.storage_path,
+        content_type=att.content_type,
+        filename=att.original_filename or f"contact-{contact_id}-attachment.pdf",
+    )
+
+
+@it_required
+@require_GET
+def ticket_attachment_download(request, ticket_id: int, attachment_id: int):
+    att = get_object_or_404(
+        TicketAttachment,
+        pk=attachment_id,
+        ticket_id=ticket_id,
+    )
+    return _serve_pdf_attachment(
+        storage_path=att.storage_path,
+        content_type=att.content_type,
+        filename=att.original_filename or f"ticket-{ticket_id}-attachment.pdf",
+    )
+
+
+@require_GET
+def ticket_client_attachment_download(request, access_token: str, attachment_id: int):
+    ticket = get_object_or_404(Ticket, access_token=access_token)
+    att = get_object_or_404(
+        TicketAttachment,
+        pk=attachment_id,
+        ticket_id=ticket.id,
+    )
+    return _serve_pdf_attachment(
+        storage_path=att.storage_path,
+        content_type=att.content_type,
+        filename=att.original_filename or f"ticket-{ticket.id}-attachment.pdf",
     )

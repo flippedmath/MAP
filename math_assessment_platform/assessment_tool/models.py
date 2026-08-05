@@ -455,6 +455,24 @@ class ContactUs(models.Model):
         db_table = 'contact_us'
 
 
+class ContactUsAttachment(models.Model):
+    contact_us = models.ForeignKey(
+        ContactUs,
+        models.DO_NOTHING,
+        db_column='contact_us_id',
+        related_name='attachments',
+    )
+    storage_path = models.CharField(max_length=512, unique=True)
+    original_filename = models.CharField(max_length=255, blank=True, null=True)
+    content_type = models.CharField(max_length=64, default='application/pdf')
+    byte_size = models.IntegerField(blank=True, null=True)
+    creation_date = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'contact_us_attachment'
+
+
 class ContentImage(models.Model):
     """Append-only Quill/content images under media/content_images/."""
 
@@ -1512,6 +1530,40 @@ class TicketDiscussion(models.Model):
         managed = False
         db_table = 'ticket_discussion'
         db_table_comment = 'Essentially the chat history for a given ticket'
+
+
+class TicketAttachment(models.Model):
+    ticket = models.ForeignKey(
+        Ticket,
+        models.DO_NOTHING,
+        db_column='ticket_id',
+        related_name='attachments',
+    )
+    discussion = models.ForeignKey(
+        TicketDiscussion,
+        models.DO_NOTHING,
+        db_column='discussion_id',
+        related_name='attachments',
+        blank=True,
+        null=True,
+    )
+    storage_path = models.CharField(max_length=512, unique=True)
+    original_filename = models.CharField(max_length=255, blank=True, null=True)
+    content_type = models.CharField(max_length=64, default='application/pdf')
+    byte_size = models.IntegerField(blank=True, null=True)
+    uploaded_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='uploaded_by_id',
+        related_name='ticket_attachment_uploaded_set',
+        blank=True,
+        null=True,
+    )
+    creation_date = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'ticket_attachment'
 
 
 class TicketAdminFilterPref(models.Model):

@@ -382,9 +382,13 @@
 
     <section style="margin-top: 28px; padding-top: 16px; border-top: 1px solid #e2e8f0;">
         <h2 style="font-size: 1.05rem; margin-bottom: 8px;">Configured packs (reference)</h2>
+        <p style="color:#94a3b8;font-size:0.85rem;margin:0 0 8px;line-height:1.45;">
+            Marginal tiers within one purchase: 1–10 full price; 11–30 at 15% off; 31–50 at 25%;
+            51–100 at 35%; 101–150 at 40%; 151+ at 45%. Figures below are blended averages.
+        </p>
         <ul style="color:#64748b;font-size:0.9rem;">
             {% for pack in credit_packs %}
-            <li>{{ pack.size }} seats — {{ pack.discount_percent }}% off — ${{ pack.unit_price }}/seat — ${{ pack.total_amount }} total</li>
+            <li>{{ pack.size }} seats — {{ pack.discount_percent }}% effective off — ${{ pack.unit_price }}/seat avg — ${{ pack.total_amount }} total</li>
             {% endfor %}
         </ul>
     </section>

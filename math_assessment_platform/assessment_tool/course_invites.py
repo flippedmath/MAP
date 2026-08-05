@@ -99,6 +99,61 @@ def normalize_recipient(raw: str) -> tuple[str, str]:
     return "username", value.lower()
 
 
+def parse_invite_recipients(raw: str) -> list[str]:
+    """
+    Split a pasted invite field into individual recipients.
+
+    Accepts comma, semicolon, and newline separators. Deduplicates
+    case-insensitively while preserving first-seen order.
+    """
+    text = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    parts = re.split(r"[\n,;]+", text)
+    seen = set()
+    out = []
+    for part in parts:
+        value = part.strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+def create_course_invites(
+    *,
+    course,
+    created_by,
+    recipients: list[str],
+) -> tuple[list[UserCourseActivation], list[str]]:
+    """
+    Create one invitation per recipient string.
+
+    Returns (created_invites, error_messages). Failures for one recipient do
+    not roll back successful invites for others (each create is its own atomic).
+    """
+    created: list[UserCourseActivation] = []
+    errors: list[str] = []
+    for recipient_raw in recipients:
+        label = (recipient_raw or "").strip() or "(blank)"
+        try:
+            created.append(
+                create_course_invite(
+                    course=course,
+                    created_by=created_by,
+                    recipient_raw=recipient_raw,
+                )
+            )
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+        except Exception:
+            logger.exception("Failed creating course invite for %r", recipient_raw)
+            errors.append(f"{label}: Could not create invitation.")
+    return created, errors
+
+
 def _pending_for_course_email(course, email):
     if not email:
         return UserCourseActivation.objects.none()

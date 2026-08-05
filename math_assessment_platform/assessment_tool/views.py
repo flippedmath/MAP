@@ -55,11 +55,13 @@ from .models import (
     QaTag,
     QaTagAssignment,
     ContactUs,
+    ContactUsAttachment,
     ContentImage,
     CreditInvoice,
     CreditLedger,
     CreditPurchase,
     Ticket,
+    TicketAttachment,
     TicketDiscussion,
     TicketAdminFilterPref,
 )
@@ -75,7 +77,7 @@ from .course_invites import (
     INVITE_SESSION_KEY,
     claim_invite_for_new_user,
     complete_course_invite_if_pending,
-    create_course_invite,
+    create_course_invites,
     enroll_user_from_invite,
     get_invite_by_code,
     handle_already_enrolled_invite_access,
@@ -611,11 +613,13 @@ def database_viewer(request):
         'assessment_generation_job': AssessmentGenerationJob,
         'notification': Notification,
         'contact_us': ContactUs,
+        'contact_us_attachment': ContactUsAttachment,
         'content_image': ContentImage,
         'credit_invoice': CreditInvoice,
         'credit_ledger': CreditLedger,
         'credit_purchase': CreditPurchase,
         'ticket': Ticket,
+        'ticket_attachment': TicketAttachment,
         'ticket_discussion': TicketDiscussion,
         'ticket_admin_filter_pref': TicketAdminFilterPref,
     }
@@ -1908,12 +1912,14 @@ def course_management_view(request, course_id):
         if action == 'create_invite':
             invite_form = CourseInviteForm(request.POST)
             if invite_form.is_valid():
-                try:
-                    invite = create_course_invite(
-                        course=course,
-                        created_by=request.user,
-                        recipient_raw=invite_form.cleaned_data['recipient'],
-                    )
+                recipients = invite_form.cleaned_data['recipient']
+                created, invite_errors = create_course_invites(
+                    course=course,
+                    created_by=request.user,
+                    recipients=recipients,
+                )
+                if len(created) == 1 and not invite_errors:
+                    invite = created[0]
                     redeem_url = request.build_absolute_uri(
                         reverse('course_invite_redeem', kwargs={'code': invite.code})
                     )
@@ -1928,14 +1934,20 @@ def course_management_view(request, course_id):
                             request,
                             f"Invitation created. Share this link with the student: {redeem_url}",
                         )
-                    return redirect('course_management', course_id=course.id)
-                except ValueError as exc:
-                    messages.error(request, str(exc))
-                except IntegrityError:
-                    messages.error(
+                elif created:
+                    messages.success(
                         request,
-                        "Could not create invitation (duplicate pending invite or database conflict).",
+                        f"Created {len(created)} invitation"
+                        f"{'' if len(created) == 1 else 's'}. "
+                        "See Pending invitations below for each invite link. "
+                        "Existing students were notified in-app when possible.",
                     )
+                for err in invite_errors:
+                    messages.error(request, err)
+                if not created and not invite_errors:
+                    messages.error(request, "No invitations were created.")
+                if created or invite_errors:
+                    return redirect('course_management', course_id=course.id)
         elif action == 'void_invite':
             invite_id = request.POST.get('invite_id')
             invite = get_object_or_404(

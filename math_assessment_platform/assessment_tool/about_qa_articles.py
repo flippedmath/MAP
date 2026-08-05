@@ -768,6 +768,184 @@ ARTICLE_SPECS: list[dict] = [
             ]
         ),
     },
+    {
+        "title": about_mod.TITLE_DATA_PRIVACY,
+        "tags": SHARED_TAGS + (
+            "privacy",
+            "ferpa",
+            "student-data",
+            "security",
+            "parents",
+            "schools",
+        ),
+        "body": "".join(
+            [
+                _p(
+                    "U.S. schools evaluating assessment platforms usually ask the same privacy "
+                    "questions: Who controls student information? Is it used only for instruction? "
+                    "Can families see grades without sharing student logins? How is access limited "
+                    "by role? MAP is designed around those classroom realities."
+                ),
+                _p(
+                    "This article explains <strong>what MAP does in the product today</strong> to "
+                    "protect account and course data. It is not a substitute for a district Data "
+                    "Privacy Agreement (DPA), legal advice, or a formal compliance certification. "
+                    "Schools that need a signed DPA (including state templates such as the "
+                    '<a href="https://privacy.a4l.org/" rel="noopener noreferrer" target="_blank">'
+                    "Student Data Privacy Consortium / NDPA</a> process) should contact us so terms "
+                    "can be reviewed for their jurisdiction."
+                ),
+                _h2("What schools typically look for"),
+                _p(
+                    "Across the United States, districts commonly evaluate vendors against:"
+                ),
+                _ul(
+                    [
+                        "<strong>FERPA-minded handling of education records</strong> — student "
+                        "identifying information and grades treated as school-controlled records, "
+                        "with vendors expected to use data only for the educational service "
+                        '(see <a href="https://studentprivacy.ed.gov/" rel="noopener noreferrer" '
+                        'target="_blank">U.S. Student Privacy</a> guidance on school officials '
+                        "and online services)",
+                        "<strong>Purpose limitation</strong> — no selling student data or using it "
+                        "for targeted advertising (a core theme of many state student-privacy "
+                        "laws modeled on California’s SOPIPA-style rules)",
+                        "<strong>Written agreements</strong> — contracts or DPAs that spell out "
+                        "ownership, allowed uses, security expectations, breach notice, and "
+                        "deletion when the relationship ends",
+                        "<strong>Access control</strong> — only the right roles see the right "
+                        "records (teachers vs students vs parents vs IT)",
+                        "<strong>Parental / eligible-student access paths</strong> — families can "
+                        "review outcomes through school-approved channels rather than shared passwords",
+                        "<strong>Security basics</strong> — authenticated accounts, HTTPS in "
+                        "production, backups, and clear operational ownership of the system",
+                        "<strong>COPPA awareness</strong> — extra care when tools are used with "
+                        "children under 13; school-authorized educational use still expects "
+                        "minimized collection and no commercial profiling",
+                    ]
+                ),
+                _h2("How MAP limits who can see what"),
+                _ul(
+                    [
+                        "<strong>Distinct account types</strong> — Student, Teacher, Parent, and "
+                        "IT Support each get different capabilities",
+                        "<strong>Course-scoped enrollment</strong> — students appear in a course "
+                        "only after an invitation is created and accepted; roster membership is "
+                        "not global across the platform",
+                        "<strong>Teacher / co-teacher management</strong> — course management "
+                        "(invites, roster actions, grading workflows) is limited to users who "
+                        "can manage that course",
+                        "<strong>Student grade visibility is teacher-controlled</strong> — score "
+                        "release and related assessment options decide what students can see and when",
+                        "<strong>Parent access is invite-only and course-specific</strong> — a "
+                        "parent link grants grade summary visibility for a particular student in "
+                        "a particular course, not a teacher account and not unrestricted platform access",
+                        "<strong>Closed courses</strong> — when a course is closed, live classroom "
+                        "taking pauses while historic grade context can remain available through "
+                        "the intended student/parent paths",
+                    ]
+                ),
+                _h2("How people join MAP (data minimization by design)"),
+                _ul(
+                    [
+                        "<strong>Students and parents join by invitation</strong> — teachers "
+                        "(or authorized managers) create invites; accounts are not harvested "
+                        "from open public signup for those roles",
+                        "<strong>Email verification</strong> — new or changing emails go through "
+                        "a verification code flow before the account is fully activated",
+                        "<strong>Passwords</strong> — stored with Django’s password hashing "
+                        "(not plain text)",
+                        "<strong>One active session per account</strong> — signing in elsewhere "
+                        "ends the previous session, reducing shared-device account sprawl",
+                    ]
+                ),
+                _h2("What MAP uses data for—and what it does not"),
+                _p(
+                    "MAP uses account, course, assessment, and grade information to run the "
+                    "instructional service: authoring, delivery, grading, notifications, and "
+                    "related classroom operations."
+                ),
+                _ul(
+                    [
+                        "<strong>MAP does not sell student personal information</strong> for "
+                        "marketing lists",
+                        "<strong>MAP does not use student data for targeted advertising</strong> "
+                        "inside the product",
+                        "<strong>In-app notifications and transactional email</strong> support "
+                        "invites, verification, and operational alerts—not ad targeting",
+                    ]
+                ),
+                _h2("Integrity features vs surveillance"),
+                _p(
+                    "Optional <strong>focus-leave lock</strong> can pause an attempt when a "
+                    "student leaves the assessment tab, with teacher unlock from the dashboard. "
+                    "That is a lightweight integrity cue—not webcam monitoring, remote desktop "
+                    "spyware, or a claim of perfect cheat-proofing. See the focus-lock Q&amp;A "
+                    "for details."
+                ),
+                _h2("Hosting, transport, and backups"),
+                _ul(
+                    [
+                        "<strong>Production site uses HTTPS</strong> so browser traffic to MAP "
+                        "is encrypted in transit",
+                        "<strong>Dedicated application hosting</strong> — MAP runs as its own "
+                        "deployed application stack (not a shared anonymous free host)",
+                        "<strong>Scheduled backups</strong> — production routines include "
+                        "regular database and media archives with retention windows so "
+                        "operations can recover from failure",
+                        "<strong>Sensitive upload paths</strong> — certain private files "
+                        "(for example credit invoice documents) are stored outside the "
+                        "public media URL space",
+                    ]
+                ),
+                _h2("School / district agreements"),
+                _p(
+                    "Many districts require a written Data Privacy Agreement before classroom "
+                    "adoption. MAP is in active use for early testing while remaining features "
+                    "are finished. If your school or district needs a DPA, state addendum, or "
+                    "security questionnaire filled out:"
+                ),
+                _ul(
+                    [
+                        "Use <strong>Contact Us</strong> on the site to reach support",
+                        "Tell us your district, state, and whether you use a standard packet "
+                        "(for example an NDPA / state alliance form)",
+                        "We will work through the agreement process with your procurement or "
+                        "technology team",
+                    ]
+                ),
+                _faq(
+                    [
+                        (
+                            "Is MAP “FERPA certified”?",
+                            "FERPA is a law that primarily binds schools that receive certain "
+                            "federal funds; vendors are expected to support schools as service "
+                            "providers under school control. MAP implements role-scoped access "
+                            "and educational-purpose use as described above. Formal written "
+                            "agreements are handled with districts that need them—ask via Contact Us.",
+                        ),
+                        (
+                            "Does MAP show student data to other schools or the public?",
+                            "No. Student roster and grade data are scoped to the course and "
+                            "authorized roles. The Public Library is for shared instructional "
+                            "content patterns, not student gradebooks.",
+                        ),
+                        (
+                            "Can a parent see every course a child takes?",
+                            "Only courses where a parent invitation was accepted for that "
+                            "student–course pair. Parent access is not a blanket key to all "
+                            "platform data.",
+                        ),
+                        (
+                            "Where should we send a data privacy agreement?",
+                            "Start with Contact Us and attach or link your district’s preferred "
+                            "DPA / NDPA packet. We will respond with next steps for review.",
+                        ),
+                    ]
+                ),
+            ]
+        ),
+    },
 ]
 
 

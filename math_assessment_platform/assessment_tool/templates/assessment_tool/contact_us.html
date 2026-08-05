@@ -17,7 +17,7 @@
     {% endif %}
 
     <div class="card">
-        <form method="post">
+        <form method="post" enctype="multipart/form-data">
             {% csrf_token %}
             {% if username_display %}
             <div style="margin-bottom: 1rem;">
@@ -60,11 +60,20 @@
                        style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;">
             </div>
 
-            <div style="margin-bottom: 1.25rem;">
+            <div style="margin-bottom: 1rem;">
                 <label for="inquiry" style="display: block; font-weight: 600; margin-bottom: 5px;">Inquiry</label>
                 <textarea id="inquiry" name="inquiry" required maxlength="{{ max_body }}" rows="8"
                           style="width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; resize: vertical;">{{ form.inquiry }}</textarea>
                 <p style="margin: 6px 0 0; color: #94a3b8; font-size: 0.85rem;">Max {{ max_body }} characters.</p>
+            </div>
+
+            <div style="margin-bottom: 1.25rem;">
+                <label for="attachment" style="display: block; font-weight: 600; margin-bottom: 5px;">PDF attachment (optional)</label>
+                <input id="attachment" name="attachment" type="file" accept="application/pdf,.pdf"
+                       style="width: 100%; padding: 8px 0; box-sizing: border-box;">
+                <p style="margin: 6px 0 0; color: #94a3b8; font-size: 0.85rem;">
+                    One PDF, up to {{ max_attachment_mb }} MB. Large scanned packets are not accepted.
+                </p>
             </div>
 
             <button type="submit" class="btn" style="font-weight: 600;">Send message</button>

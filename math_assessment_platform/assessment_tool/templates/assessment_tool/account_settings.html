@@ -264,7 +264,8 @@
             <h2 style="font-size: 1.1rem; margin-bottom: 8px;">Buy credits</h2>
             <p style="color: #64748b; font-size: 0.9rem; line-height: 1.45;">
                 Purchase seat credits directly. List price is ${{ credit_list_unit_price }} / seat;
-                larger quantities automatically receive volume discounts.
+                volume discounts apply only to credits above each tier within a single purchase
+                (not to the whole order at the top rate).
                 Checkout credits are added immediately — no IT validation step.
             </p>
             <form method="post" id="buy-credits-form">
@@ -286,7 +287,7 @@
                 >
                 <div id="buy-credits-quote" class="buy-credits-quote" hidden>
                     <div class="buy-credits-quote__row">
-                        <span>Price / seat</span>
+                        <span>Avg price / seat</span>
                         <strong id="buy-credits-unit">—</strong>
                     </div>
                     <div class="buy-credits-quote__row">
@@ -296,7 +297,8 @@
                     </div>
                 </div>
                 <p id="buy-credits-hint" style="color: #94a3b8; font-size: 0.85rem; margin: 10px 0 0;">
-                    Volume tiers: 10+ → 15% off, 30+ → 25%, 50+ → 35%, 100+ → 40%, 150+ → 45%.
+                    Marginal volume tiers (per purchase): credits 1–10 full price;
+                    11–30 → 15% off; 31–50 → 25%; 51–100 → 35%; 101–150 → 40%; 151+ → 45%.
                 </p>
                 <label for="id_buy_credit_note" style="display: block; font-weight: 600; margin: 14px 0 6px;">
                     Note (optional)
@@ -342,7 +344,7 @@
                 >
                 <div id="request-credits-quote" class="buy-credits-quote" hidden>
                     <div class="buy-credits-quote__row">
-                        <span>Reference price / seat</span>
+                        <span>Reference avg price / seat</span>
                         <strong id="request-credits-unit">—</strong>
                     </div>
                     <div class="buy-credits-quote__row">
@@ -911,12 +913,30 @@
         {% endfor %}
     ];
 
-    function discountForQty(qty) {
+    /** Discount for 1-based credit index i: highest tier where i > min. */
+    function discountForIndex(i) {
         var pct = 0;
         tiers.forEach(function (tier) {
-            if (qty >= tier.min) pct = tier.pct;
+            if (i > tier.min) pct = tier.pct;
         });
         return pct;
+    }
+
+    function quoteQty(qty) {
+        var total = 0;
+        for (var i = 1; i <= qty; i++) {
+            var pct = discountForIndex(i);
+            var unit = Math.round(listUnit * (100 - pct)) / 100;
+            total += unit;
+        }
+        total = Math.round(total * 100) / 100;
+        var avgUnit = Math.round((total / qty) * 100) / 100;
+        var listTotal = Math.round(listUnit * qty * 100) / 100;
+        var effectivePct = 0;
+        if (listTotal > 0 && total < listTotal) {
+            effectivePct = Math.round(((listTotal - total) * 10000) / listTotal) / 100;
+        }
+        return { total: total, unit: avgUnit, effectivePct: effectivePct };
     }
 
     function money(n) {
@@ -942,15 +962,13 @@
                 if (typeof opts.onQtyChange === 'function') opts.onQtyChange(false);
                 return;
             }
-            var pct = discountForQty(qty);
-            var unit = Math.round(listUnit * (100 - pct)) / 100;
-            var total = Math.round(unit * qty * 100) / 100;
-            if (unitEl) unitEl.textContent = money(unit);
-            if (totalEl) totalEl.textContent = money(total);
+            var quote = quoteQty(qty);
+            if (unitEl) unitEl.textContent = money(quote.unit);
+            if (totalEl) totalEl.textContent = money(quote.total);
             if (discountEl) {
-                if (pct > 0) {
+                if (quote.effectivePct > 0) {
                     discountEl.hidden = false;
-                    discountEl.textContent = pct + '% off';
+                    discountEl.textContent = quote.effectivePct + '% effective off';
                 } else {
                     discountEl.hidden = true;
                     discountEl.textContent = '';

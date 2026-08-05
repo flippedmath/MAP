@@ -23,7 +23,10 @@ _MONEY_RE = re.compile(r"^\d+(\.\d{1,2})?$")
 
 LIST_UNIT_PRICE = Decimal("100.00")
 
-# Minimum quantity -> discount percent off list unit price (highest matching tier wins).
+# Volume thresholds for a single purchase (marginal / progressive pricing).
+# Discount at threshold T applies only to credits *above* T, up to the next
+# threshold (inclusive). Credits 1–10 are full price; 11–30 at 15%; 31–50 at
+# 25%; and so on. Not cumulative across separate transactions.
 _CREDIT_DISCOUNT_TIERS: tuple[tuple[int, Decimal], ...] = (
     (1, Decimal("0")),
     (10, Decimal("15")),
@@ -37,9 +40,9 @@ _CREDIT_DISCOUNT_TIERS: tuple[tuple[int, Decimal], ...] = (
 @dataclass(frozen=True)
 class CreditPack:
     size: int
-    discount_percent: Decimal
+    discount_percent: Decimal  # effective blended % off list for the whole quote
     list_unit_price: Decimal
-    unit_price: Decimal
+    unit_price: Decimal  # blended average (total / size)
     total_amount: Decimal
 
 
@@ -127,20 +130,51 @@ def parse_positive_credit_quantity(raw) -> int:
 
 
 def credit_discount_tiers() -> list[dict]:
-    """Tier thresholds for UI (min quantity and discount percent)."""
+    """
+    Tier thresholds for UI.
+
+    ``min_quantity`` is the limit that must be exceeded before ``discount_percent``
+    applies to further credits in the same purchase (until the next threshold).
+    """
     return [
         {"min_quantity": threshold, "discount_percent": str(pct)}
         for threshold, pct in _CREDIT_DISCOUNT_TIERS
     ]
 
 
-def discount_percent_for_quantity(size: int) -> Decimal:
+def _unit_price_for_discount(discount_percent: Decimal) -> Decimal:
+    return (
+        LIST_UNIT_PRICE * (Decimal("100") - discount_percent) / Decimal("100")
+    ).quantize(Decimal("0.01"))
+
+
+def _marginal_band_counts(size: int) -> list[tuple[int, Decimal]]:
+    """
+    Return [(credit_count, discount_percent), ...] covering ``size`` credits.
+
+    Credit index i (1-based) uses the highest tier discount where i > threshold:
+    1–10 at 0%, 11–30 at 15%, 31–50 at 25%, etc.
+    """
     size = parse_positive_credit_quantity(size)
-    discount = Decimal("0")
-    for threshold, pct in _CREDIT_DISCOUNT_TIERS:
-        if size >= threshold:
-            discount = pct
-    return discount
+    bands: list[tuple[int, Decimal]] = []
+    for index, (threshold, pct) in enumerate(_CREDIT_DISCOUNT_TIERS):
+        # Baseline row (1, 0%): credits 1..next_threshold.
+        # Later rows: credits (threshold+1)..next_threshold at this pct.
+        start = 1 if index == 0 else threshold + 1
+        if index + 1 < len(_CREDIT_DISCOUNT_TIERS):
+            end = _CREDIT_DISCOUNT_TIERS[index + 1][0]
+            hi = min(size, end)
+        else:
+            hi = size
+        if hi < start:
+            continue
+        bands.append((hi - start + 1, pct))
+    return bands
+
+
+def discount_percent_for_quantity(size: int) -> Decimal:
+    """Effective blended discount percent for ``size`` credits in one purchase."""
+    return quote_pack(size).discount_percent
 
 
 def list_credit_packs() -> list[CreditPack]:
@@ -149,13 +183,21 @@ def list_credit_packs() -> list[CreditPack]:
 
 
 def quote_pack(size: int) -> CreditPack:
-    """Quote any positive credit quantity using volume discount tiers."""
+    """Quote any positive credit quantity using marginal volume discount tiers."""
     size = parse_positive_credit_quantity(size)
-    discount = discount_percent_for_quantity(size)
-    unit = (LIST_UNIT_PRICE * (Decimal("100") - discount) / Decimal("100")).quantize(
-        Decimal("0.01")
-    )
-    total = (unit * size).quantize(Decimal("0.01"))
+    total = Decimal("0.00")
+    for count, band_pct in _marginal_band_counts(size):
+        unit = _unit_price_for_discount(band_pct)
+        total += (unit * count).quantize(Decimal("0.01"))
+    total = total.quantize(Decimal("0.01"))
+    unit = (total / Decimal(size)).quantize(Decimal("0.01"))
+    list_total = (LIST_UNIT_PRICE * size).quantize(Decimal("0.01"))
+    if list_total > 0 and total < list_total:
+        discount = (
+            (list_total - total) * Decimal("100") / list_total
+        ).quantize(Decimal("0.01"))
+    else:
+        discount = Decimal("0.00")
     if unit <= 0 or total <= 0:
         raise CreditError("Quoted purchase amount must be positive.")
     return CreditPack(

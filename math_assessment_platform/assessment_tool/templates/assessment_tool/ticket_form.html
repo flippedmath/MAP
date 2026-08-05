@@ -13,6 +13,19 @@
     <div class="card" style="margin-bottom: 1rem; background: #f8fafc;">
         <p style="margin: 0 0 0.5rem; color: #64748b; font-size: 0.9rem;">Original inquiry</p>
         <p style="margin: 0; white-space: pre-wrap;">{{ contact.inquiry }}</p>
+        {% if contact_attachments %}
+        <p style="margin: 0.75rem 0 0.25rem; color: #64748b; font-size: 0.9rem;">PDF attachment (will move to the ticket)</p>
+        <ul style="margin: 0; padding-left: 1.2rem;">
+            {% for att in contact_attachments %}
+            <li>
+                <a href="{{ att.url }}" target="_blank" rel="noopener" style="color:#1d4ed8;font-weight:600;">
+                    {{ att.filename }}
+                </a>
+                {% if att.size_label %}<span style="color:#94a3b8;">({{ att.size_label }})</span>{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
         <p style="margin: 0.75rem 0 0; color: #64748b; font-size: 0.85rem;">
             From {{ contact.first_name }} &lt;{{ contact.respond_to_email }}&gt;
             {% if contact.username %} · {{ contact.username.username }}{% endif %}

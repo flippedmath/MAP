@@ -23,6 +23,9 @@
     .ticket-comment-delete:hover { background: #fef2f2; }
     .ticket-comment-body { line-height: 1.5; word-break: break-word; }
     .ticket-comment-body a { color: #1d4ed8; }
+    .ticket-attachments { margin-top: 8px; font-size: 0.9rem; }
+    .ticket-attachments a { color: #1d4ed8; font-weight: 600; text-decoration: none; }
+    .ticket-attachments a:hover { text-decoration: underline; }
     .ticket-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1rem; }
     .ticket-actions form {
         display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end;
@@ -99,10 +102,33 @@
                     </form>
                 </div>
                 <div class="ticket-comment-body">{{ d.body_html }}</div>
+                {% if d.attachments %}
+                <div class="ticket-attachments">
+                    {% for att in d.attachments %}
+                    <div>
+                        <a href="{{ att.url }}" target="_blank" rel="noopener">{{ att.filename }}</a>
+                        {% if att.size_label %}<span style="color:#94a3b8;">({{ att.size_label }})</span>{% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
             </div>
             {% empty %}
             <p style="color:#64748b;">No discussion yet.</p>
             {% endfor %}
+            {% if orphan_attachments %}
+            <div class="ticket-comment" style="margin-top:0.5rem;">
+                <div class="ticket-comment-meta">Ticket attachments</div>
+                <div class="ticket-attachments" style="margin-top:0;">
+                    {% for att in orphan_attachments %}
+                    <div>
+                        <a href="{{ att.url }}" target="_blank" rel="noopener">{{ att.filename }}</a>
+                        {% if att.size_label %}<span style="color:#94a3b8;">({{ att.size_label }})</span>{% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -153,12 +179,19 @@
             </form>
         </div>
 
-        <form method="post" style="margin-top: 1rem;" id="comment-form">
+        <form method="post" enctype="multipart/form-data" style="margin-top: 1rem;" id="comment-form">
             {% csrf_token %}
             <input type="hidden" name="action" value="comment">
             <label for="body" style="display:block;font-weight:600;margin-bottom:5px;">Comment</label>
-            <textarea id="body" name="body" required maxlength="{{ max_body }}" rows="5"
+            <textarea id="body" name="body" maxlength="{{ max_body }}" rows="5"
                       style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;box-sizing:border-box;resize:vertical;"></textarea>
+            <div style="margin-top: 0.75rem;">
+                <label for="attachment" style="display:block;font-weight:600;margin-bottom:5px;">PDF attachment (optional)</label>
+                <input id="attachment" name="attachment" type="file" accept="application/pdf,.pdf">
+                <p style="margin: 6px 0 0; color: #94a3b8; font-size: 0.85rem;">
+                    One PDF up to {{ max_attachment_mb }} MB. Comment text optional if a PDF is attached.
+                </p>
+            </div>
             <div style="margin-top: 0.5rem; display:flex; flex-wrap:wrap; gap:0.5rem; align-items:center;">
                 <button type="button" class="btn" id="qa-insert-btn" style="font-weight:600;background:#64748b;">Insert Q&amp;A…</button>
                 <button type="button" class="btn" id="qa-post-btn" style="font-weight:600;background:#475569;">Post Q&amp;A as comment…</button>

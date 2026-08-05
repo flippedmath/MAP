@@ -223,19 +223,31 @@
 
     <section class="card" style="margin-bottom: 24px; padding: 20px;">
         <h3 style="margin-top: 0;">Student invitations</h3>
-        <form method="post" style="display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;">
+        <style>
+            .course-invite-recipients::placeholder {
+                font-size: 0.8rem;
+                color: #94a3b8;
+            }
+        </style>
+        <form method="post">
             {% csrf_token %}
             <input type="hidden" name="action" value="create_invite">
-            <div style="flex: 1; min-width: 220px;">
-                <label style="display: block; font-weight: 600; margin-bottom: 6px;">{{ invite_form.recipient.label }}</label>
-                {{ invite_form.recipient }}
-                {% for error in invite_form.recipient.errors %}
-                    <small style="color: #991b1b; display: block;">{{ error }}</small>
-                {% endfor %}
+            <label style="display: block; font-weight: 600; margin-bottom: 6px;">{{ invite_form.recipient.label }}</label>
+            <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: nowrap;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                    {{ invite_form.recipient }}
+                </div>
+                <button type="submit" class="btn" style="flex: 0 0 auto; white-space: nowrap;">Create invitation</button>
             </div>
-            <button type="submit" class="btn">Create invitation</button>
+            {% if invite_form.recipient.help_text %}
+                <small style="color: #64748b; display: block; margin-top: 6px;">{{ invite_form.recipient.help_text }}</small>
+            {% endif %}
+            {% for error in invite_form.recipient.errors %}
+                <small style="color: #991b1b; display: block;">{{ error }}</small>
+            {% endfor %}
         </form>
         <p style="margin: 12px 0 0; font-size: 0.85rem; color: #94a3b8;">
+            Paste a whole class list if you want — each email or username gets its own invitation and seat credit.
             Existing students get an in-app notification with the invite link (email delivery later).
             New students use the link to sign up, then verify with the code in <code>email_authentication</code> (db viewer).
             Only Student accounts can be invited this way. Use the Teachers section above to invite co-teachers.

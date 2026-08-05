@@ -55,17 +55,40 @@ class TeacherRegistrationForm(forms.Form):
 
 class CourseInviteForm(forms.Form):
     recipient = forms.CharField(
-        max_length=255,
         required=True,
-        label="Email or username",
-        widget=forms.TextInput(attrs={
-            "placeholder": "student@example.com or username",
+        label="Emails or usernames",
+        widget=forms.Textarea(attrs={
+            "placeholder": (
+                "Paste one or many: student@example.com, other@school.edu "
+                "or usernames — commas, semicolons, or new lines"
+            ),
             "autocomplete": "off",
+            "rows": 2,
+            "class": "course-invite-recipients",
+            "style": (
+                "width:100%;min-height:2.75rem;padding:6px 8px;border:1px solid #cbd5e1;"
+                "border-radius:6px;box-sizing:border-box;resize:vertical;"
+                "font-family:inherit;font-size:0.85rem;line-height:1.35;"
+            ),
         }),
+        help_text=(
+            "One student, or a list separated by commas, semicolons, or new lines. "
+            "Each entry gets its own invitation."
+        ),
     )
 
     def clean_recipient(self):
-        return (self.cleaned_data.get("recipient") or "").strip()
+        from .course_invites import normalize_recipient, parse_invite_recipients
+
+        recipients = parse_invite_recipients(self.cleaned_data.get("recipient"))
+        if not recipients:
+            raise ValidationError("Enter at least one email address or username.")
+        for entry in recipients:
+            try:
+                normalize_recipient(entry)
+            except ValueError as exc:
+                raise ValidationError(f"{entry}: {exc}") from exc
+        return recipients
 
 
 class ParentCourseInviteForm(forms.Form):

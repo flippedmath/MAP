@@ -65,6 +65,7 @@
                     <th>Subject</th>
                     <th>Purpose</th>
                     <th>Inquiry</th>
+                    <th>Attachment</th>
                     <th>Requester</th>
                     <th>Email</th>
                     <th>Created</th>
@@ -79,6 +80,23 @@
                     <td>
                         <textarea class="contact-inquiry-scroll" readonly rows="3" tabindex="0"
                                   aria-label="Inquiry for {{ row.contact.subject }}">{{ row.contact.inquiry }}</textarea>
+                    </td>
+                    <td>
+                        {% if row.attachments %}
+                            {% for att in row.attachments %}
+                            <div style="margin-bottom: 4px;">
+                                <a href="{{ att.url }}" target="_blank" rel="noopener"
+                                   style="color:#1d4ed8;font-weight:600;text-decoration:none;">
+                                    {{ att.filename }}
+                                </a>
+                                {% if att.size_label %}
+                                <span style="color:#94a3b8;font-size:0.8rem;">({{ att.size_label }})</span>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        {% else %}
+                        <span style="color:#94a3b8;">—</span>
+                        {% endif %}
                     </td>
                     <td>{{ row.requester }}</td>
                     <td>{{ row.contact.respond_to_email }}</td>

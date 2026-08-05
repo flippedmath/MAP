@@ -51,7 +51,7 @@
         </div>
         {% endif %}
         <div class="help-body">{{ content_html }}</div>
-        {% if show_views %}
+        {% if user.is_authenticated and user.user_type == "IT_Support" %}
         <p class="help-meta">
             Restriction: {{ restriction_label }} · Views: {{ article.view_count }}
         </p>

@@ -174,7 +174,6 @@ def help_detail_view(request, article_id):
             "tags": tags,
             "content_html": render_content_html(article.answer),
             "restriction_label": restriction_label(article.user_restriction_level),
-            "show_views": _is_it_support(request.user),
         },
     )
 

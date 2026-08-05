@@ -36,16 +36,19 @@ Confirm `map-gunicorn` is active and key URLs return 200.
 - Apply it on live Postgres in this deploy (before or with restart). Prefer idempotent scripts; confirm success.
 - Unmanaged tables: do **not** rely on Django `migrate`.
 
-## 4. Sync code-owned catalog tables (always)
-These are growing static lists: row sets defined in git that the app assumes exist. Sync them on **every** push to live (idempotent upsert), not only when you remember they changed.
+## 4. Sync code-owned catalog tables (only if sources changed)
+These are growing static lists: row sets defined in git that the app assumes exist. Sync **only the catalogs whose seed sources changed in this deploy** (compare the commits being pushed, e.g. `git diff --name-only <old-main>..HEAD`). Skip unchanged catalogs. Do not sync every push by default.
 
-Run on the live server (venv + `math_assessment_platform`):
+Detect change → run the matching command on the live server (venv + `math_assessment_platform`):
 
+| Catalog | Sync when this deploy touches… | Command |
+|---------|--------------------------------|---------|
+| `entity_type` | `assessment_tool/management/commands/seed_entity_type.py` | `python manage.py seed_entity_type --all` |
+| `assessment_option_group` | `assessment_tool/sql/sync_assessment_option_group.sql`, `assessment_tool/sql/seed_assessment_option_group.sql`, and/or option-catalog logic in `assessment_tool/assessment_options.py` | `python -c` calling `sync_option_groups()` (see below) |
+| system `permission_group` (`admins` / `public`) | `assessment_tool/management/commands/setup_collaboration_groups.py` and/or system-group helpers in `assessment_tool/collaboration.py` | `python manage.py setup_collaboration_groups` |
+
+`sync_option_groups` one-liner:
 ```bash
-# entity_type — problem entity blueprints (seed_entity_type.py)
-python manage.py seed_entity_type --all
-
-# assessment_option_group — assessment settings catalog (sql/sync_assessment_option_group.sql)
 python -c "
 import django, os
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'math_assessment_platform.settings')
@@ -54,12 +57,11 @@ from assessment_tool.assessment_options import sync_option_groups
 n = sync_option_groups()
 print(f'assessment_option_group sync ok; active_groups_rows≈{n}')
 "
-
-# permission_group — system admins + public collaboration groups
-python manage.py setup_collaboration_groups
 ```
 
-**When adding a new catalog table later**, add it here if:
+If none of those paths changed, skip section 4 entirely.
+
+**When adding a new catalog table later**, add a row to the table above if:
 1. The row set is defined in git (Python seed and/or SQL seed/sync),
 2. The app assumes those rows exist, and
 3. Teachers/students do not create the catalog itself.
@@ -89,4 +91,5 @@ python manage.py seed_about_qa_articles
 If none of the “when to ask” conditions apply, no need to ask.
 
 ## Example
-“Push to live” after entity/option catalog + UI polish → commit + push branch → ff-merge/push `main` → server pull/restart → apply any new DDL → `seed_entity_type --all` + `sync_option_groups` + `setup_collaboration_groups` → ask about About Q&A only if seed sources changed.
+“Push to live” after only UI polish → commit + push → server pull/restart → skip catalog sync (no seed-source diffs) → skip Q&A ask.  
+“Push to live” after editing `seed_entity_type.py` → same deploy steps → run `seed_entity_type --all` only → skip other catalogs unless their sources also changed.

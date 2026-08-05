@@ -234,7 +234,10 @@ def create_contact_us(
     respond_to_email: str,
     inquiry: str,
     user=None,
+    attachment_file=None,
 ) -> ContactUs:
+    from .ticket_attachments import store_contact_us_pdf
+
     subject = validate_length(subject, field="Subject", max_len=MAX_SUBJECT)
     if not subject:
         raise ValidationError("Subject is required.")
@@ -251,7 +254,7 @@ def create_contact_us(
     if user is not None and getattr(user, "is_authenticated", False):
         username = user
 
-    return ContactUs.objects.create(
+    contact = ContactUs.objects.create(
         subject=subject,
         contact_purpose=purpose,
         username=username,
@@ -260,6 +263,12 @@ def create_contact_us(
         inquiry=inquiry,
         creation_date=timezone.now(),
     )
+    if attachment_file is not None and getattr(attachment_file, "name", None):
+        try:
+            store_contact_us_pdf(contact=contact, uploaded_file=attachment_file)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+    return contact
 
 
 def _send_ticket_email(*, ticket: Ticket, kind: str) -> None:
@@ -426,6 +435,8 @@ def convert_contact_to_ticket(
     priority: str = "normal",
     notify_client: bool = False,
 ) -> Ticket:
+    from .ticket_attachments import migrate_contact_attachments_to_ticket
+
     assignee = _resolve_assignee(assigned_to_id)
     ticket = create_ticket(
         title=title or contact.subject,
@@ -442,6 +453,19 @@ def convert_contact_to_ticket(
         system_note=(
             f"Ticket created from Contact Us by {_actor_label(created_by)}"
         ),
+    )
+    opening = (
+        TicketDiscussion.objects.filter(
+            ticket_reference=ticket,
+            is_system=False,
+        )
+        .order_by("id")
+        .first()
+    )
+    migrate_contact_attachments_to_ticket(
+        contact=contact,
+        ticket=ticket,
+        discussion=opening,
     )
     contact_id = contact.id
     contact.delete()
@@ -538,10 +562,16 @@ def add_admin_comment(
     actor,
     body: str,
     notify_client: bool = False,
+    attachment_file=None,
 ) -> TicketDiscussion:
-    body = validate_length(body, field="Comment", max_len=MAX_BODY)
-    if not body:
-        raise ValidationError("Comment cannot be empty.")
+    from .ticket_attachments import store_ticket_pdf
+
+    body = validate_length(body or "", field="Comment", max_len=MAX_BODY)
+    has_file = bool(attachment_file is not None and getattr(attachment_file, "name", None))
+    if not body and not has_file:
+        raise ValidationError("Add a comment and/or a PDF attachment.")
+    if not body and has_file:
+        body = "(PDF attachment)"
     row = _add_discussion(
         ticket,
         email=getattr(actor, "user_email", None) or "it-support@local",
@@ -550,16 +580,37 @@ def add_admin_comment(
         author_user=actor,
         set_admin_unread=False,
     )
+    if has_file:
+        try:
+            store_ticket_pdf(
+                ticket=ticket,
+                uploaded_file=attachment_file,
+                discussion=row,
+                uploaded_by=actor,
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
     if notify_client:
         notify_ticket_client(ticket=ticket, kind="ticket_updated")
     return row
 
 
 @transaction.atomic
-def add_client_comment(*, ticket: Ticket, body: str, author_user=None) -> TicketDiscussion:
-    body = validate_length(body, field="Comment", max_len=MAX_BODY)
-    if not body:
-        raise ValidationError("Comment cannot be empty.")
+def add_client_comment(
+    *,
+    ticket: Ticket,
+    body: str,
+    author_user=None,
+    attachment_file=None,
+) -> TicketDiscussion:
+    from .ticket_attachments import store_ticket_pdf
+
+    body = validate_length(body or "", field="Comment", max_len=MAX_BODY)
+    has_file = bool(attachment_file is not None and getattr(attachment_file, "name", None))
+    if not body and not has_file:
+        raise ValidationError("Add a comment and/or a PDF attachment.")
+    if not body and has_file:
+        body = "(PDF attachment)"
 
     reopened_from = None
     if ticket.status in ("closed", "canceled"):
@@ -575,6 +626,16 @@ def add_client_comment(*, ticket: Ticket, body: str, author_user=None) -> Ticket
         author_user=author_user,
         set_admin_unread=True,
     )
+    if has_file:
+        try:
+            store_ticket_pdf(
+                ticket=ticket,
+                uploaded_file=attachment_file,
+                discussion=row,
+                uploaded_by=author_user,
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
     if reopened_from:
         _add_discussion(
             ticket,
@@ -614,6 +675,9 @@ def delete_discussion_comment(*, ticket: Ticket, discussion_id, actor=None) -> N
     )
     if row is None:
         raise ValidationError("Comment not found on this ticket.")
+    from .ticket_attachments import delete_discussion_attachments
+
+    delete_discussion_attachments(row)
     row.delete()
     latest = (
         TicketDiscussion.objects.filter(ticket_reference=ticket)
@@ -641,13 +705,19 @@ def can_delete_ticket(ticket: Ticket) -> bool:
 
 @transaction.atomic
 def delete_ticket(ticket: Ticket) -> None:
+    from .ticket_attachments import delete_ticket_attachments
+
     if not can_delete_ticket(ticket):
         raise ValidationError("Only closed or canceled tickets can be deleted.")
+    delete_ticket_attachments(ticket)
     ticket.delete()
 
 
 def delete_contact(contact: ContactUs) -> None:
     """Delete a Contact Us row. Never notifies the client."""
+    from .ticket_attachments import delete_contact_attachments
+
+    delete_contact_attachments(contact)
     contact.delete()
 
 
