@@ -89,42 +89,7 @@
     box-shadow: none;
 }
 
-#map-dialog-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.45);
-    z-index: 21000;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-}
-#map-dialog-panel {
-    background: #fff;
-    border-radius: 12px;
-    max-width: 440px;
-    width: 100%;
-    padding: 22px 22px 18px;
-    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
-}
-#map-dialog-title {
-    margin: 0 0 8px;
-    font-size: 1.15rem;
-    color: #0f172a;
-}
-#map-dialog-message {
-    margin: 0;
-    color: #475569;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    white-space: pre-wrap;
-}
-#map-dialog-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-    margin-top: 18px;
-}
+/* Dialog chrome lives in map_dialog.css (global). Button classes still used by explorer overlays. */
 .map-dialog-btn {
     border: none;
     border-radius: 8px;

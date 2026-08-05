@@ -158,7 +158,7 @@
                             <td class="td-center control-layer">
                                 <div style="display: flex; gap: 10px; justify-content: center;">
                                     {% if course.status == 'deleted' %}
-                                        <form method="POST" action="?username_filter={{ username_filter }}" style="display:inline;" onsubmit="return confirm('Are you sure? This will delete the course, all assessments, and the physical image file.');">
+                                        <form method="POST" action="?username_filter={{ username_filter }}" style="display:inline;" data-map-confirm="Are you sure? This will delete the course, all assessments, and the physical image file." data-map-confirm-danger>
                                             {% csrf_token %}
                                             <input type="hidden" name="folder_id" value="{{ course.branch_location.id }}">
                                             <button type="submit" name="delete_course" class="btn-delete">
@@ -224,8 +224,13 @@
 
 <script>
 async function triggerInlineRename(branchGroupId, currentName) {
-    const newName = prompt(`Rename course "${currentName}" to:`, currentName);
-    if (!newName || newName.trim() === currentName) return;
+    const newName = await mapPrompt({
+        title: 'Rename course',
+        message: `Rename course "${currentName}" to:`,
+        defaultValue: currentName,
+        okLabel: 'Rename',
+    });
+    if (newName == null || !String(newName).trim() || String(newName).trim() === currentName) return;
 
     try {
         const response = await fetch('/rename-item/', {

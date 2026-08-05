@@ -378,6 +378,9 @@ def clone_problem_payload(old_prob, new_folder, new_owner, context):
     # Remap structural FKs onto the clone tree currently being built.
     if old_prob.aqg_id:
         new_prob.aqg = context.get('aqg')
+    elif context.get('aqg') is not None:
+        # Library / unattached problem copied into a destination AQG.
+        new_prob.aqg = context.get('aqg')
     else:
         new_prob.aqg = None
     if old_prob.cqd_id:
@@ -950,10 +953,167 @@ def clone_node_recursive(old_folder, new_parent, new_owner, context=None, starte
         
 
     # 4. Recursion: Keep going down the tree
+    from .branch_hierarchy import normalize_folder_type
+
+    parent_type = normalize_folder_type(getattr(old_folder, 'folder_type', None))
     for child in old_folder.children.all():
         clone_node_recursive(child, new_folder, new_owner, context)
+        # CQD payload sets context['cqd']; clear it before the next AQG sibling
+        # so later top-level problems are not incorrectly nested under that CQD.
+        if parent_type == 'aqg':
+            context['cqd'] = None
 
     return new_folder
+
+
+def copy_branch_into_setup_parent(
+    source_branch,
+    dest_parent,
+    owner,
+    *,
+    course=None,
+    assessment=None,
+    aqg=None,
+):
+    """
+    Deep-copy a readable source branch under dest_parent for course/setup flows.
+
+    Supported:
+      - problem or cqd → dest_parent must be an AQG folder (aqg required)
+      - aqg → dest_parent must be an assessment folder (assessment required)
+      - assessment → dest_parent must be a course folder (course required)
+
+    Returns (new_folder, None) or (None, error_message).
+    """
+    from .branch_hierarchy import normalize_folder_type
+
+    BranchGroup = apps.get_model("assessment_tool", "BranchGroup")
+
+    if source_branch is None or dest_parent is None:
+        return None, "Missing source or destination."
+
+    src_type = normalize_folder_type(getattr(source_branch, "folder_type", None))
+    dest_type = normalize_folder_type(getattr(dest_parent, "folder_type", None))
+
+    if src_type in ("problem", "cqd"):
+        if dest_type != "aqg" or aqg is None:
+            return None, "Problems and problem sets can only be copied into a question group section."
+        context = {
+            "course": course if course is not None else getattr(assessment, "course", None),
+            "assessment": assessment,
+            "aqg": aqg,
+            "cqd": None,
+        }
+    elif src_type == "aqg":
+        if dest_type != "assessment" or assessment is None:
+            return None, "Question group sections can only be copied into an assessment."
+        context = {
+            "course": course if course is not None else getattr(assessment, "course", None),
+            "assessment": assessment,
+            "aqg": None,
+            "cqd": None,
+        }
+    elif src_type == "assessment":
+        if dest_type != "course" or course is None:
+            return None, "Assessments can only be copied into a course."
+        context = {
+            "course": course,
+            "assessment": None,
+            "aqg": None,
+            "cqd": None,
+        }
+    else:
+        return None, f"Cannot copy a {src_type or 'folder'} here."
+
+    with transaction.atomic():
+        result = clone_node_recursive(
+            source_branch,
+            dest_parent,
+            owner,
+            context=context,
+            starter_node=True,
+        )
+        if isinstance(result, JsonResponse):
+            try:
+                payload = json.loads(result.content.decode() or "{}")
+            except Exception:
+                payload = {}
+            return None, payload.get("error") or "Copy failed."
+
+        new_folder = result
+        # Append after existing siblings so the new item appears at the end.
+        last_sibling = (
+            BranchGroup.objects.filter(parent=dest_parent)
+            .exclude(pk=new_folder.pk)
+            .order_by("order")
+            .last()
+        )
+        new_order = calculate_midpoint_order(
+            last_sibling.order if last_sibling else "",
+            "",
+        )
+        if new_folder.order != new_order:
+            new_folder.order = new_order
+            new_folder.save(update_fields=["order"])
+
+        if src_type == "assessment":
+            new_asm = get_branch_related(new_folder, "assessment")
+            if new_asm is not None:
+                update_fields = []
+                if new_asm.order != new_order:
+                    new_asm.order = new_order
+                    update_fields.append("order")
+                if new_asm.name != new_folder.name:
+                    new_asm.name = new_folder.name
+                    update_fields.append("name")
+                if new_asm.course_id != getattr(course, "id", None):
+                    new_asm.course = course
+                    update_fields.append("course")
+                if new_asm.status != "hidden":
+                    new_asm.status = "hidden"
+                    update_fields.append("status")
+                if update_fields:
+                    new_asm.save(update_fields=update_fields)
+        elif src_type == "aqg":
+            new_aqg = get_branch_related(new_folder, "aqg")
+            if new_aqg is not None:
+                update_fields = []
+                if new_aqg.order != new_order:
+                    new_aqg.order = new_order
+                    update_fields.append("order")
+                if new_aqg.name != new_folder.name:
+                    new_aqg.name = new_folder.name
+                    update_fields.append("name")
+                if new_aqg.assessment_id != getattr(assessment, "id", None):
+                    new_aqg.assessment = assessment
+                    update_fields.append("assessment")
+                if update_fields:
+                    new_aqg.save(update_fields=update_fields)
+        elif src_type == "problem":
+            new_prob = get_branch_related(new_folder, "problem")
+            if new_prob is not None:
+                update_fields = []
+                if new_prob.aqg_id != getattr(aqg, "id", None):
+                    new_prob.aqg = aqg
+                    update_fields.append("aqg")
+                if new_prob.cqd_id is not None:
+                    new_prob.cqd = None
+                    update_fields.append("cqd")
+                if new_prob.title != new_folder.name:
+                    new_prob.title = new_folder.name
+                    update_fields.append("title")
+                if update_fields:
+                    new_prob.save(update_fields=update_fields)
+        elif src_type == "cqd":
+            new_cqd = get_branch_related(new_folder, "cqd")
+            if new_cqd is not None:
+                refresh_cqd_identity(new_cqd)
+                # Ensure nested problems point at the destination AQG.
+                Problem = apps.get_model("assessment_tool", "Problem")
+                Problem.objects.filter(cqd=new_cqd).exclude(aqg=aqg).update(aqg=aqg)
+
+    return new_folder, None
+
 
 def send_to_trash(folder, user):
     """

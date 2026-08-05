@@ -91,8 +91,7 @@
                         {% if d.is_system %}System{% else %}{{ d.email }}{% if d.author %} ({{ d.author }}){% endif %}{% endif %}
                         · {% if d.created %}{{ d.created|date:"Y-m-d H:i" }}{% else %}—{% endif %}
                     </span>
-                    <form method="post" style="margin:0;"
-                          onsubmit="return confirm('Delete this comment permanently?');">
+                    <form method="post" style="margin:0;" data-map-confirm="Delete this comment permanently?" data-map-confirm-danger>
                         {% csrf_token %}
                         <input type="hidden" name="action" value="delete_comment">
                         <input type="hidden" name="discussion_id" value="{{ d.id }}">
@@ -176,7 +175,7 @@
         </form>
 
         {% if can_delete %}
-        <form method="post" style="margin-top: 1.5rem;" onsubmit="return confirm('Delete this ticket permanently?');">
+        <form method="post" style="margin-top: 1.5rem;" data-map-confirm="Delete this ticket permanently?" data-map-confirm-danger>
             {% csrf_token %}
             <input type="hidden" name="action" value="delete">
             <button type="submit" class="btn" style="background:#b91c1c;font-weight:600;">Delete ticket</button>

@@ -288,7 +288,7 @@ class Assessment(models.Model):
         null=True,
         db_comment='Allotted minutes when forcibly-end countdown option is active.',
     )
-    status = models.TextField(blank=True, null=True, db_comment="Postgres enum assessment_status_enum: closed | open | upcoming | hidden (teacher lifecycle); deleted (trash).")  # This field type is a guess.
+    status = models.TextField(blank=True, null=True, db_comment="Postgres enum assessment_status_enum: closed | open | upcoming | hidden | retake (teacher lifecycle); deleted (trash).")  # This field type is a guess.
     is_historic = models.BooleanField(db_comment="When 'true' this is used to determine if the assessment is a static, needs to be unchanged, assessment that a Student is specifically assigned to complete with a single static (with concrete, not variable, inputs) answer tied to the problems. When 'false' it determines the assessment has questions with multiple answers tied to the problems.")
     branch_location = models.OneToOneField('BranchGroup', models.CASCADE, db_column='branch_location', related_name='assessment', db_comment="Just like 'course' this points to a branch location")
     start_time = models.DateTimeField(blank=True, null=True, db_comment="only an available option for the 'parent' assessment")
@@ -308,6 +308,13 @@ class Assessment(models.Model):
     counts_toward_grade = models.BooleanField(
         default=True,
         db_comment='When false, score may be visible but excluded from course totals.',
+    )
+    active_retake_series = models.IntegerField(
+        default=1,
+        db_comment=(
+            'Series that open/upcoming/retake currently apply to. Advances when '
+            'the first student starts a new series under class retake.'
+        ),
     )
 
     def duplicate_assessment(self, new_course, new_owner):
@@ -1043,6 +1050,13 @@ class StudentAssessmentAttempt(models.Model):
         null=True,
         related_name='student_attempts',
     )
+    retake_series = models.IntegerField(
+        default=1,
+        db_comment=(
+            'Attempt series for grade counting. Highest/latest retake scoring '
+            'applies within a series; each series contributes separately.'
+        ),
+    )
     creation_date = models.DateTimeField()
 
     class Meta:
@@ -1134,6 +1148,10 @@ class FinalGradeCalculation(models.Model):
     assessment = models.ForeignKey(Assessment, models.DO_NOTHING, blank=True, null=True, db_comment="Will only be 'null' if the 'delete: set null' activates")
     assessment_grade_points = models.FloatField(blank=True, null=True, db_comment='This identifies the numeric score of a given assessment for the student')
     assessment_grade_max_points = models.FloatField(blank=True, null=True, db_comment='This identifies the maximum possible score of a given assessment for a student')
+    retake_series = models.IntegerField(
+        default=1,
+        db_comment='Series this stored grade belongs to (matches student_assessment_attempt.retake_series).',
+    )
     enrollment = models.ForeignKey(
         StudentCourseEnrollment,
         models.DO_NOTHING,
@@ -1208,6 +1226,14 @@ class OpenStudentAssessmentOverwrite(models.Model):
     a = models.OneToOneField(Assessment, models.DO_NOTHING, primary_key=True, db_comment='assessment.id')  # The composite primary key (a_id, u_id) found, that is not supported. The first column is selected.
     u = models.ForeignKey('UserProfile', models.DO_NOTHING, db_comment='user_profile.id')
     status_open = models.BooleanField(blank=True, null=True, db_comment="true means 'open', false means 'closed'")
+    retake_series = models.IntegerField(
+        blank=True,
+        null=True,
+        db_comment=(
+            'When status_open, new attempts attach to this series (from the '
+            'teacher-selected attempt). NULL means use assessment.active_retake_series.'
+        ),
+    )
 
     class Meta:
         managed = False

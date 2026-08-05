@@ -9,7 +9,7 @@ from .models import QA
 
 # Exact titles used by seed_about_qa_articles and About page links (max 150 chars).
 TITLE_MAP_AND_FLIPPEDMATH = "MAP and flippedmath.com"
-TITLE_AUTHORING = "Authoring parametric math problems in MAP"
+TITLE_AUTHORING = "Authoring dynamic math problems in MAP"
 TITLE_BLUEPRINTS = "Assessment blueprints: sections and randomized problem sets"
 TITLE_PRACTICE_TEST = "Practice tests before students see an assessment"
 TITLE_SYNC_PRINT = (
@@ -44,7 +44,7 @@ ABOUT_CLAIM_BLOCKS = (
         "key": "authoring",
         "title": "Author once, generate many",
         "body": (
-            "Build parametric math problems with linked variables and answer fields. "
+            "Build dynamic math problems with linked variables and answer fields. "
             "One authored problem can produce many valid instances with auto-checkable answers."
         ),
         "article_title": TITLE_AUTHORING,

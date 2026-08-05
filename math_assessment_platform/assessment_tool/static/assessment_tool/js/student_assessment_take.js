@@ -659,7 +659,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (submitBtn) {
         submitBtn.addEventListener('click', async () => {
           if (sessionEnded) return;
-          if (!window.confirm('Submit this assessment? You will not be able to change answers after submitting.')) {
+          if (!(await mapConfirm({
+            title: 'Submit assessment',
+            message: 'Submit this assessment? You will not be able to change answers after submitting.',
+            confirmLabel: 'Submit',
+          }))) {
             return;
           }
           submitBtn.disabled = true;
@@ -746,9 +750,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (focusLockSubmitBtn) {
         focusLockSubmitBtn.addEventListener('click', async () => {
           if (!focusLocked || !cfg.submitLockedUrl || sessionEnded) return;
-          if (!window.confirm(
-            'Submit your currently saved answers? The assessment cannot be reopened after submission.'
-          )) {
+          if (!(await mapConfirm({
+            title: 'Submit assessment',
+            message: 'Submit your currently saved answers? The assessment cannot be reopened after submission.',
+            confirmLabel: 'Submit',
+          }))) {
             return;
           }
           focusLockSubmitBtn.disabled = true;

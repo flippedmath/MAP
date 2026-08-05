@@ -117,7 +117,8 @@
         id="notification-empty-trash-form"
         class="notification-empty-trash-form"
         hidden
-        onsubmit="return confirm('Permanently remove all trashed notifications? This cannot be undone.');"
+        data-map-confirm="Permanently remove all trashed notifications? This cannot be undone."
+        data-map-confirm-danger
     >
         {% csrf_token %}
         <input type="hidden" name="action" value="empty_trash">

@@ -33,21 +33,59 @@ def student_has_open_retake(assessment, student) -> bool:
     return bool(row and row[0])
 
 
-def set_student_open_retake(assessment, student, *, open_flag: bool = True) -> None:
-    """Upsert open_student_assessment_overwrite (composite PK a_id, u_id)."""
+def get_student_open_retake_series(assessment, student):
+    """Target retake_series for an open grant, or None if unset / closed."""
+    if assessment is None or student is None:
+        return None
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO open_student_assessment_overwrite (a_id, u_id, status_open)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (a_id, u_id) DO UPDATE SET status_open = EXCLUDED.status_open
+            SELECT status_open, retake_series
+            FROM open_student_assessment_overwrite
+            WHERE a_id = %s AND u_id = %s
             """,
-            [assessment.id, _student_pk(student), bool(open_flag)],
+            [assessment.id, _student_pk(student)],
+        )
+        row = cursor.fetchone()
+    if not row or not row[0]:
+        return None
+    if row[1] is None:
+        return None
+    try:
+        return max(1, int(row[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def set_student_open_retake(
+    assessment,
+    student,
+    *,
+    open_flag: bool = True,
+    retake_series=None,
+) -> None:
+    """Upsert open_student_assessment_overwrite (composite PK a_id, u_id)."""
+    series = None
+    if open_flag and retake_series is not None:
+        try:
+            series = max(1, int(retake_series))
+        except (TypeError, ValueError):
+            series = None
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO open_student_assessment_overwrite (a_id, u_id, status_open, retake_series)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (a_id, u_id) DO UPDATE SET
+              status_open = EXCLUDED.status_open,
+              retake_series = EXCLUDED.retake_series
+            """,
+            [assessment.id, _student_pk(student), bool(open_flag), series],
         )
 
 
 def clear_student_open_retake(assessment, student) -> None:
-    set_student_open_retake(assessment, student, open_flag=False)
+    set_student_open_retake(assessment, student, open_flag=False, retake_series=None)
 
 
 def open_test_for_retake(
@@ -56,16 +94,21 @@ def open_test_for_retake(
     *,
     synchronization_decision: str = "",
     created_by=None,
+    source_attempt=None,
 ) -> dict:
     """
     Teacher opens a one-shot retake window for this student.
     No student request is required — this only arms the override so the
     student can start another attempt. The flag clears when they submit
     or when the teacher closes the retake.
+
+    New attempts attach to ``source_attempt.retake_series`` when provided
+    (grades-page REDO from a selected attempt).
     """
     m = _models()
     from .course_enrollment import get_active_enrollment
     from .student_attempts import (
+        attempt_retake_series,
         attempts_qs_for_template,
         course_template_assessment,
     )
@@ -106,10 +149,16 @@ def open_test_for_retake(
     if not sync_result.get("ready"):
         return sync_result
 
-    set_student_open_retake(template, student, open_flag=True)
+    series = None
+    if source_attempt is not None:
+        series = attempt_retake_series(source_attempt)
+    set_student_open_retake(
+        template, student, open_flag=True, retake_series=series
+    )
     return {
         "success": True,
         "retake_open": True,
+        "retake_series": series,
         "message": "Retake window opened for this student.",
     }
 

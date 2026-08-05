@@ -3,9 +3,8 @@
 
 {% block course_extra_css %}
     <link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
-    
     <link href="{% static 'assessment_tool/css/assessment_setup.css' %}" rel="stylesheet">
-    
+    <link href="{% static 'assessment_tool/css/branch_picker.css' %}" rel="stylesheet">
 {% endblock %}
 
 {% block course_sub_content %}
@@ -26,7 +25,19 @@
             <a href="{% url 'assessment_practice_test' course_url_id assessment.id %}" class="btn-create-assessment" style="background: #0f766e; text-decoration: none;">
                 <i class="fas fa-play"></i> Practice Test
             </a>
-            <button id="trigger-create-aqg-modal" class="btn-create-assessment">+ Add Question Group Section</button>
+            <div class="add-aqg-dropdown-container" style="position: relative; display: inline-block;">
+                <button type="button" id="trigger-aqg-menu" class="btn-create-assessment btn-trigger-aqg-menu" style="display: inline-flex; align-items: center; gap: 6px;">
+                    + Add Question Group Section <i class="fas fa-caret-down" style="font-size: 0.75rem;"></i>
+                </button>
+                <div id="aqg-menu-overlay" class="problems-menu-overlay setup-header-menu-overlay" style="display: none; padding: 4px;">
+                    <button type="button" id="trigger-create-aqg-modal" class="menu-option-item" style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; padding: 6px 10px; text-align: left; font-size: 0.85rem; font-weight: 500; color: #334155; border-radius: 4px; cursor: pointer;">
+                        <i class="fas fa-plus" style="color: #64748b; font-size: 0.8rem; width: 14px;"></i> Make New Question Group
+                    </button>
+                    <button type="button" id="trigger-copy-aqg-from-explorer" class="menu-option-item" style="display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: transparent; padding: 6px 10px; text-align: left; font-size: 0.85rem; font-weight: 500; color: #334155; border-radius: 4px; cursor: pointer;">
+                        <i class="fas fa-copy" style="color: #64748b; font-size: 0.8rem; width: 14px;"></i> Copy Question Group from Explorer…
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -112,6 +123,7 @@
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+<script src="{% static 'assessment_tool/js/branch_picker.js' %}"></script>
 <script>
     // 🌐 Restored renameUrl to the global operational configuration object
     window.AQG_CONFIG = {
@@ -123,6 +135,11 @@
         moveProblemUrl: "{% url 'move_problem_to_aqg_ajax' course_url_id assessment.id %}",
         moveProblemToSetUrl: "{% url 'move_problem_to_cqd_ajax' course_url_id assessment.id %}",
         removeProblemFromSetUrl: "{% url 'remove_problem_from_cqd_ajax' course_url_id assessment.id %}",
+        copyIntoAqgUrl: "{% url 'copy_into_aqg_ajax' course_url_id assessment.id %}",
+        copyAqgUrl: "{% url 'copy_aqg_into_assessment_ajax' course_url_id assessment.id %}",
+        branchPickerContentsUrlTemplate: "/api/branch-picker/{id}/",
+        explorerRootFolderId: {% if explorer_root_folder %}{{ explorer_root_folder.id }}{% else %}null{% endif %},
+        explorerRootFolderName: {% if explorer_root_folder %}"{{ explorer_root_folder.name|escapejs }}"{% else %}null{% endif %},
         problemSetProblemsUrlTemplate: "{% url 'cqd_problems_list_ajax' course_url_id assessment.id 999999 %}".replace("999999", "{cqd_id}"),
         renameCqdUrl: "{% url 'update_cqd_name_ajax' %}",
         saveProblemUrl: "{% url 'save_problem_workspace' 0 %}"

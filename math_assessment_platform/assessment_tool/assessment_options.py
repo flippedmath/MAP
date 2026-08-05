@@ -519,9 +519,12 @@ def show_count_up_timer(assessment) -> bool:
 
 def select_counting_attempt(attempts: list, assessment) -> object | None:
     """
-    From a student's attempts on one assessment, pick the attempt that counts
-    toward the grade per Retake assessment scoring (highest vs latest).
-    Prefers submitted attempts; if none, returns None.
+    From a list of attempts (typically one student + one series), pick the
+    attempt that counts toward the grade per Retake assessment scoring
+    (highest vs latest). Prefers submitted attempts; if none, returns None.
+
+    Callers that have multi-series history should group by series first and
+    call this once per series (see select_counting_attempts_by_series).
     """
     submitted = [
         a
@@ -564,6 +567,28 @@ def select_counting_attempt(attempts: list, assessment) -> object | None:
         return (ratio, earned_v, stamp, a.id)
 
     return max(submitted, key=highest_key)
+
+
+def select_counting_attempts_by_series(attempts: list, assessment) -> list:
+    """
+    One counting attempt per retake_series for a student's attempts.
+    Each series contributes separately to course grade totals.
+    """
+    by_series: dict[int, list] = {}
+    for attempt in attempts or []:
+        try:
+            series = int(getattr(attempt, "retake_series", 1) or 1)
+        except (TypeError, ValueError):
+            series = 1
+        if series < 1:
+            series = 1
+        by_series.setdefault(series, []).append(attempt)
+    selected = []
+    for series in sorted(by_series.keys()):
+        chosen = select_counting_attempt(by_series[series], assessment)
+        if chosen is not None:
+            selected.append(chosen)
+    return selected
 
 
 def score_release_requires_teacher(assessment) -> bool:

@@ -567,6 +567,7 @@ def serialize_admin_article_result(
         ),
         "detail_url": f"/qa/{article.id}/",
         "edit_url": f"/qa/admin/{article.id}/edit/",
+        "delete_url": f"/qa/admin/{article.id}/delete/",
     }
 
 

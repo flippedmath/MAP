@@ -100,8 +100,7 @@
                                 <td style="padding: 8px;">
                                     <div style="display:flex;flex-wrap:wrap;gap:6px;">
                                         {% if row.can_make_main %}
-                                        <form method="post" style="display:inline;"
-                                              onsubmit="return confirm('Transfer course ownership to {{ row.username }}? You will become a co-teacher.');">
+                                        <form method="post" style="display:inline;" data-map-confirm="Transfer course ownership to {{ row.username }}? You will become a co-teacher." data-map-confirm-danger>
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="transfer_ownership">
                                             <input type="hidden" name="teacher_id" value="{{ row.user_id }}">
@@ -111,8 +110,7 @@
                                         </form>
                                         {% endif %}
                                         {% if row.can_remove %}
-                                        <form method="post" style="display:inline;"
-                                              onsubmit="return confirm('Remove {{ row.username }} from this course?');">
+                                        <form method="post" style="display:inline;" data-map-confirm="Remove {{ row.username }} from this course?" data-map-confirm-danger>
                                             {% csrf_token %}
                                             {% if row.invite_id %}
                                             <input type="hidden" name="action" value="void_teacher_invite">
@@ -127,8 +125,7 @@
                                         </form>
                                         {% endif %}
                                         {% if row.can_leave %}
-                                        <form method="post" style="display:inline;"
-                                              onsubmit="return confirm('Leave this course as a co-teacher?');">
+                                        <form method="post" style="display:inline;" data-map-confirm="Leave this course as a co-teacher?" data-map-confirm-danger>
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="leave_as_teacher">
                                             <button type="submit" class="btn" style="background:#64748b;padding:4px 10px;font-size:0.8rem;">
@@ -318,8 +315,7 @@
                                 </td>
                                 <td style="padding: 8px;">
                                     {% if row.can_void %}
-                                        <form method="post" style="display: inline;"
-                                              onsubmit="return confirm('Void and delete this invitation? The link will no longer work. The seat credit spent on this unused invite will be reimbursed.');">
+                                        <form method="post" style="display: inline;" data-map-confirm="Void and delete this invitation? The link will no longer work. The seat credit spent on this unused invite will be reimbursed." data-map-confirm-danger>
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="void_invite">
                                             <input type="hidden" name="invite_id" value="{{ row.invite.id }}">
@@ -376,8 +372,7 @@
                                 </td>
                                 <td style="padding: 8px;">
                                     {% if row.has_access %}
-                                        <form method="post" style="display: inline;"
-                                              onsubmit="return confirm('Revoke grade access for this parent in this course?');">
+                                        <form method="post" style="display: inline;" data-map-confirm="Revoke grade access for this parent in this course?" data-map-confirm-danger>
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="revoke_parent_access">
                                             <input type="hidden" name="parent_id" value="{{ row.parent_id }}">
@@ -477,8 +472,7 @@
                                 </td>
                                 <td style="padding: 8px;">
                                     {% if row.can_void %}
-                                        <form method="post" style="display: inline;"
-                                              onsubmit="return confirm('Void and delete this parent invitation? The link will no longer work.');">
+                                        <form method="post" style="display: inline;" data-map-confirm="Void and delete this parent invitation? The link will no longer work." data-map-confirm-danger>
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="void_parent_invite">
                                             <input type="hidden" name="invite_id" value="{{ row.invite.id }}">
@@ -791,19 +785,30 @@
 
     if (form) {
         form.addEventListener('submit', function (evt) {
+            if (form.getAttribute('data-map-confirm-armed') === '1') {
+                form.removeAttribute('data-map-confirm-armed');
+                return;
+            }
+            evt.preventDefault();
             var label = (labelEl && labelEl.textContent) || 'this student';
             var gradeLine = kickWithinWeek
                 ? 'Recorded grades for this enrollment period will NOT be kept on a transcript (enrolled less than one week).'
                 : 'Recorded grades for this enrollment stay on the transcript only.';
-            var ok = window.confirm(
-                'Final confirmation: permanently remove ' + label +
-                ' from this course?\n\n' +
-                'All live progress for this student in the course will be deleted. ' +
-                gradeLine
-            );
-            if (!ok) {
-                evt.preventDefault();
-            }
+            mapConfirm({
+                title: 'Remove student',
+                message:
+                    'Final confirmation: permanently remove ' + label +
+                    ' from this course?\n\n' +
+                    'All live progress for this student in the course will be deleted. ' +
+                    gradeLine,
+                danger: true,
+                confirmLabel: 'Remove',
+            }).then(function (ok) {
+                if (!ok) return;
+                form.setAttribute('data-map-confirm-armed', '1');
+                if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                else form.submit();
+            });
         });
     }
 })();

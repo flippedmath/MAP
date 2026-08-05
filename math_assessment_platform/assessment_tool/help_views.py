@@ -7,7 +7,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
-from django.views.decorators.http import require_GET, require_http_methods
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from .help_qa import (
     RESTRICTION_CHOICES,
@@ -346,3 +346,14 @@ def help_admin_edit_view(request, article_id):
             "restriction_label": restriction_label(article.user_restriction_level),
         },
     )
+
+
+@login_required
+@user_passes_test(_is_it_support, login_url="/dashboard/")
+@require_POST
+def help_admin_delete_api(request, article_id):
+    """IT-only JSON delete for the admin article list."""
+    article = get_object_or_404(QA, pk=article_id)
+    title = article.title or "(untitled)"
+    delete_article(article)
+    return JsonResponse({"success": True, "id": article_id, "title": title})

@@ -325,7 +325,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function showConfirmOverlay({ title, message, items }) {
         return new Promise((resolve) => {
             if (!confirmOverlay) {
-                resolve(window.confirm([message, ...(items || [])].filter(Boolean).join('\n')));
+                const lines = [message, ...(items || [])].filter(Boolean);
+                mapConfirm({
+                    title: title || 'Continue?',
+                    message: lines.join('\n'),
+                    confirmLabel: 'Continue',
+                }).then(resolve);
                 return;
             }
             confirmResolver = resolve;

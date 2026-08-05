@@ -654,7 +654,11 @@
     btn.addEventListener('click', async () => {
       const url = btn.getAttribute('data-release-url');
       if (!url) return;
-      if (!window.confirm('Release grades for this assessment to students?')) return;
+      if (!(await mapConfirm({
+        title: 'Release grades',
+        message: 'Release grades for this assessment to students?',
+        confirmLabel: 'Release',
+      }))) return;
       btn.disabled = true;
       try {
         const { data } = await postJson(url, {});

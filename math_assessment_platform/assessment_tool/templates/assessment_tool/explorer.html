@@ -348,8 +348,12 @@ async function createNewFolder(parentId, level) {
         return;
     }
 
-    const folderName = prompt("Enter folder name:");
-    if (!folderName) return;
+    const folderName = await mapPrompt({
+        title: 'New folder',
+        message: 'Enter folder name:',
+        okLabel: 'Create',
+    });
+    if (folderName == null || !String(folderName).trim()) return;
 
     try {
         const response = await fetch('/create-folder/', {
@@ -642,8 +646,13 @@ async function handleRename() {
     const element = document.querySelector(`[data-id="${currentItem.id}"][data-type="${currentItem.type}"]`);
     if (!element) return;
 
-    const newName = prompt(`Rename ${currentItem.name} to:`, currentItem.name);
-    if (!newName || newName === currentItem.name) return;
+    const newName = await mapPrompt({
+        title: 'Rename',
+        message: `Rename ${currentItem.name} to:`,
+        defaultValue: currentItem.name,
+        okLabel: 'Rename',
+    });
+    if (newName == null || !String(newName).trim() || newName === currentItem.name) return;
 
     const parentId = element.getAttribute('data-parent-id');
     const level = parseInt(element.closest('.finder-column').dataset.level);
@@ -696,14 +705,6 @@ async function handleRename() {
     <h3 id="map-overlay-title" style="margin-top:0;"></h3>
     <div id="map-overlay-body" style="margin:12px 0; color:#333;"></div>
     <div id="map-overlay-actions" style="display:flex; gap:8px; justify-content:flex-end;"></div>
-  </div>
-</div>
-
-<div id="map-dialog-overlay" role="alertdialog" aria-modal="true" aria-labelledby="map-dialog-title" aria-describedby="map-dialog-message">
-  <div id="map-dialog-panel">
-    <h3 id="map-dialog-title"></h3>
-    <p id="map-dialog-message"></p>
-    <div id="map-dialog-actions"></div>
   </div>
 </div>
 

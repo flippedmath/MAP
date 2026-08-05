@@ -1,8 +1,12 @@
 // math_assessment_platform/static/assessment_tool/js/assessment_setup.js
 
-document.addEventListener("DOMContentLoaded", function() {
+function initAssessmentSetupPage() {
     const modal = document.getElementById('create-aqg-modal');
+    const aqgMenuTrigger = document.getElementById('trigger-aqg-menu');
+    const aqgMenuOverlay = document.getElementById('aqg-menu-overlay');
+    const aqgMenuContainer = document.querySelector('.add-aqg-dropdown-container');
     const triggerBtn = document.getElementById('trigger-create-aqg-modal');
+    const copyAqgTriggerBtn = document.getElementById('trigger-copy-aqg-from-explorer');
     const closeBtn = document.getElementById('close-aqg-modal');
     const submitBtn = document.getElementById('submit-aqg-creation');
     const nameInput = document.getElementById('new-aqg-name-input');
@@ -16,14 +20,136 @@ document.addEventListener("DOMContentLoaded", function() {
         return str.trim().replace(/\s+/g, ' ');
     }
 
+    function ensureProblemsListWrapper(problemsBody) {
+        let listWrapper = problemsBody.querySelector('.problems-list-wrapper');
+        const emptyPlaceholder = problemsBody.querySelector('.empty-problems-placeholder');
+        if (emptyPlaceholder) emptyPlaceholder.remove();
+        if (problemsBody.innerText.includes('No problems added to this section yet')) {
+            problemsBody.innerHTML = '';
+        }
+        if (!listWrapper) {
+            listWrapper = document.createElement('div');
+            listWrapper.className = 'problems-list-wrapper';
+            listWrapper.style.display = 'flex';
+            listWrapper.style.flexDirection = 'column';
+            listWrapper.style.gap = '8px';
+            problemsBody.appendChild(listWrapper);
+            initializeSortableOnNestedList(listWrapper);
+        }
+        return listWrapper;
+    }
+
+    function hydrateAqgCard(card) {
+        if (!card) return;
+        attachInputListeners(card.querySelector('.aqg-title-input'));
+        attachDeleteListener(card);
+        card.querySelectorAll('.cqd-name-input').forEach(attachCqdNameListeners);
+        card.querySelectorAll('.problem-title-input').forEach(attachProblemInputListeners);
+        const nestedList = card.querySelector('.problems-list-wrapper');
+        if (nestedList) initializeSortableOnNestedList(nestedList);
+    }
+
+    async function openExplorerCopyPicker({ title, hint, selectableTypes, onCopy }) {
+        async function notify(titleText, message) {
+            if (typeof mapAlert === 'function') {
+                await mapAlert({ title: titleText, message });
+            } else {
+                alert(message);
+            }
+        }
+        if (typeof openBranchPicker !== 'function') {
+            await notify(
+                'Unavailable',
+                'Branch picker failed to load. Hard-refresh the page (Cmd-Shift-R) and try again.'
+            );
+            return;
+        }
+        const cfg = window.AQG_CONFIG || {};
+        if (!cfg.explorerRootFolderId) {
+            await notify('Unavailable', 'Explorer root folder was not found for your account.');
+            return;
+        }
+        await openBranchPicker({
+            title,
+            hint,
+            rootFolderId: cfg.explorerRootFolderId,
+            rootFolderName: cfg.explorerRootFolderName || 'Home',
+            contentsUrlTemplate: cfg.branchPickerContentsUrlTemplate || '/api/branch-picker/{id}/',
+            selectableTypes,
+            commitLabel: 'Copy',
+            onSelect: onCopy,
+        });
+    }
+
     // -------------------------------------------------------------
-    // Creation Modal Toggles
+    // Creation Modal Toggles + header "Add Question Group" dropdown
     // -------------------------------------------------------------
+    function closeAqgHeaderMenu() {
+        if (aqgMenuOverlay) aqgMenuOverlay.style.display = 'none';
+    }
+
+    if (aqgMenuTrigger && aqgMenuOverlay && aqgMenuContainer) {
+        aqgMenuTrigger.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const open = aqgMenuOverlay.style.display === 'flex';
+            aqgMenuOverlay.style.display = open ? 'none' : 'flex';
+        });
+        aqgMenuContainer.addEventListener('mouseleave', () => {
+            window.setTimeout(closeAqgHeaderMenu, 150);
+        });
+        document.addEventListener('click', (e) => {
+            if (!aqgMenuContainer.contains(e.target)) closeAqgHeaderMenu();
+        });
+    }
+
     if (triggerBtn) {
         triggerBtn.addEventListener('click', () => {
+            closeAqgHeaderMenu();
             nameInput.value = '';
             modal.classList.add('is-visible');
             nameInput.focus();
+        });
+    }
+
+    if (copyAqgTriggerBtn) {
+        copyAqgTriggerBtn.addEventListener('click', async () => {
+            closeAqgHeaderMenu();
+            try {
+                await openExplorerCopyPicker({
+                    title: 'Copy question group section',
+                    hint: 'Browse your explorer and select a question group section you can view. A deep copy (including problems and problem sets) is added to this assessment.',
+                    selectableTypes: ['aqg'],
+                    onCopy: async (item) => {
+                        const response = await fetch(window.AQG_CONFIG.copyAqgUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': getCookie('csrftoken'),
+                            },
+                            body: JSON.stringify({ source_branch_id: item.id }),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || !data.success) {
+                            throw new Error(data.error || 'Copy failed.');
+                        }
+                        const emptyEl = document.getElementById('aqg-empty-placeholder');
+                        if (emptyEl) emptyEl.remove();
+                        canvasList.insertAdjacentHTML('beforeend', data.html);
+                        hydrateAqgCard(canvasList.lastElementChild);
+                    },
+                });
+            } catch (err) {
+                console.error('Copy question group failed:', err);
+                if (typeof mapAlert === 'function') {
+                    await mapAlert({
+                        title: 'Copy failed',
+                        message: err.message || 'Copy failed.',
+                    });
+                } else {
+                    alert(err.message || 'Copy failed.');
+                }
+            }
         });
     }
 
@@ -247,7 +373,7 @@ document.addEventListener("DOMContentLoaded", function() {
             const sectionName = cardElement.querySelector('.aqg-title-input')?.value || "this section";
 
             // 1. Prompt native user warning verification dialog window
-            const confirmed = confirm(`Are you sure you want to permanently delete "${sectionName}"?\nThis will recursively erase this section and all problems inside it.`);
+            const confirmed = (await mapConfirm({ title: 'Confirm', message: `Are you sure you want to permanently delete "${sectionName}"?\nThis will recursively erase this section and all problems inside it.`, danger: true, confirmLabel: 'Delete' }));
             if (!confirmed) return;
 
             try {
@@ -558,7 +684,7 @@ document.addEventListener("DOMContentLoaded", function() {
                 const problemTitle = row.querySelector('.problem-title-input')?.value || "this problem";
                 const problemsBody = row.closest('.aqg-problems-body');
 
-                const confirmed = confirm(`Are you sure you want to permanently delete "${problemTitle}"?`);
+                const confirmed = (await mapConfirm({ title: 'Confirm', message: `Are you sure you want to permanently delete "${problemTitle}"?`, danger: true, confirmLabel: 'Delete' }));
                 if (!confirmed) return;
 
                 // Lock button layout during pipeline processing latency
@@ -633,25 +759,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     const data = await response.json();
 
                     if (response.ok) {
-                        let listWrapper = problemsBody.querySelector('.problems-list-wrapper');
-                        const emptyPlaceholder = problemsBody.querySelector('.empty-problems-placeholder');
-                        
-                        // Clear placeholders or empty dashboard structural cards out of the canvas viewport block layout
-                        if (emptyPlaceholder) emptyPlaceholder.remove();
-                        if (problemsBody.innerText.includes("No problems added to this section yet")) {
-                            problemsBody.innerHTML = '';
-                        }
-                        
-                        if (!listWrapper) {
-                            listWrapper = document.createElement('div');
-                            listWrapper.className = 'problems-list-wrapper';
-                            listWrapper.style.display = 'flex';
-                            listWrapper.style.flexDirection = 'column';
-                            listWrapper.style.gap = '8px';
-                            problemsBody.appendChild(listWrapper);
-
-                            initializeSortableOnNestedList(listWrapper);
-                        }
+                        const listWrapper = ensureProblemsListWrapper(problemsBody);
 
                         // Inject pre-rendered server layout snippet structure fluidly
                         listWrapper.insertAdjacentHTML('beforeend', data.html);
@@ -664,6 +772,56 @@ document.addEventListener("DOMContentLoaded", function() {
                 } catch (err) {
                     console.error("Assessment setup request failed:", err);
                     alert("A critical networking transmission failure occurred while trying to append the item distribution row.");
+                }
+                return;
+            }
+
+            // --- HANDLER: Copy problem / problem set from explorer into this AQG ---
+            const copyFromExplorerBtn = e.target.closest('.btn-copy-from-explorer');
+            if (copyFromExplorerBtn) {
+                const card = copyFromExplorerBtn.closest('.aqg-section-card');
+                const aqgId = card.getAttribute('data-id');
+                const problemsBody = card.querySelector('.aqg-problems-body');
+                const dropdownMenu = copyFromExplorerBtn.closest('.problems-menu-overlay');
+                if (dropdownMenu) dropdownMenu.style.display = 'none';
+
+                try {
+                    await openExplorerCopyPicker({
+                        title: 'Copy into this section',
+                        hint: 'Browse your explorer and select a problem or problem set you can view. A deep copy is added to this section.',
+                        selectableTypes: ['problem', 'cqd'],
+                        onCopy: async (item) => {
+                            const response = await fetch(window.AQG_CONFIG.copyIntoAqgUrl, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'X-CSRFToken': getCookie('csrftoken'),
+                                },
+                                body: JSON.stringify({
+                                    aqg_id: parseInt(aqgId, 10),
+                                    source_branch_id: item.id,
+                                }),
+                            });
+                            const data = await response.json().catch(() => ({}));
+                            if (!response.ok || !data.success) {
+                                throw new Error(data.error || 'Copy failed.');
+                            }
+                            const listWrapper = ensureProblemsListWrapper(problemsBody);
+                            listWrapper.insertAdjacentHTML('beforeend', data.html);
+                            const newRow = listWrapper.lastElementChild;
+                            if (data.copied_type === 'cqd') {
+                                attachCqdNameListeners(newRow?.querySelector('.cqd-name-input'));
+                            } else {
+                                attachProblemInputListeners(newRow?.querySelector('.problem-title-input'));
+                            }
+                        },
+                    });
+                } catch (err) {
+                    console.error('Copy from explorer failed:', err);
+                    await mapAlert({
+                        title: 'Copy failed',
+                        message: err.message || 'Copy failed.',
+                    });
                 }
                 return;
             }
@@ -681,7 +839,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
                 if (itemType === 'problem') {
                     const problemTitle = itemRow.querySelector('.problem-title-input')?.value || "this problem";
-                    if (!confirm(`Are you sure you want to permanently delete "${problemTitle}"?`)) return;
+                    if (!(await mapConfirm({ title: 'Confirm', message: `Are you sure you want to permanently delete "${problemTitle}"?`, danger: true, confirmLabel: 'Delete' }))) return;
 
                     deleteBtn.disabled = true;
                     const originalIcon = deleteBtn.innerHTML;
@@ -729,7 +887,7 @@ document.addEventListener("DOMContentLoaded", function() {
                     return;
                 }
 
-                if (confirm("Are you sure you want to delete this problem group?")) {
+                if ((await mapConfirm({ title: 'Confirm', message: "Are you sure you want to delete this problem group?", danger: true, confirmLabel: 'Delete' }))) {
                     try {
                         const response = await fetch(`/delete-item/${itemType}/${itemId}/`, {
                             method: 'POST',
@@ -783,7 +941,7 @@ document.addEventListener("DOMContentLoaded", function() {
             const currentCount = displaySpan.innerText.trim();
 
             // 1. Prompt the user for input
-            let userInput = prompt("Enter how many problems to randomly choose from this set (0 or more):", currentCount);
+            let userInput = (await mapPrompt({ title: 'Selection count', message: "Enter how many problems to randomly choose from this set (0 or more):", defaultValue: currentCount, okLabel: 'Save' }));
             
             // If the user hits cancel, exit early
             if (userInput === null) return;
@@ -1613,7 +1771,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
             const itemId = itemRow.getAttribute('data-problem-id') || itemRow.getAttribute('data-id');
             const problemTitle = itemRow.querySelector('.problem-title-input')?.value || "this problem";
-            if (!confirm(`Are you sure you want to permanently delete "${problemTitle}"?`)) return;
+            if (!(await mapConfirm({ title: 'Confirm', message: `Are you sure you want to permanently delete "${problemTitle}"?`, danger: true, confirmLabel: 'Delete' }))) return;
 
             deleteBtn.disabled = true;
             const originalIcon = deleteBtn.innerHTML;
@@ -1650,4 +1808,10 @@ document.addEventListener("DOMContentLoaded", function() {
             }
         });
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAssessmentSetupPage);
+} else {
+    initAssessmentSetupPage();
+}

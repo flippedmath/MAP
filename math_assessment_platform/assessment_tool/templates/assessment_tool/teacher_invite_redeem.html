@@ -26,8 +26,7 @@
             {% csrf_token %}
             <button type="submit" name="action" value="accept" class="btn" style="font-weight:600;">Accept</button>
             <button type="submit" name="action" value="reject" class="btn"
-                    style="font-weight:600;background:#64748b;"
-                    onclick="return confirm('Decline this co-teacher invitation?');">
+                    style="font-weight:600;background:#64748b;" data-map-confirm="Decline this co-teacher invitation?" data-map-confirm-danger>
                 Decline
             </button>
         </form>

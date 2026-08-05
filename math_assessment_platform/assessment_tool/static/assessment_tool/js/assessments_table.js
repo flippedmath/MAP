@@ -345,7 +345,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const assessmentId = this.getAttribute('data-assessment-id');
             const targetedRow = this.closest('tr');
 
-            const userConfirmed = confirm("Are you sure you want to delete this assessment? This will move its structural files to the Trash folder and remove it from your active dashboard.");
+            const userConfirmed = await mapConfirm({
+                title: 'Delete assessment',
+                message: 'Are you sure you want to delete this assessment? This will move its structural files to the Trash folder and remove it from your active dashboard.',
+                danger: true,
+                confirmLabel: 'Delete',
+            });
             if (!userConfirmed) return;
 
             try {

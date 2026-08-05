@@ -21,6 +21,13 @@
     var debounceTimer = null;
     var requestSeq = 0;
     var controllers = [];
+    var csrfToken = root.getAttribute('data-csrf') || '';
+    var deleteOverlay = document.getElementById('help-admin-delete-overlay');
+    var deleteTitleText = document.getElementById('help-admin-delete-title-text');
+    var deleteCancelBtn = document.getElementById('help-admin-delete-cancel');
+    var deleteConfirmBtn = document.getElementById('help-admin-delete-confirm');
+    var pendingDelete = null;
+    var deleteInFlight = false;
 
     function abortAll() {
         controllers.forEach(function (c) {
@@ -147,7 +154,12 @@
                 '<td style="white-space:nowrap;">' + escapeHtml(item.modification_date || '—') + '</td>' +
                 '<td style="white-space:nowrap;">' +
                 '<a href="' + escapeHtml(item.edit_url) + '">Edit</a> · ' +
-                '<a href="' + escapeHtml(item.detail_url) + '">View</a>' +
+                '<a href="' + escapeHtml(item.detail_url) + '">View</a> · ' +
+                '<button type="button" class="help-admin-delete-link" data-delete-url="' +
+                escapeHtml(item.delete_url || '') +
+                '" data-delete-title="' + escapeHtml(item.title || '') +
+                '" data-delete-id="' + escapeHtml(String(item.id || '')) +
+                '">Delete</button>' +
                 '</td>' +
                 '</tr>'
             );
@@ -302,12 +314,105 @@
         }
     });
 
+    function closeDeleteOverlay() {
+        if (!deleteOverlay) return;
+        pendingDelete = null;
+        deleteInFlight = false;
+        if (deleteConfirmBtn) {
+            deleteConfirmBtn.disabled = false;
+            deleteConfirmBtn.textContent = 'Delete';
+        }
+        deleteOverlay.hidden = true;
+        deleteOverlay.setAttribute('aria-hidden', 'true');
+    }
+
+    function openDeleteOverlay(item) {
+        if (!deleteOverlay || !item || !item.delete_url) return;
+        pendingDelete = item;
+        if (deleteTitleText) {
+            deleteTitleText.textContent = item.title || 'This article';
+        }
+        deleteOverlay.hidden = false;
+        deleteOverlay.setAttribute('aria-hidden', 'false');
+        if (deleteConfirmBtn) deleteConfirmBtn.focus();
+    }
+
+    function removeDeletedFromResults(id) {
+        var numId = Number(id);
+        primaryResults = primaryResults.filter(function (r) { return Number(r.id) !== numId; });
+        contentResults = contentResults.filter(function (r) { return Number(r.id) !== numId; });
+        render();
+    }
+
+    function confirmDelete() {
+        if (!pendingDelete || !pendingDelete.delete_url || deleteInFlight) return;
+        deleteInFlight = true;
+        if (deleteConfirmBtn) {
+            deleteConfirmBtn.disabled = true;
+            deleteConfirmBtn.textContent = 'Deleting…';
+        }
+        var deleteUrl = pendingDelete.delete_url;
+        var deleteId = pendingDelete.id;
+        fetch(deleteUrl, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRFToken': csrfToken,
+            },
+        })
+            .then(function (res) {
+                if (!res.ok) throw new Error('Delete failed');
+                return res.json();
+            })
+            .then(function () {
+                removeDeletedFromResults(deleteId);
+                closeDeleteOverlay();
+                setStatus('Article deleted.');
+            })
+            .catch(function () {
+                deleteInFlight = false;
+                if (deleteConfirmBtn) {
+                    deleteConfirmBtn.disabled = false;
+                    deleteConfirmBtn.textContent = 'Delete';
+                }
+                setStatus('Unable to delete article.');
+            });
+    }
+
     tbody.addEventListener('click', function (e) {
+        var deleteBtn = e.target.closest('[data-delete-url]');
+        if (deleteBtn) {
+            e.preventDefault();
+            openDeleteOverlay({
+                id: deleteBtn.getAttribute('data-delete-id'),
+                title: deleteBtn.getAttribute('data-delete-title') || '',
+                delete_url: deleteBtn.getAttribute('data-delete-url') || '',
+            });
+            return;
+        }
         var link = e.target.closest('a[data-tag]');
         if (!link) return;
         e.preventDefault();
         runTag(link.getAttribute('data-tag') || '');
     });
+
+    if (deleteCancelBtn) {
+        deleteCancelBtn.addEventListener('click', closeDeleteOverlay);
+    }
+    if (deleteConfirmBtn) {
+        deleteConfirmBtn.addEventListener('click', confirmDelete);
+    }
+    if (deleteOverlay) {
+        deleteOverlay.addEventListener('click', function (e) {
+            if (e.target === deleteOverlay) closeDeleteOverlay();
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && deleteOverlay && !deleteOverlay.hidden) {
+                closeDeleteOverlay();
+            }
+        });
+    }
 
     runBrowse();
 })();

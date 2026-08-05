@@ -127,8 +127,7 @@
                 <a href="{% url 'verify_email' %}" class="btn" style="display: inline-block; padding: 10px 16px;">
                     Continue verification
                 </a>
-                <form method="post" style="display: inline;"
-                      onsubmit="return confirm('Cancel the pending email change and keep {{ profile.user_email }}?');">
+                <form method="post" style="display: inline;" data-map-confirm="Cancel the pending email change and keep {{ profile.user_email }}?" data-map-confirm-danger>
                     {% csrf_token %}
                     <input type="hidden" name="action" value="cancel_email_change">
                     <button type="submit" class="btn" style="background: #64748b;">Cancel email change</button>

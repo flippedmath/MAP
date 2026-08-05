@@ -102,8 +102,8 @@ def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
     (see ``record_zeros_on_assessment_close`` / ``close_assessment_and_finalize_attempts``).
     Existing enrollment-scoped grade rows are left untouched.
     """
-    from .assessment_options import select_counting_attempt
-    from .student_attempts import course_template_assessment
+    from .assessment_options import select_counting_attempts_by_series
+    from .student_attempts import attempt_retake_series, course_template_assessment
 
     course = enrollment.course
     student = enrollment.user
@@ -129,39 +129,40 @@ def snapshot_enrollment_grades(enrollment: StudentCourseEnrollment) -> int:
 
     for template_id, group in by_template.items():
         template = templates[template_id]
-        if FinalGradeCalculation.objects.filter(
-            enrollment=enrollment,
-            assessment_id=template_id,
-        ).exists():
-            continue
+        for counting in select_counting_attempts_by_series(group, template):
+            series = attempt_retake_series(counting)
+            if FinalGradeCalculation.objects.filter(
+                enrollment=enrollment,
+                assessment_id=template_id,
+                retake_series=series,
+            ).exists():
+                continue
 
-        counting = select_counting_attempt(group, template)
-        if counting is None:
-            continue
-        points, max_points = _score_from_student_attempt(counting)
-        if points is None and counting.auto_graded_at is None:
-            continue
+            points, max_points = _score_from_student_attempt(counting)
+            if points is None and counting.auto_graded_at is None:
+                continue
 
-        weight = 1
-        raw_weight = getattr(template, "grade_weight", None)
-        if raw_weight is None:
-            raw_weight = template.points_weight
-        if raw_weight is not None:
-            try:
-                weight = int(round(float(raw_weight)))
-            except (TypeError, ValueError):
-                weight = 1
+            weight = 1
+            raw_weight = getattr(template, "grade_weight", None)
+            if raw_weight is None:
+                raw_weight = template.points_weight
+            if raw_weight is not None:
+                try:
+                    weight = int(round(float(raw_weight)))
+                except (TypeError, ValueError):
+                    weight = 1
 
-        FinalGradeCalculation.objects.create(
-            enrollment=enrollment,
-            course=course,
-            user=student,
-            assessment_id=template_id,
-            weight=weight,
-            assessment_grade_points=0.0 if points is None else points,
-            assessment_grade_max_points=max_points,
-        )
-        created += 1
+            FinalGradeCalculation.objects.create(
+                enrollment=enrollment,
+                course=course,
+                user=student,
+                assessment_id=template_id,
+                weight=weight,
+                retake_series=series,
+                assessment_grade_points=0.0 if points is None else points,
+                assessment_grade_max_points=max_points,
+            )
+            created += 1
 
     return created
 
@@ -182,12 +183,16 @@ def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
         return 0
 
     from .assessment_grades import assessment_template_total_points
-    from .student_attempts import assessment_has_student_engagement
+    from .student_attempts import (
+        assessment_active_retake_series,
+        assessment_has_student_engagement,
+    )
 
     if not assessment_has_student_engagement(assessment):
         return 0
 
     max_points = assessment_template_total_points(assessment)
+    series = assessment_active_retake_series(assessment)
     weight = 1
     raw_weight = getattr(assessment, "grade_weight", None)
     if raw_weight is None:
@@ -208,6 +213,7 @@ def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
         if FinalGradeCalculation.objects.filter(
             enrollment=enrollment,
             assessment=assessment,
+            retake_series=series,
         ).exists():
             continue
         FinalGradeCalculation.objects.create(
@@ -216,6 +222,7 @@ def record_zeros_on_assessment_close(*, assessment: Assessment) -> int:
             user=enrollment.user,
             assessment=assessment,
             weight=weight,
+            retake_series=series,
             assessment_grade_points=0.0,
             assessment_grade_max_points=float(max_points or 0.0),
         )

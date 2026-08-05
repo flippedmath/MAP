@@ -240,7 +240,7 @@ def question_batch_review_payload(assessment, slot_index: int) -> dict:
     toward the grade (highest or latest per Retake assessment scoring;
     voided attempts ignored). Ordered by student name.
     """
-    from .assessment_options import select_counting_attempt
+    from .assessment_options import select_counting_attempts_by_series
     from .dashboard import user_roster_formal_name
     from .student_attempts import attempts_qs_for_template, get_attempt_for_template
 
@@ -277,7 +277,9 @@ def question_batch_review_payload(assessment, slot_index: int) -> dict:
     items = []
     current_title = ""
     for uid, group in by_user.items():
-        attempt = select_counting_attempt(group, assessment)
+        # Batch review uses the latest series' counting attempt.
+        counting = select_counting_attempts_by_series(group, assessment)
+        attempt = counting[-1] if counting else None
         if attempt is None:
             continue
         problem_row = (
@@ -750,8 +752,11 @@ def assessment_curve_bonus_points(assessment) -> float:
 
 
 def counting_attempts_for_assessment(assessment) -> list:
-    """One submitted, non-voided attempt per student, honoring retake scoring."""
-    from .assessment_options import select_counting_attempt
+    """
+    Submitted, non-voided counting attempts: one per (student, retake_series),
+    honoring highest/latest retake scoring within each series.
+    """
+    from .assessment_options import select_counting_attempts_by_series
     from .student_attempts import attempts_qs_for_template
 
     attempts = list(attempts_qs_for_template(assessment).order_by("user_id", "id"))
@@ -759,11 +764,28 @@ def counting_attempts_for_assessment(assessment) -> list:
     for attempt in attempts:
         if attempt.user_id is not None:
             by_user.setdefault(attempt.user_id, []).append(attempt)
-    return [
-        selected
-        for group in by_user.values()
-        if (selected := select_counting_attempt(group, assessment)) is not None
-    ]
+    selected = []
+    for group in by_user.values():
+        selected.extend(select_counting_attempts_by_series(group, assessment))
+    return selected
+
+
+def assessment_series_numbers(assessment) -> list[int]:
+    """Distinct retake_series values present for this assessment (at least [1])."""
+    from .student_attempts import attempts_qs_for_template
+
+    series_set = set()
+    for value in attempts_qs_for_template(assessment).values_list(
+        "retake_series", flat=True
+    ).distinct():
+        try:
+            series = int(value or 1)
+        except (TypeError, ValueError):
+            series = 1
+        series_set.add(series if series >= 1 else 1)
+    if not series_set:
+        series_set.add(1)
+    return sorted(series_set)
 
 
 def _answer_content_is_nonblank(content) -> bool:
@@ -805,16 +827,19 @@ def _answer_content_is_nonblank(content) -> bool:
 
 
 def assessment_average_summary(assessment) -> dict:
-    """Overall average from each student's counting attempt."""
+    """Overall average from each student's counting attempt(s) across series."""
     attempts = counting_attempts_for_assessment(assessment)
     bonus = assessment_curve_bonus_points(assessment)
     earned_total = sum(
         float(attempt.earned_points or 0) + bonus for attempt in attempts
     )
     max_total = sum(float(attempt.max_points or 0) for attempt in attempts)
+    student_ids = {
+        attempt.user_id for attempt in attempts if attempt.user_id is not None
+    }
     return {
         "attempts": attempts,
-        "student_count": len(attempts),
+        "student_count": len(student_ids),
         "earned_total": earned_total,
         "max_total": max_total,
         "curve_bonus_points": bonus,
@@ -1051,25 +1076,36 @@ def teacher_course_gradebook(course) -> dict:
         students.append(enrollment.user)
 
     assessment_columns = []
-    attempt_by_assessment_user: dict[tuple[int, int], object] = {}
+    attempt_by_key: dict[tuple[int, int, int], object] = {}
     for assessment in assessments:
         weight = assessment_grade_weight(assessment)
         counts = assessment_counts_toward_grade(assessment) and weight > 0
         bonus = assessment_curve_bonus_points(assessment)
-        assessment_columns.append(
-            {
-                "assessment_id": assessment.id,
-                "name": assessment.name or f"Assessment {assessment.id}",
-                "counts_toward_grade": counts,
-                "grade_weight": weight,
-                "curve_bonus_points": bonus,
-            }
-        )
+        series_list = assessment_series_numbers(assessment)
+        multi = len(series_list) > 1
+        base_name = assessment.name or f"Assessment {assessment.id}"
+        for series in series_list:
+            assessment_columns.append(
+                {
+                    "assessment_id": assessment.id,
+                    "retake_series": series,
+                    "name": (
+                        f"{base_name} ({series})" if multi else base_name
+                    ),
+                    "counts_toward_grade": counts,
+                    "grade_weight": weight,
+                    "curve_bonus_points": bonus,
+                }
+            )
         for attempt in counting_attempts_for_assessment(assessment):
-            attempt_by_assessment_user[(assessment.id, attempt.user_id)] = attempt
+            try:
+                series = int(getattr(attempt, "retake_series", 1) or 1)
+            except (TypeError, ValueError):
+                series = 1
+            attempt_by_key[(assessment.id, series, attempt.user_id)] = attempt
 
     # Absentee zeros recorded on close (FinalGradeCalculation) when no counting attempt.
-    absentee_zeros: dict[tuple[int, int], tuple[float, float]] = {}
+    absentee_zeros: dict[tuple[int, int, int], tuple[float, float]] = {}
     active_enrollment_ids = list(
         m.StudentCourseEnrollment.objects.filter(
             course=course,
@@ -1081,8 +1117,12 @@ def teacher_course_gradebook(course) -> dict:
             enrollment_id__in=active_enrollment_ids,
             assessment_id__in=[a.id for a in assessments],
         ):
-            key = (fgc.assessment_id, fgc.user_id)
-            if key in attempt_by_assessment_user:
+            try:
+                series = int(getattr(fgc, "retake_series", 1) or 1)
+            except (TypeError, ValueError):
+                series = 1
+            key = (fgc.assessment_id, series, fgc.user_id)
+            if key in attempt_by_key:
                 continue
             if fgc.assessment_grade_points is None:
                 continue
@@ -1097,9 +1137,7 @@ def teacher_course_gradebook(course) -> dict:
                 continue
             absentee_zeros[key] = (earned_z, max_z)
 
-    selected_attempt_ids = [
-        attempt.id for attempt in attempt_by_assessment_user.values()
-    ]
+    selected_attempt_ids = [attempt.id for attempt in attempt_by_key.values()]
     manual_pending_ids = set(
         m.StudentAssessmentProblem.objects.filter(
             attempt_id__in=selected_attempt_ids,
@@ -1112,11 +1150,13 @@ def teacher_course_gradebook(course) -> dict:
     for student in students:
         score_cells = []
         total_inputs = []
-        for assessment, column in zip(assessments, assessment_columns):
-            attempt = attempt_by_assessment_user.get((assessment.id, student.pk))
+        for column in assessment_columns:
+            assessment_id = column["assessment_id"]
+            series = column["retake_series"]
+            attempt = attempt_by_key.get((assessment_id, series, student.pk))
             weight = column["grade_weight"]
             counts = column["counts_toward_grade"]
-            zero_pair = absentee_zeros.get((assessment.id, student.pk))
+            zero_pair = absentee_zeros.get((assessment_id, series, student.pk))
             if attempt is not None:
                 raw_earned = attempt.earned_points
                 max_points = attempt.max_points
@@ -1142,7 +1182,8 @@ def teacher_course_gradebook(course) -> dict:
                 )
             )
             cell = {
-                "assessment_id": assessment.id,
+                "assessment_id": assessment_id,
+                "retake_series": series,
                 "attempt_id": attempt.id if attempt is not None else None,
                 "earned_points": earned,
                 "raw_earned_points": raw_earned,
@@ -1248,12 +1289,12 @@ def set_assessment_curve_bonus_points(assessment, value) -> dict:
 def student_grades_for_course(course, student) -> dict:
     """
     Student's own submitted/graded attempts in this course.
-    When retakes exist, only the counting attempt (per Retake assessment scoring)
-    is included in the main grade list.
+    One row per retake series; within a series only the counting attempt
+    (highest/latest) is included.
     """
     m = _models()
-    from .assessment_options import select_counting_attempt
-    from .student_attempts import course_template_assessment
+    from .assessment_options import select_counting_attempts_by_series
+    from .student_attempts import attempt_retake_series, course_template_assessment
 
     attempts = list(
         m.StudentAssessmentAttempt.objects.filter(
@@ -1274,7 +1315,8 @@ def student_grades_for_course(course, student) -> dict:
             continue
         by_assessment.setdefault(template.id, []).append(attempt)
 
-    # Same weight denominator as the teacher Grades Weight column.
+    # Same weight denominator as the teacher Grades matrix: each retake series
+    # column carries the assessment's grade_weight.
     course_assessments = list(
         m.Assessment.objects.filter(
             course=course,
@@ -1282,7 +1324,10 @@ def student_grades_for_course(course, student) -> dict:
             user__isnull=True,
         ).exclude(status="deleted")
     )
-    weight_total = sum(assessment_grade_weight(a) for a in course_assessments)
+    weight_total = sum(
+        assessment_grade_weight(a) * len(assessment_series_numbers(a))
+        for a in course_assessments
+    )
 
     rows = []
     for assessment_id, group in by_assessment.items():
@@ -1293,11 +1338,10 @@ def student_grades_for_course(course, student) -> dict:
             continue
         if assessment.user_id is not None:
             continue
-        attempt = select_counting_attempt(group, assessment) or group[-1]
-        visible = scores_visible_to_student(assessment, attempt)
-        manual_pending = m.StudentAssessmentProblem.objects.filter(
-            attempt=attempt, requires_manual_grading=True
-        ).exists()
+        counting_attempts = select_counting_attempts_by_series(group, assessment)
+        if not counting_attempts:
+            counting_attempts = [group[-1]]
+        multi = len(counting_attempts) > 1
         mode = assessment_release_mode(assessment)
         counts = assessment_counts_toward_grade(assessment)
         weight = assessment_grade_weight(assessment)
@@ -1305,47 +1349,59 @@ def student_grades_for_course(course, student) -> dict:
             round((weight / weight_total) * 100.0, 1) if weight_total > 0 else 0.0
         )
         curve_bonus = assessment_curve_bonus_points(assessment)
-        curved_earned = (
-            float(attempt.earned_points) + curve_bonus
-            if attempt.earned_points is not None
-            else None
-        )
-        rows.append(
-            {
-                "assessment_id": assessment.id,
-                "name": assessment.name,
-                "assessment_status": assessment.status,
-                "attempt_id": attempt.id,
-                "submitted_at": attempt.submitted_at.isoformat()
-                if attempt.submitted_at
-                else None,
-                "scores_visible": visible,
-                "earned_points": curved_earned if visible else None,
-                "raw_earned_points": attempt.earned_points if visible else None,
-                "curve_bonus_points": curve_bonus if visible else 0.0,
-                "max_points": attempt.max_points if visible else None,
-                "manual_pending": manual_pending and not visible,
-                "counts_toward_grade": counts and weight > 0,
-                "grade_weight": weight,
-                "weight_percent": weight_pct,
-                "student_release_mode": mode,
-                "can_review": student_may_review_attempt(assessment, attempt),
-                "percent": (
-                    round(
-                        float(curved_earned) / float(attempt.max_points) * 100.0,
-                        1,
-                    )
-                    if visible
-                    and curved_earned is not None
-                    and attempt.max_points
-                    and float(attempt.max_points) > 0
-                    else None
-                ),
-            }
-        )
+        base_name = assessment.name
+        for attempt in counting_attempts:
+            series = attempt_retake_series(attempt)
+            visible = scores_visible_to_student(assessment, attempt)
+            manual_pending = m.StudentAssessmentProblem.objects.filter(
+                attempt=attempt, requires_manual_grading=True
+            ).exists()
+            curved_earned = (
+                float(attempt.earned_points) + curve_bonus
+                if attempt.earned_points is not None
+                else None
+            )
+            rows.append(
+                {
+                    "assessment_id": assessment.id,
+                    "retake_series": series,
+                    "name": (
+                        f"{base_name} ({series})" if multi else base_name
+                    ),
+                    "assessment_status": assessment.status,
+                    "attempt_id": attempt.id,
+                    "submitted_at": attempt.submitted_at.isoformat()
+                    if attempt.submitted_at
+                    else None,
+                    "scores_visible": visible,
+                    "earned_points": curved_earned if visible else None,
+                    "raw_earned_points": attempt.earned_points if visible else None,
+                    "curve_bonus_points": curve_bonus if visible else 0.0,
+                    "max_points": attempt.max_points if visible else None,
+                    "manual_pending": manual_pending and not visible,
+                    "counts_toward_grade": counts and weight > 0,
+                    "grade_weight": weight,
+                    "weight_percent": weight_pct,
+                    "student_release_mode": mode,
+                    "can_review": student_may_review_attempt(assessment, attempt),
+                    "percent": (
+                        round(
+                            float(curved_earned) / float(attempt.max_points) * 100.0,
+                            1,
+                        )
+                        if visible
+                        and curved_earned is not None
+                        and attempt.max_points
+                        and float(attempt.max_points) > 0
+                        else None
+                    ),
+                }
+            )
 
-    # Absentee zeros written on close for assessments with no counting attempt.
-    covered_ids = {row["assessment_id"] for row in rows}
+    # Absentee zeros written on close for assessments/series with no counting attempt.
+    covered_keys = {
+        (row["assessment_id"], int(row.get("retake_series") or 1)) for row in rows
+    }
     enrollment = (
         m.StudentCourseEnrollment.objects.filter(
             course=course,
@@ -1357,59 +1413,75 @@ def student_grades_for_course(course, student) -> dict:
     )
     if enrollment is not None:
         for assessment in course_assessments:
-            if assessment.id in covered_ids:
-                continue
             if (assessment.status or "").lower() == "deleted":
                 continue
-            fgc = m.FinalGradeCalculation.objects.filter(
+            for fgc in m.FinalGradeCalculation.objects.filter(
                 enrollment=enrollment,
                 assessment_id=assessment.id,
-            ).first()
-            if fgc is None or fgc.assessment_grade_points is None:
-                continue
-            visible = scores_visible_for_assessment(assessment)
-            counts = assessment_counts_toward_grade(assessment)
-            weight = assessment_grade_weight(assessment)
-            weight_pct = (
-                round((weight / weight_total) * 100.0, 1) if weight_total > 0 else 0.0
-            )
-            curve_bonus = assessment_curve_bonus_points(assessment)
-            try:
-                raw_earned = float(fgc.assessment_grade_points)
-                max_points = (
-                    float(fgc.assessment_grade_max_points)
-                    if fgc.assessment_grade_max_points is not None
-                    else 0.0
+            ):
+                try:
+                    series = int(getattr(fgc, "retake_series", 1) or 1)
+                except (TypeError, ValueError):
+                    series = 1
+                if (assessment.id, series) in covered_keys:
+                    continue
+                if fgc.assessment_grade_points is None:
+                    continue
+                visible = scores_visible_for_assessment(assessment)
+                counts = assessment_counts_toward_grade(assessment)
+                weight = assessment_grade_weight(assessment)
+                weight_pct = (
+                    round((weight / weight_total) * 100.0, 1) if weight_total > 0 else 0.0
                 )
-            except (TypeError, ValueError):
-                continue
-            curved_earned = raw_earned + curve_bonus
-            rows.append(
-                {
-                    "assessment_id": assessment.id,
-                    "name": assessment.name,
-                    "assessment_status": assessment.status,
-                    "attempt_id": None,
-                    "submitted_at": None,
-                    "scores_visible": visible,
-                    "earned_points": curved_earned if visible else None,
-                    "raw_earned_points": raw_earned if visible else None,
-                    "curve_bonus_points": curve_bonus if visible else 0.0,
-                    "max_points": max_points if visible else None,
-                    "manual_pending": False,
-                    "counts_toward_grade": counts and weight > 0,
-                    "grade_weight": weight,
-                    "weight_percent": weight_pct,
-                    "student_release_mode": assessment_release_mode(assessment),
-                    "can_review": False,
-                    "percent": (
-                        round(curved_earned / max_points * 100.0, 1)
-                        if visible and max_points > 0
-                        else (0.0 if visible and max_points == 0 and curved_earned == 0 else None)
-                    ),
-                    "is_absentee_zero": True,
-                }
-            )
+                curve_bonus = assessment_curve_bonus_points(assessment)
+                try:
+                    raw_earned = float(fgc.assessment_grade_points)
+                    max_points = (
+                        float(fgc.assessment_grade_max_points)
+                        if fgc.assessment_grade_max_points is not None
+                        else 0.0
+                    )
+                except (TypeError, ValueError):
+                    continue
+                curved_earned = raw_earned + curve_bonus
+                multi = len(assessment_series_numbers(assessment)) > 1
+                rows.append(
+                    {
+                        "assessment_id": assessment.id,
+                        "retake_series": series,
+                        "name": (
+                            f"{assessment.name} ({series})"
+                            if multi
+                            else assessment.name
+                        ),
+                        "assessment_status": assessment.status,
+                        "attempt_id": None,
+                        "submitted_at": None,
+                        "scores_visible": visible,
+                        "earned_points": curved_earned if visible else None,
+                        "raw_earned_points": raw_earned if visible else None,
+                        "curve_bonus_points": curve_bonus if visible else 0.0,
+                        "max_points": max_points if visible else None,
+                        "manual_pending": False,
+                        "counts_toward_grade": counts and weight > 0,
+                        "grade_weight": weight,
+                        "weight_percent": weight_pct,
+                        "student_release_mode": assessment_release_mode(assessment),
+                        "can_review": False,
+                        "percent": (
+                            round(curved_earned / max_points * 100.0, 1)
+                            if visible and max_points > 0
+                            else (
+                                0.0
+                                if visible
+                                and max_points == 0
+                                and curved_earned == 0
+                                else None
+                            )
+                        ),
+                        "is_absentee_zero": True,
+                    }
+                )
 
     rows.sort(key=lambda r: (r.get("name") or "").lower())
     aggregation = course_grade_aggregation_mode(course)
@@ -1499,6 +1571,7 @@ def student_rows_for_assessment(assessment) -> list[dict]:
                 "score_voided": bool(getattr(attempt, "score_voided", False)),
                 "retake_open": retake_open,
                 "retake_active": retake_active,
+                "retake_series": int(getattr(attempt, "retake_series", 1) or 1),
                 "attempt_count": attempt_count,
                 "attempt_number": attempt_numbers.get(attempt.id),
                 "is_counting": attempt.id in counting_ids,

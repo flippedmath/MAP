@@ -32,7 +32,7 @@ from .course_lifecycle import (
     student_can_view_course_grades,
     user_can_close_or_reactivate_course,
 )
-from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
+from .util import get_valid_unique_name, send_to_trash, restore_item_from_trash, calculate_midpoint_order, duplicate_problem_in_aqg, move_problem_to_aqg, move_problem_to_cqd, remove_problem_from_cqd, refresh_cqd_identity, _clear_cqd_membership, copy_branch_into_setup_parent, get_branch_related, SymPyAssessmentEngine, get_entity_validator, get_blueprint_for_token, evaluate_and_format_entity, assemble_practice_test, grade_entities_payload
 import html
 import json
 from django.http import JsonResponse, Http404
@@ -2831,7 +2831,7 @@ def assessment_view(request, course_id):
     assessment_rows = []
     now = timezone.now()
     if is_student:
-        from .assessment_options import select_counting_attempt
+        from .assessment_options import select_counting_attempts_by_series
         from .student_attempts import (
             student_facing_assessment_status,
             student_may_start_attempt,
@@ -2862,7 +2862,8 @@ def assessment_view(request, course_id):
 
         for assessment in assessments:
             attempts = attempts_by_assessment.get(assessment.id) or []
-            counting = select_counting_attempt(attempts, assessment)
+            counting_list = select_counting_attempts_by_series(attempts, assessment)
+            counting = counting_list[-1] if counting_list else None
             submitted_attempts = [
                 a
                 for a in attempts
@@ -2883,20 +2884,26 @@ def assessment_view(request, course_id):
                 assessment, request.user, attempts, now=now
             )
             submitted = bool(submitted_attempts)
-            from .assessment_grades import student_may_review_attempt
+            from .assessment_grades import (
+                scores_visible_to_student,
+                student_may_review_attempt,
+            )
 
-            reviewable_attempts = [
+            # Scores-visible attempts (scores_only or full_review). Full Open links
+            # require student_may_review_attempt separately.
+            score_attempts = [
                 a
                 for a in submitted_attempts
-                if student_may_review_attempt(assessment, a)
+                if scores_visible_to_student(assessment, a)
             ]
-            can_review = bool(reviewable_attempts)
+            can_review = bool(score_attempts)
             review_attempts = []
             for a in sorted(
-                reviewable_attempts,
+                score_attempts,
                 key=lambda x: x.submitted_at or x.creation_date or x.id,
                 reverse=True,
             ):
+                can_open = student_may_review_attempt(assessment, a)
                 review_attempts.append(
                     {
                         "attempt_id": a.id,
@@ -2907,18 +2914,35 @@ def assessment_view(request, course_id):
                         "earned_points": a.earned_points,
                         "max_points": a.max_points,
                         "is_counting": counting is not None and a.id == counting.id,
-                        "review_url": reverse(
-                            "course_grades_attempt",
-                            args=[course.id, assessment.id, a.id],
+                        "can_open": can_open,
+                        "review_url": (
+                            reverse(
+                                "course_grades_attempt",
+                                args=[course.id, assessment.id, a.id],
+                            )
+                            if can_open
+                            else None
                         ),
                     }
                 )
 
-            counting_reviewable = (
-                counting
-                if counting is not None and student_may_review_attempt(assessment, counting)
-                else None
+            openable_attempts = [a for a in review_attempts if a.get("can_open")]
+            counting_openable = next(
+                (
+                    a
+                    for a in openable_attempts
+                    if counting is not None and a["attempt_id"] == counting.id
+                ),
+                None,
             )
+            # Direct-link "View submission" only for a single fully-openable attempt.
+            direct_review_url = None
+            if len(score_attempts) == 1 and openable_attempts:
+                direct_review_url = (
+                    counting_openable["review_url"]
+                    if counting_openable
+                    else openable_attempts[0]["review_url"]
+                )
             facing_status = student_facing_assessment_status(assessment, now=now)
             assessment_rows.append(
                 {
@@ -2929,26 +2953,8 @@ def assessment_view(request, course_id):
                     "attempt_status": display_attempt.status if display_attempt else None,
                     "counting_attempt_id": counting.id if counting else None,
                     "can_review": can_review,
-                    "review_attempt_count": len(reviewable_attempts),
-                    "review_url": (
-                        reverse(
-                            "course_grades_attempt",
-                            args=[course.id, assessment.id, counting_reviewable.id],
-                        )
-                        if counting_reviewable
-                        else (
-                            reverse(
-                                "course_grades_attempt",
-                                args=[
-                                    course.id,
-                                    assessment.id,
-                                    reviewable_attempts[0].id,
-                                ],
-                            )
-                            if reviewable_attempts
-                            else None
-                        )
-                    ),
+                    "review_attempt_count": len(score_attempts),
+                    "review_url": direct_review_url,
                     "review_attempts": review_attempts,
                     "review_attempts_json": json.dumps(review_attempts),
                     "highlight": highlight_id == assessment.id,
@@ -3005,6 +3011,7 @@ def assessment_view(request, course_id):
 
     from .credits import assert_can_print
 
+    user_root = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
     context = {
         'course': course,
         'user_type': user_type,
@@ -3018,6 +3025,7 @@ def assessment_view(request, course_id):
         'current_time': now,
         'highlight_id': highlight_id,
         'can_print_assessments': (not is_student) and assert_can_print(request.user),
+        'explorer_root_folder': user_root,
     }
     return render(request, 'assessment_tool/assessments.html', context)
 
@@ -3228,7 +3236,38 @@ def update_assessment_status_ajax(request, course_id):
             status=400,
         )
 
-    if new_status in ('open', 'upcoming'):
+    previous_status = normalize_assessment_status(assessment.status)
+
+    if new_status == 'retake':
+        if previous_status != 'closed':
+            return JsonResponse(
+                {
+                    'error': (
+                        'Class-wide retake can only be set when the assessment '
+                        'is currently closed.'
+                    ),
+                },
+                status=400,
+            )
+        if not assessment_has_submissions(assessment):
+            return JsonResponse(
+                {
+                    'error': (
+                        'Class-wide retake requires at least one student submission.'
+                    ),
+                },
+                status=400,
+            )
+        if not data.get('confirm_class_retake'):
+            return JsonResponse(
+                {
+                    'error': 'Class-wide retake confirmation is required.',
+                    'code': 'class_retake_confirmation_required',
+                },
+                status=400,
+            )
+
+    if new_status in ('open', 'upcoming', 'retake'):
         from .assessment_sync import synchronization_preflight
 
         sync_result = synchronization_preflight(
@@ -3254,7 +3293,7 @@ def update_assessment_status_ajax(request, course_id):
         )
 
     job_payload = None
-    if new_status == 'open':
+    if new_status in ('open', 'retake'):
         job = start_generation_job(assessment)
         job_payload = job_status_payload(assessment) if job else None
 
@@ -3262,6 +3301,7 @@ def update_assessment_status_ajax(request, course_id):
         'success': True,
         'job': job_payload,
         'finalize': finalize_payload,
+        'status': new_status,
     })
 
 
@@ -3597,6 +3637,7 @@ def _render_assessment_setup(request, course, assessment, *, disable_back_to_cou
     apply_explorer_mode_from_request(request, allow_edit=allow_edit)
     user_type = getattr(request.user, 'user_type', 'Student')
     aqg_groups = AssessmentQuestionGroup.objects.filter(assessment=assessment).order_by('order')
+    user_root = BranchGroup.objects.filter(owner=request.user, parent__isnull=True).first()
     context = {
         'course': course,
         'course_url_id': assessment_course_url_id(assessment),
@@ -3606,6 +3647,7 @@ def _render_assessment_setup(request, course, assessment, *, disable_back_to_cou
         'load_problem_workspace': True,
         'disable_assessment_back': disable_back_to_course or course is None,
         'active_tab': 'assessments',
+        'explorer_root_folder': user_root,
     }
     return render(request, 'assessment_tool/assessment_setup.html', context)
 
@@ -4272,6 +4314,359 @@ def add_cqd_to_aqg_ajax(request):
         
     except Exception as e:
         return JsonResponse({'error': f"Internal Server Exception Process Fault: {str(e)}"}, status=500)
+
+
+@login_required
+@require_GET
+def branch_picker_contents_ajax(request, group_id):
+    """
+    JSON listing of readable explorer folder children for the assessment-setup
+    copy picker (same roots / listing rules as get_folder_contents).
+    """
+    from .folder_roots import (
+        FOLDER_COLLABORATION,
+        FOLDER_PUBLIC_LIBRARY,
+        FOLDER_STUDENT_PROVIDED,
+        FOLDER_TRASH,
+    )
+    from .collaboration import (
+        can_read_branch,
+        collaboration_share_roots_for_user,
+        effective_permission,
+        public_library_roots_for_user,
+    )
+    from .branch_hierarchy import normalize_folder_type
+
+    group = get_object_or_404(BranchGroup, id=group_id)
+    owns = group.owner_id == request.user.user_id
+    if not owns and not can_read_branch(request.user, group):
+        return JsonResponse({'error': 'Permission denied.'}, status=403)
+
+    folders_list = []
+    trash_folder = None
+
+    if owns and group.parent_id is not None and group.name == FOLDER_COLLABORATION:
+        folders_list = collaboration_share_roots_for_user(request.user)
+    elif owns and group.parent_id is not None and group.name == FOLDER_PUBLIC_LIBRARY:
+        folders_list = public_library_roots_for_user(request.user)
+    else:
+        folders_qs = (
+            BranchGroup.objects.filter(parent=group)
+            .select_related('parent', 'owner')
+            .prefetch_related('course', 'assessment', 'cqd', 'aqg', 'problem')
+            .order_by('order')
+        )
+        if group.parent_id is None and getattr(request.user, 'user_type', None) != 'Student':
+            folders_qs = folders_qs.exclude(
+                name__in=[
+                    FOLDER_STUDENT_PROVIDED,
+                    'Student Generated Assessments by Course',
+                ]
+            )
+        if group.parent_id is None:
+            others = []
+            for f in folders_qs:
+                if f.name == FOLDER_TRASH:
+                    trash_folder = f
+                else:
+                    others.append(f)
+            folders_list = others
+        else:
+            folders_list = list(folders_qs)
+
+    items = []
+    for f in folders_list:
+        folder_type = normalize_folder_type(getattr(f, 'folder_type', None))
+        if f.owner_id == request.user.user_id:
+            viewer_perm = 'owner'
+        else:
+            viewer_perm = effective_permission(request.user, f) or ''
+            if owns and group.name == FOLDER_PUBLIC_LIBRARY and not viewer_perm:
+                viewer_perm = 'read_only'
+        items.append({
+            'id': f.id,
+            'name': f.name,
+            'type': folder_type,
+            'perm': viewer_perm,
+            'navigable': folder_type != 'problem',
+        })
+
+    if trash_folder is not None:
+        items.append({
+            'id': trash_folder.id,
+            'name': trash_folder.name,
+            'type': 'folder',
+            'perm': 'owner' if trash_folder.owner_id == request.user.user_id else '',
+            'navigable': True,
+            'is_trash': True,
+        })
+
+    return JsonResponse({
+        'success': True,
+        'folder_id': group.id,
+        'folder_name': group.name,
+        'folder_type': normalize_folder_type(getattr(group, 'folder_type', None)),
+        'items': items,
+    })
+
+
+@login_required
+@require_POST
+def copy_into_aqg_ajax(request, course_id, assessment_id):
+    """Deep-copy a readable problem or CQD branch into the target AQG section."""
+    from .branch_hierarchy import normalize_folder_type
+
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location', 'course'),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+    try:
+        data = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON.'}, status=400)
+
+    aqg_id = data.get('aqg_id')
+    source_branch_id = data.get('source_branch_id')
+    if not aqg_id or not source_branch_id:
+        return JsonResponse(
+            {'success': False, 'error': 'Missing aqg_id or source_branch_id.'},
+            status=400,
+        )
+
+    aqg = get_object_or_404(
+        AssessmentQuestionGroup.objects.select_related('branch_location'),
+        id=aqg_id,
+        assessment_id=assessment.id,
+    )
+    if not aqg.branch_location_id:
+        return JsonResponse(
+            {'success': False, 'error': 'Question group section is missing its folder.'},
+            status=400,
+        )
+
+    source = get_object_or_404(BranchGroup, id=source_branch_id)
+    if getattr(request.user, 'user_type', None) != 'IT_Support' and not can_read_branch(request.user, source):
+        return JsonResponse(
+            {'success': False, 'error': 'You do not have permission to copy that item.'},
+            status=403,
+        )
+
+    src_type = normalize_folder_type(getattr(source, 'folder_type', None))
+    if src_type not in ('problem', 'cqd'):
+        return JsonResponse(
+            {'success': False, 'error': 'Select a problem or problem set to copy.'},
+            status=400,
+        )
+
+    new_folder, err = copy_branch_into_setup_parent(
+        source,
+        aqg.branch_location,
+        request.user,
+        assessment=assessment,
+        aqg=aqg,
+    )
+    if err:
+        return JsonResponse({'success': False, 'error': err}, status=400)
+
+    if src_type == 'problem':
+        new_prob = get_branch_related(new_folder, 'problem')
+        if new_prob is None:
+            return JsonResponse({'success': False, 'error': 'Copy succeeded but problem row is missing.'}, status=500)
+        html_snippet = render_to_string(
+            'assessment_tool/components/problem_card.html',
+            {'prob': new_prob},
+            request=request,
+        )
+        return JsonResponse({
+            'success': True,
+            'copied_type': 'problem',
+            'id': new_prob.id,
+            'branch_id': new_folder.id,
+            'name': new_folder.name,
+            'html': html_snippet,
+        }, status=201)
+
+    new_cqd = get_branch_related(new_folder, 'cqd')
+    if new_cqd is None:
+        return JsonResponse({'success': False, 'error': 'Copy succeeded but problem set row is missing.'}, status=500)
+    html_snippet = render_to_string(
+        'assessment_tool/components/cqd_card.html',
+        {'cqd': new_cqd},
+        request=request,
+    )
+    return JsonResponse({
+        'success': True,
+        'copied_type': 'cqd',
+        'id': new_cqd.id,
+        'branch_id': new_folder.id,
+        'name': new_folder.name,
+        'html': html_snippet,
+    }, status=201)
+
+
+@login_required
+@require_POST
+def copy_aqg_into_assessment_ajax(request, course_id, assessment_id):
+    """Deep-copy a readable AQG branch (and everything inside) into this assessment."""
+    from .branch_hierarchy import normalize_folder_type
+
+    assessment = get_scoped_assessment(
+        assessment_id,
+        course_id,
+        select_related=('branch_location', 'course'),
+    )
+    if not _user_can_manage_assessment(request, course_id, assessment):
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+    if not assessment.branch_location_id:
+        return JsonResponse(
+            {'success': False, 'error': 'Assessment is missing its folder location.'},
+            status=400,
+        )
+
+    try:
+        data = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON.'}, status=400)
+
+    source_branch_id = data.get('source_branch_id')
+    if not source_branch_id:
+        return JsonResponse({'success': False, 'error': 'Missing source_branch_id.'}, status=400)
+
+    source = get_object_or_404(BranchGroup, id=source_branch_id)
+    if getattr(request.user, 'user_type', None) != 'IT_Support' and not can_read_branch(request.user, source):
+        return JsonResponse(
+            {'success': False, 'error': 'You do not have permission to copy that item.'},
+            status=403,
+        )
+
+    src_type = normalize_folder_type(getattr(source, 'folder_type', None))
+    if src_type != 'aqg':
+        return JsonResponse(
+            {'success': False, 'error': 'Select a question group section to copy.'},
+            status=400,
+        )
+
+    new_folder, err = copy_branch_into_setup_parent(
+        source,
+        assessment.branch_location,
+        request.user,
+        assessment=assessment,
+        aqg=None,
+    )
+    if err:
+        return JsonResponse({'success': False, 'error': err}, status=400)
+
+    new_aqg = get_branch_related(new_folder, 'aqg')
+    if new_aqg is None:
+        return JsonResponse({'success': False, 'error': 'Copy succeeded but section row is missing.'}, status=500)
+
+    aqg = (
+        AssessmentQuestionGroup.objects
+        .select_related('branch_location')
+        .prefetch_related(
+            'problem_set',
+            'branch_location__children__cqd',
+            'branch_location__children__problem',
+        )
+        .get(pk=new_aqg.pk)
+    )
+    html_snippet = render_to_string(
+        'assessment_tool/components/aqg_card.html',
+        {'group': aqg},
+        request=request,
+    )
+    return JsonResponse({
+        'success': True,
+        'copied_type': 'aqg',
+        'id': aqg.id,
+        'branch_id': new_folder.id,
+        'name': aqg.name,
+        'html': html_snippet,
+    }, status=201)
+
+
+@login_required
+@require_POST
+def copy_assessment_into_course_ajax(request, course_id):
+    """Deep-copy a readable assessment branch into this course (hidden by default)."""
+    from .branch_hierarchy import normalize_folder_type
+
+    course = get_object_or_404(Course.objects.select_related('branch_location'), id=course_id)
+    user_type = getattr(request.user, 'user_type', 'Student')
+    if user_type not in ('Teacher', 'IT_Support'):
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+    if course_is_deleted(course) or (
+        course_is_closed(course) and user_type == 'Teacher'
+    ):
+        return JsonResponse(
+            {'success': False, 'error': 'This course is unavailable. Restore or reactivate it first.'},
+            status=403,
+        )
+    if not _user_can_access_course_page(request.user, course):
+        return JsonResponse({'success': False, 'error': 'Unauthorized action.'}, status=403)
+
+    parent_folder = (
+        getattr(course, 'branch_location', None)
+        or BranchGroup.objects.filter(course=course, folder_type='course').first()
+    )
+    if parent_folder is None:
+        return JsonResponse(
+            {'success': False, 'error': 'Course parent folder is missing.'},
+            status=400,
+        )
+
+    try:
+        data = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON.'}, status=400)
+
+    source_branch_id = data.get('source_branch_id')
+    if not source_branch_id:
+        return JsonResponse({'success': False, 'error': 'Missing source_branch_id.'}, status=400)
+
+    source = get_object_or_404(BranchGroup, id=source_branch_id)
+    if getattr(request.user, 'user_type', None) != 'IT_Support' and not can_read_branch(request.user, source):
+        return JsonResponse(
+            {'success': False, 'error': 'You do not have permission to copy that item.'},
+            status=403,
+        )
+
+    src_type = normalize_folder_type(getattr(source, 'folder_type', None))
+    if src_type != 'assessment':
+        return JsonResponse(
+            {'success': False, 'error': 'Select an assessment to copy.'},
+            status=400,
+        )
+
+    new_folder, err = copy_branch_into_setup_parent(
+        source,
+        parent_folder,
+        request.user,
+        course=course,
+    )
+    if err:
+        return JsonResponse({'success': False, 'error': err}, status=400)
+
+    new_asm = get_branch_related(new_folder, 'assessment')
+    if new_asm is None:
+        return JsonResponse(
+            {'success': False, 'error': 'Copy succeeded but assessment row is missing.'},
+            status=500,
+        )
+
+    return JsonResponse({
+        'success': True,
+        'copied_type': 'assessment',
+        'id': new_asm.id,
+        'branch_id': new_folder.id,
+        'name': new_asm.name,
+        'status': new_asm.status,
+    }, status=201)
 
 
 @login_required
@@ -5378,6 +5773,7 @@ def course_grades_attempt_action_ajax(request, course_id, assessment_id, attempt
             attempt.user,
             synchronization_decision=body.get("synchronization_decision"),
             created_by=request.user,
+            source_attempt=attempt,
         )
     elif action == "close_retake":
         result = close_test_for_retake(assessment, attempt.user)

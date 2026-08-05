@@ -1,0 +1,62 @@
+---
+description: Full push-to-live workflow — git, main, server pull, SQL, Q&A ask
+alwaysApply: true
+---
+
+# Push to live
+
+Whenever the user asks to push/deploy to live (production / `map.flippedmath.com` / the droplet), run this full sequence in order. “Push to live” implies commit + GitHub + main + server update — do not wait for a separate commit request.
+
+## 1. Git: add, commit, push branch, update main
+1. Review `git status` / `git diff` / recent commit style; stage relevant changes (never secrets like `.env`).
+2. Commit with a concise why-focused message (HEREDOC).
+3. Push the current working branch to GitHub (`git push -u origin HEAD` if needed).
+4. Fast-forward `main` from that work and push it:
+   - `git checkout main && git merge --ff-only <working-branch> && git push origin main`
+   - Then `git checkout <working-branch>` (usually `final_test_branch`).
+   - Do not force-push `main`.
+
+## 2. Live server: pull from main
+SSH `root@143.198.163.40`, app at `/var/www/map`. Typical steps:
+```bash
+cd /var/www/map
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+source .venv/bin/activate
+cd math_assessment_platform
+pip install -q -r ../requirements.txt
+python manage.py collectstatic --noinput
+systemctl restart map-gunicorn
+```
+Confirm `map-gunicorn` is active and key URLs return 200.
+
+## 3. Apply required SQL on live Postgres
+- Identify pending DDL under `math_assessment_platform/assessment_tool/sql/` (or equivalent) this deploy needs.
+- Apply it on live Postgres in this deploy (before or with restart). Prefer idempotent scripts; confirm success.
+- Unmanaged tables: do **not** rely on Django `migrate`.
+
+## 4. Ask about syncing About / public Q&A to live
+Q&A article rows live in Postgres (`Q_A`), not in git alone. Seed source of truth for About-linked articles is:
+- `assessment_tool/about.py` (canonical titles)
+- `assessment_tool/about_qa_articles.py` (bodies, tags, optional `former_titles` for renames)
+
+**When to ask (do not skip the question if any of these apply):**
+- This deploy changed `about.py` and/or `about_qa_articles.py`, **or**
+- Live is missing an About-linked title from the seed, **or**
+- Live still has a seed article under a `former_titles` name (rename pending)
+
+Ask clearly, e.g.: “Update live About Q&A from seed so titles/bodies/tags match local?”  
+Do **not** seed silently. If the user declines, skip.
+
+**If the user says yes**, on the live server (venv + `math_assessment_platform`):
+```bash
+python manage.py seed_about_qa_articles
+```
+- Prefer this command: it **updates in place** (same article id / `/qa/<id>/` URL), including renames via `former_titles`, and removes orphan rows left under old titles.
+- Acceptable fallback only if in-place update is impossible: delete the stale live article and create the new one (seed already does orphan cleanup for `former_titles`).
+
+If none of the “when to ask” conditions apply, no need to ask.
+
+## Example
+“Push to live” after renaming an About Q&A title → commit + push branch → ff-merge/push `main` → server pull/restart → **ask** whether to sync live Q&A → on yes, run `seed_about_qa_articles` on live (in-place title/body update).

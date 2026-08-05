@@ -1,0 +1,93 @@
+/* Global alert / confirm / prompt overlays (replaces browser dialogs). */
+
+#map-dialog-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    z-index: 21000;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+#map-dialog-panel {
+    background: #fff;
+    border-radius: 12px;
+    max-width: 440px;
+    width: 100%;
+    padding: 22px 22px 18px;
+    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+    box-sizing: border-box;
+}
+
+#map-dialog-title {
+    margin: 0 0 8px;
+    font-size: 1.15rem;
+    color: #0f172a;
+}
+
+#map-dialog-message {
+    margin: 0;
+    color: #475569;
+    font-size: 0.95rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+}
+
+#map-dialog-input-wrap {
+    margin-top: 12px;
+}
+
+#map-dialog-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 11px;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    color: #0f172a;
+}
+
+#map-dialog-input:focus {
+    outline: none;
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+#map-dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 18px;
+    flex-wrap: wrap;
+}
+
+.map-dialog-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 9px 14px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.map-dialog-btn-secondary {
+    background: #e2e8f0;
+    color: #334155;
+}
+
+.map-dialog-btn-primary {
+    background: #007aff;
+    color: #fff;
+}
+
+.map-dialog-btn-danger {
+    background: #dc2626;
+    color: #fff;
+}
+
+.map-dialog-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

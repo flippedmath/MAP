@@ -54,7 +54,7 @@ ARTICLE_SPECS: list[dict] = [
                 _h2("Who MAP is for"),
                 _ul(
                     [
-                        "<strong>Teachers</strong> — author parametric problems, assemble assessments, "
+                        "<strong>Teachers</strong> — author dynamic problems, assemble assessments, "
                         "invite students, grade, and manage courses.",
                         "<strong>Students</strong> — take assessments with autosave, timers, and clear "
                         "status when work is locked or submitted.",
@@ -95,7 +95,8 @@ ARTICLE_SPECS: list[dict] = [
     },
     {
         "title": about_mod.TITLE_AUTHORING,
-        "tags": SHARED_TAGS + ("authoring", "problems", "parametric", "workspace"),
+        "former_titles": ("Authoring parametric math problems in MAP",),
+        "tags": SHARED_TAGS + ("authoring", "problems", "dynamic", "workspace"),
         "body": "".join(
             [
                 _p(
@@ -171,7 +172,7 @@ ARTICLE_SPECS: list[dict] = [
                         (
                             "Can I still write ordinary static questions?",
                             "Yes. You can keep values fixed when you want a single canonical form—"
-                            "parametric tools are there when you need variation and integrity.",
+                            "dynamic tools are there when you need variation and integrity.",
                         ),
                     ]
                 ),
@@ -249,7 +250,7 @@ ARTICLE_SPECS: list[dict] = [
         "body": "".join(
             [
                 _p(
-                    "Parametric assessments are powerful—and easy to get slightly wrong. MAP gives "
+                    "Dynamic assessments are powerful—and easy to get slightly wrong. MAP gives "
                     "teachers a <strong>practice test</strong> path so you can assemble a generated "
                     "instance, take it, and grade it <em>before</em> students ever see the assessment."
                 ),
@@ -263,7 +264,7 @@ ARTICLE_SPECS: list[dict] = [
                 ),
                 _h2("When to use it"),
                 _p(
-                    "Run a practice test after major blueprint changes, after editing parametric "
+                    "Run a practice test after major blueprint changes, after editing dynamic "
                     "entities, or before flipping status from hidden to open/upcoming. It is especially "
                     "valuable when using randomized problem sets or synchronized forms."
                 ),
@@ -478,7 +479,7 @@ ARTICLE_SPECS: list[dict] = [
                 ),
                 _h2("What auto-grades well"),
                 _p(
-                    "Structured answers tied to parametric entities—numeric results, many constrained "
+                    "Structured answers tied to dynamic entities—numeric results, many constrained "
                     "formats, and similarly checkable fields—can be evaluated against the instance the "
                     "student received."
                 ),
@@ -771,11 +772,13 @@ ARTICLE_SPECS: list[dict] = [
 
 
 def iter_article_specs():
-    """Yield dicts with title, tags (list[str]), body (html str)."""
+    """Yield dicts with title, former_titles, tags (list[str]), body (html str)."""
     for spec in ARTICLE_SPECS:
         tags = list(dict.fromkeys(spec["tags"]))  # stable unique
+        former = tuple(spec.get("former_titles") or ())
         yield {
             "title": spec["title"],
+            "former_titles": former,
             "tags": tags,
             "body": spec["body"],
         }

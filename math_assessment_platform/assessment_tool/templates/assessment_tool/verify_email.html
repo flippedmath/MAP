@@ -80,8 +80,7 @@
                 {% if is_already_active %}
                     <button type="submit" 
                             name="cancel_activation" 
-                            formnovalidate 
-                            onclick="return confirm('Are you sure? This will cancel the email verification for {{ temp_email }} and continue to use {{ current_email }}.');"
+                            formnovalidate data-map-confirm="Are you sure? This will cancel the email verification for {{ temp_email }} and continue to use {{ current_email }}." data-map-confirm-danger
                             style="background: none; border: none; color: #94a3b8; cursor: pointer; font-size: 0.8rem;">
                         Cancel and continue with current email
                     </button>

@@ -86,8 +86,7 @@
                     <td>
                         <div class="tickets-actions">
                             <a href="{% url 'contact_convert' contact_id=row.contact.id %}">Create ticket</a>
-                            <form method="post" action="{% url 'contact_delete' contact_id=row.contact.id %}"
-                                  onsubmit="return confirm('Delete this Contact Us submission?');">
+                            <form method="post" action="{% url 'contact_delete' contact_id=row.contact.id %}" data-map-confirm="Delete this Contact Us submission?" data-map-confirm-danger>
                                 {% csrf_token %}
                                 <button type="submit" class="danger">Delete</button>
                             </form>
@@ -173,8 +172,7 @@
                 <button type="submit">Save current filters as default</button>
             </form>
             {% if has_saved_filter_defaults %}
-            <form method="post" action="{% url 'tickets_admin' %}"
-                  onsubmit="return confirm('Clear your saved Tickets filter defaults?');">
+            <form method="post" action="{% url 'tickets_admin' %}" data-map-confirm="Clear your saved Tickets filter defaults?" data-map-confirm-danger>
                 {% csrf_token %}
                 <input type="hidden" name="action" value="clear_filter_defaults">
                 <button type="submit">Clear saved default</button>

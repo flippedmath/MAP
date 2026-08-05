@@ -8,6 +8,7 @@
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="{% static 'assessment_tool/css/base_style.css' %}">
+    <link rel="stylesheet" href="{% static 'assessment_tool/css/map_dialog.css' %}">
     
     {% if user.is_authenticated and load_problem_workspace %}
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -89,7 +90,19 @@
         {% endif %}
 
         {% block content %}{% endblock %}
-    </main>    
+    </main>
+
+    <div id="map-dialog-overlay" role="alertdialog" aria-modal="true" aria-labelledby="map-dialog-title" aria-describedby="map-dialog-message">
+        <div id="map-dialog-panel">
+            <h3 id="map-dialog-title"></h3>
+            <p id="map-dialog-message"></p>
+            <div id="map-dialog-input-wrap" hidden>
+                <input id="map-dialog-input" type="text" autocomplete="off" />
+            </div>
+            <div id="map-dialog-actions"></div>
+        </div>
+    </div>
+    <script src="{% static 'assessment_tool/js/map_dialog.js' %}"></script>
 
     {% if user.is_authenticated and load_problem_workspace %}
         {% include "assessment_tool/components/problem_workspace_overlay.html" %}

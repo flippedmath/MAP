@@ -44,6 +44,11 @@ urlpatterns = [
         help_views.help_admin_edit_view,
         name='qa_admin_edit',
     ),
+    path(
+        'qa/admin/<int:article_id>/delete/',
+        help_views.help_admin_delete_api,
+        name='qa_admin_delete',
+    ),
     path('qa/<int:article_id>/', help_views.help_detail_view, name='qa_detail'),
     path('contact-us/', ticket_views.contact_us_view, name='contact_us'),
     path('tickets/', ticket_views.tickets_admin_view, name='tickets_admin'),
@@ -167,6 +172,11 @@ urlpatterns = [
     ),
     path('course/<int:course_id>/assessments/', views.assessment_view, name='assessment_view'),
     path('course/<int:course_id>/assessments/create/', views.create_assessment_ajax, name='create_assessment_ajax'),
+    path(
+        'course/<int:course_id>/assessments/copy-from-explorer/',
+        views.copy_assessment_into_course_ajax,
+        name='copy_assessment_into_course_ajax',
+    ),
     path('course/<int:course_id>/assessments/rename/', views.rename_assessment_ajax, name='rename_assessment_ajax'),
     path('course/<int:course_id>/assessments/update-status/', views.update_assessment_status_ajax, name='update_assessment_status_ajax'),
     path(
@@ -311,6 +321,21 @@ urlpatterns = [
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/move-problem-to-set/', views.move_problem_to_cqd_ajax, name='move_problem_to_cqd_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/remove-problem-from-set/', views.remove_problem_from_cqd_ajax, name='remove_problem_from_cqd_ajax'),
     path('course/<int:course_id>/assessment/<int:assessment_id>/setup/problem-set/<int:cqd_id>/problems/', views.cqd_problems_list_ajax, name='cqd_problems_list_ajax'),
+    path(
+        'course/<int:course_id>/assessment/<int:assessment_id>/setup/copy-into-aqg/',
+        views.copy_into_aqg_ajax,
+        name='copy_into_aqg_ajax',
+    ),
+    path(
+        'course/<int:course_id>/assessment/<int:assessment_id>/setup/copy-aqg/',
+        views.copy_aqg_into_assessment_ajax,
+        name='copy_aqg_into_assessment_ajax',
+    ),
+    path(
+        'api/branch-picker/<int:group_id>/',
+        views.branch_picker_contents_ajax,
+        name='branch_picker_contents',
+    ),
     path('add-cqd-ajax/', views.add_cqd_to_aqg_ajax, name='add_cqd_ajax'),
     path('update-cqd-count-ajax/', views.update_cqd_count_ajax, name='update_cqd_count_ajax'),
     path('update-cqd-name-ajax/', views.update_cqd_name_ajax, name='update_cqd_name_ajax'),

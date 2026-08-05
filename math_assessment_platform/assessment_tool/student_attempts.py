@@ -53,15 +53,16 @@ def _aware(dt):
 
 
 # Teacher-selectable assessment lifecycle statuses (course Assessments page).
-ASSESSMENT_STATUSES = frozenset({"closed", "open", "upcoming", "hidden"})
+ASSESSMENT_STATUSES = frozenset({"closed", "open", "upcoming", "hidden", "retake"})
 # Legacy values still read for compatibility; not offered in the UI.
 _ASSESSMENT_STATUS_ALIASES = {
     "inactive": "hidden",
     "locked": "closed",
     "submitted": "closed",
     "active": "open",
-    "retake_available": "open",
-    "retake available": "open",
+    # Legacy class-wide retake flag maps onto the modern retake status.
+    "retake_available": "retake",
+    "retake available": "retake",
 }
 
 
@@ -136,11 +137,93 @@ def assessment_is_takeable(assessment, *, now=None) -> bool:
         return False
     now = _aware(now) or timezone.now()
     status = normalize_assessment_status(assessment.status)
-    if status == "open":
+    if status in ("open", "retake"):
         return True
     if status == "upcoming":
         return upcoming_window_contains(assessment, now=now)
     return False
+
+
+def assessment_active_retake_series(assessment) -> int:
+    """Current series that class open/retake applies to (minimum 1)."""
+    if assessment is None:
+        return 1
+    try:
+        value = int(getattr(assessment, "active_retake_series", 1) or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return value if value >= 1 else 1
+
+
+def attempt_retake_series(attempt) -> int:
+    if attempt is None:
+        return 1
+    try:
+        value = int(getattr(attempt, "retake_series", 1) or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return value if value >= 1 else 1
+
+
+def student_has_submitted_in_series(attempts, series: int) -> bool:
+    m = _models()
+    series = int(series)
+    for attempt in attempts or []:
+        if attempt_retake_series(attempt) != series:
+            continue
+        if (
+            attempt.status == m.StudentAssessmentAttempt.STATUS_SUBMITTED
+            or attempt.auto_graded_at is not None
+        ):
+            return True
+    return False
+
+
+def resolve_series_for_new_attempt(template, student, prior_attempts) -> int:
+    """
+    Choose retake_series for a newly created attempt.
+
+    - Per-student open-retake grant: use the grant's target series (selected attempt).
+    - Class ``retake`` after a submission in the active series: advance the
+      assessment's active series (once) and assign that new series.
+    - Otherwise: assessment.active_retake_series.
+    """
+    from .student_assessment_actions import (
+        get_student_open_retake_series,
+        student_has_open_retake,
+    )
+
+    template = course_template_assessment(template) or template
+    active = assessment_active_retake_series(template)
+    status = normalize_assessment_status(getattr(template, "status", None))
+
+    if student_has_open_retake(template, student):
+        grant_series = get_student_open_retake_series(template, student)
+        if grant_series is not None:
+            return max(1, int(grant_series))
+        return active
+
+    if status == "retake" and student_has_submitted_in_series(prior_attempts, active):
+        # First starter under this class retake cycle advances the class series.
+        m = _models()
+        locked = (
+            m.Assessment.objects.select_for_update()
+            .filter(pk=template.pk)
+            .first()
+        )
+        if locked is None:
+            return active + 1
+        current = assessment_active_retake_series(locked)
+        # Re-check against possibly advanced value under the lock.
+        if student_has_submitted_in_series(prior_attempts, current):
+            next_series = current + 1
+            if assessment_active_retake_series(locked) < next_series:
+                locked.active_retake_series = next_series
+                locked.save(update_fields=["active_retake_series"])
+            return next_series
+        return current
+
+    return active
 
 
 def assessment_is_hidden_from_students(assessment) -> bool:
@@ -457,17 +540,13 @@ def finalize_student_attempt_if_open(attempt) -> dict | None:
 
 def assessment_available_to_student(assessment, student, *, now=None) -> bool:
     """
-    Class-wide open/upcoming window, class retake_available, or a teacher
-    per-student open-retake overwrite (allowed even when the class assessment
-    is closed).
+    Class-wide open/upcoming/retake window, or a teacher per-student
+    open-retake overwrite (allowed even when the class assessment is closed).
     """
     template = course_template_assessment(assessment) or assessment
     if assessment_is_hidden_from_students(template):
         return False
     if assessment_is_takeable(template, now=now):
-        return True
-    status = (template.status or "").lower().replace(" ", "_")
-    if status == "retake_available":
         return True
     from .student_assessment_actions import student_has_open_retake
 
@@ -526,21 +605,23 @@ def student_may_start_attempt(assessment, student, attempts=None, *, now=None) -
     if not assessment_available_to_student(template, student, now=now):
         return False
 
-    submitted = [
-        a
-        for a in attempts
-        if a.status == m.StudentAssessmentAttempt.STATUS_SUBMITTED
-        or a.auto_graded_at is not None
-    ]
-    if not submitted:
-        return True
-
-    status = (template.status or "").lower().replace(" ", "_")
-    if status == "retake_available":
-        return True
+    active_series = assessment_active_retake_series(template)
+    status = normalize_assessment_status(template.status)
     from .student_assessment_actions import student_has_open_retake
 
-    return student_has_open_retake(template, student)
+    if student_has_open_retake(template, student):
+        return True
+
+    # Class retake: students who finished the active series (or never took)
+    # may start; first starters under retake open a new series.
+    if status == "retake":
+        return True
+
+    # Open / upcoming window: only the active series, and only if not yet
+    # submitted in that series (prior series stay frozen).
+    if student_has_submitted_in_series(attempts, active_series):
+        return False
+    return True
 
 def generation_job_blocks_edits(assessment) -> bool:
     m = _models()
@@ -1129,6 +1210,9 @@ def generate_attempt_for_student(parent_assessment, student, enrollment, *, forc
 
     take_index = len(prior_attempts) + 1
     course = template.course
+    series = resolve_series_for_new_attempt(template, student, prior_attempts)
+    # Refresh template in case class retake advanced active_retake_series.
+    template = m.Assessment.objects.filter(pk=template.pk).first() or template
     from .assessment_sync import (
         ensure_synchronized_form,
         synchronized_tests_enabled,
@@ -1171,6 +1255,7 @@ def generate_attempt_for_student(parent_assessment, student, enrollment, *, forc
         status=m.StudentAssessmentAttempt.STATUS_READY,
         branch=assessment_folder,
         synchronized_form=synchronized_form,
+        retake_series=series,
         creation_date=now,
     )
 
@@ -1277,13 +1362,26 @@ def get_or_create_attempt_for_student(parent_assessment, student):
     if latest and latest.status != m.StudentAssessmentAttempt.STATUS_SUBMITTED:
         return latest
 
-    needs_retake = False
+    needs_new = False
     if latest and latest.status == m.StudentAssessmentAttempt.STATUS_SUBMITTED:
-        status = (template.status or "").lower().replace(" ", "_")
-        needs_retake = status == "retake_available" or student_has_open_retake(
-            template, student
-        )
-        if not needs_retake:
+        status = normalize_assessment_status(template.status)
+        active_series = assessment_active_retake_series(template)
+        has_grant = student_has_open_retake(template, student)
+        if has_grant:
+            needs_new = True
+        elif status == "retake":
+            needs_new = True
+        elif status in ("open", "upcoming") and not student_has_submitted_in_series(
+            list(
+                attempts_qs_for_template(template)
+                .filter(enrollment=enrollment)
+                .order_by("id")
+            ),
+            active_series,
+        ):
+            # Submitted an older series; active series not yet attempted.
+            needs_new = attempt_retake_series(latest) != active_series
+        if not needs_new:
             return latest
     elif assessment_taking_ended(template):
         # No attempt yet and class is closed — cannot start.
@@ -1293,7 +1391,7 @@ def get_or_create_attempt_for_student(parent_assessment, student):
         template,
         student,
         enrollment,
-        force_new=bool(needs_retake),
+        force_new=bool(needs_new),
     )
     # Retake overwrite stays open until the student actually starts (→ in_progress).
     return attempt
@@ -1904,15 +2002,17 @@ def notify_teachers_focus_enforcement_bypassed(attempt) -> None:
 
 def _upsert_final_grade(attempt):
     """
-    Persist FinalGradeCalculation for this enrollment+template using the
-    attempt that counts under Retake assessment scoring. Voided attempts are
-    ignored (e.g. "latest" falls back to the prior non-voided take).
+    Persist FinalGradeCalculation for this enrollment+template+series using the
+    attempt that counts under Retake assessment scoring within that series.
+    Voided attempts are ignored (e.g. "latest" falls back to the prior
+    non-voided take in the same series).
     """
     m = _models()
     if not attempt.enrollment_id or not attempt.assessment_id:
         return
     take = attempt.assessment
     template = course_template_assessment(take) or take
+    series = attempt_retake_series(attempt)
     weight = 1
     if template is not None:
         raw = getattr(template, "grade_weight", None)
@@ -1936,6 +2036,7 @@ def _upsert_final_grade(attempt):
             enrollment_id=attempt.enrollment_id,
             status=m.StudentAssessmentAttempt.STATUS_SUBMITTED,
             score_voided=False,
+            retake_series=series,
         )
         .order_by("id")
     )
@@ -1944,6 +2045,7 @@ def _upsert_final_grade(attempt):
         m.FinalGradeCalculation.objects.filter(
             enrollment_id=attempt.enrollment_id,
             assessment_id=template_id,
+            retake_series=series,
         ).delete()
         return
 
@@ -1959,6 +2061,7 @@ def _upsert_final_grade(attempt):
     existing = m.FinalGradeCalculation.objects.filter(
         enrollment_id=attempt.enrollment_id,
         assessment_id=template_id,
+        retake_series=series,
     ).first()
     if existing:
         existing.assessment_grade_points = curved_earned
@@ -1982,6 +2085,7 @@ def _upsert_final_grade(attempt):
             assessment_id=template_id,
             enrollment_id=counting.enrollment_id,
             weight=weight,
+            retake_series=series,
             assessment_grade_points=curved_earned,
             assessment_grade_max_points=counting.max_points,
         )

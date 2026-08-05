@@ -3,6 +3,7 @@
 
 {% block course_extra_css %}
 <link href="{% static 'assessment_tool/css/assessments_table.css' %}" rel="stylesheet">
+<link href="{% static 'assessment_tool/css/branch_picker.css' %}" rel="stylesheet">
 <style>
   tr.assessment-highlight td { background: #fef9c3 !important; }
   .student-start-btn {
@@ -123,7 +124,19 @@
         </p>
     </div>
     {% if not is_student %}
-    <button id="trigger-create-modal" class="btn-create-assessment" style="cursor: pointer; border: none;">+ Create Assessment</button>
+    <div class="setup-action-dropdown" id="create-assessment-dropdown">
+        <button type="button" id="trigger-assessment-menu" class="btn-create-assessment" style="cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px;">
+            + Create Assessment <i class="fas fa-caret-down" style="font-size: 0.75rem;"></i>
+        </button>
+        <div id="assessment-menu-overlay" class="setup-action-menu" role="menu">
+            <button type="button" id="trigger-create-modal" class="menu-option-item" role="menuitem">
+                <i class="fas fa-plus"></i> Make New Assessment
+            </button>
+            <button type="button" id="trigger-copy-assessment-from-explorer" class="menu-option-item" role="menuitem">
+                <i class="fas fa-copy"></i> Copy Assessment from Explorer…
+            </button>
+        </div>
+    </div>
     {% endif %}
 </div>
 
@@ -146,9 +159,12 @@
                                     {% if not is_student %}
                                     <li><strong>Hidden:</strong> Not visible to students. Teachers can edit. Cannot be set once any student has submitted.</li>
                                     {% endif %}
-                                    <li><strong>Open:</strong> Available for students to take.</li>
+                                    <li><strong>Open:</strong> Available for students to take (current attempt series only).</li>
                                     <li><strong>Upcoming:</strong> Opens automatically during the Auto-Open Window (start–end). While the window is active, students see and take it as open; teachers still see upcoming.</li>
                                     <li><strong>Closed:</strong> Class taking has ended; new class-wide submissions are not accepted. Individual retakes (if granted) can still finish until closed.</li>
+                                    {% if not is_student %}
+                                    <li><strong>Retake:</strong> Class-wide retake after closed. Prior series stay frozen and still count; new takes open a new series that also counts. Only available when closed and students already have submissions.</li>
+                                    {% endif %}
                                 </ul>
                             </div>
                         </span>
@@ -207,11 +223,12 @@
                     {% if is_student %}
                       <span class="status-plaintext">{{ row.display_status }}</span>
                     {% else %}
-                    <select class="status-dropdown-picker" data-assessment-id="{{ assessment.id }}" data-previous="{{ assessment.status|default:'hidden' }}" {% if row.generating %}disabled{% endif %}>
+                    <select class="status-dropdown-picker" data-assessment-id="{{ assessment.id }}" data-previous="{{ assessment.status|default:'hidden' }}" data-has-submissions="{{ row.has_submissions|yesno:'true,false' }}" {% if row.generating %}disabled{% endif %}>
                         <option value="hidden" {% if assessment.status == 'hidden' or not assessment.status %}selected{% endif %}{% if row.has_submissions %} disabled{% endif %}>hidden</option>
                         <option value="open" {% if assessment.status == 'open' %}selected{% endif %}>open</option>
                         <option value="upcoming" {% if assessment.status == 'upcoming' %}selected{% endif %}>upcoming</option>
                         <option value="closed" {% if assessment.status == 'closed' %}selected{% endif %}>closed</option>
+                        <option value="retake" {% if assessment.status == 'retake' %}selected{% endif %}{% if assessment.status != 'retake' %}{% if assessment.status != 'closed' or not row.has_submissions %} disabled{% endif %}{% endif %}>retake</option>
                     </select>
                     {% endif %}
                 </td>
@@ -281,7 +298,9 @@
                 {% if show_submission_column %}
                 <td style="text-align:center; white-space:nowrap;">
                   {% if row.can_review %}
-                    {% if row.review_attempt_count > 1 %}
+                    {% if row.review_url and row.review_attempt_count == 1 %}
+                      <a class="student-review-btn" href="{{ row.review_url }}">View submission</a>
+                    {% else %}
                       <button
                         type="button"
                         class="student-review-btn"
@@ -289,8 +308,6 @@
                         data-assessment-name="{{ assessment.name|escape }}"
                         data-attempts="{{ row.review_attempts_json|escape }}"
                       >View submission</button>
-                    {% else %}
-                      <a class="student-review-btn" href="{{ row.review_url }}">View submission</a>
                     {% endif %}
                   {% else %}
                     <span style="color:#94a3b8;">—</span>
@@ -374,6 +391,27 @@
 </div>
 {% endif %}
 
+{% if not is_student %}
+<div id="class-retake-confirm-overlay" class="retake-picker-overlay" aria-hidden="true" hidden>
+  <div class="retake-picker-card" role="dialog" aria-modal="true" aria-labelledby="class-retake-confirm-title">
+    <h3 id="class-retake-confirm-title">Confirm class-wide retake</h3>
+    <p class="retake-picker-sub">
+      This reopens the assessment for the whole class. Students who already submitted
+      can take it again; both their previous take and this retake count toward grades
+      as separate series. Students who never took it can still take it for the first time.
+    </p>
+    <p class="retake-picker-sub">
+      If you meant to reopen for one student only, cancel and use
+      <strong>Grades → assessment → View Student Assessments → student Actions → Open test for retake</strong>.
+    </p>
+    <div style="display:flex; gap:0.75rem; justify-content:flex-end; margin-top:1rem;">
+      <button type="button" class="btn-modal btn-modal-cancel" id="class-retake-confirm-cancel">Cancel</button>
+      <button type="button" class="btn-modal btn-modal-submit" id="class-retake-confirm-ok">Confirm retake</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if is_student %}
 <div id="retake-picker-overlay" class="retake-picker-overlay" aria-hidden="true">
   <div class="retake-picker-card" role="dialog" aria-modal="true" aria-labelledby="retake-picker-title">
@@ -405,6 +443,16 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <script src="{% static 'assessment_tool/js/course_grades_options.js' %}"></script>
 <script src="{% static 'assessment_tool/js/assessment_sync_decision.js' %}"></script>
+<script src="{% static 'assessment_tool/js/utils.js' %}"></script>
+<script src="{% static 'assessment_tool/js/branch_picker.js' %}"></script>
+<script>
+window.ASSESSMENT_COPY_CONFIG = {
+    copyUrl: "{% url 'copy_assessment_into_course_ajax' course.id %}",
+    branchPickerContentsUrlTemplate: "/api/branch-picker/{id}/",
+    explorerRootFolderId: {% if explorer_root_folder %}{{ explorer_root_folder.id }}{% else %}null{% endif %},
+    explorerRootFolderName: {% if explorer_root_folder %}"{{ explorer_root_folder.name|escapejs }}"{% else %}null{% endif %}
+};
+</script>
 {% endif %}
 
 <script>
@@ -456,11 +504,15 @@ document.addEventListener("DOMContentLoaded", function() {
             const badge = att.is_counting
               ? '<span class="retake-counting">Counts toward grade</span>'
               : '';
+            const openCell =
+              att.can_open && att.review_url
+                ? `<a class="student-review-btn" href="${att.review_url}">Open</a>`
+                : '<span style="color:#94a3b8;">—</span>';
             tr.innerHTML = `
               <td>Attempt ${attempts.length - idx}${badge}</td>
               <td>${when}</td>
               <td>${score}</td>
-              <td><a class="student-review-btn" href="${att.review_url}">Open</a></td>
+              <td>${openCell}</td>
             `;
             body.appendChild(tr);
           });
@@ -473,18 +525,86 @@ document.addEventListener("DOMContentLoaded", function() {
 
     {% if not is_student %}
     const modal = document.getElementById('create-assessment-modal');
+    const assessmentMenuTrigger = document.getElementById('trigger-assessment-menu');
+    const assessmentMenuOverlay = document.getElementById('assessment-menu-overlay');
+    const assessmentMenuContainer = document.getElementById('create-assessment-dropdown');
     const triggerBtn = document.getElementById('trigger-create-modal');
+    const copyAssessmentBtn = document.getElementById('trigger-copy-assessment-from-explorer');
     const closeBtn = document.getElementById('btn-close-modal');
     const commitBtn = document.getElementById('btn-commit-creation');
     const inputField = document.getElementById('new-assessment-name');
 
+    function closeAssessmentMenu() {
+        if (assessmentMenuOverlay) assessmentMenuOverlay.classList.remove('is-open');
+    }
+
+    if (assessmentMenuTrigger && assessmentMenuOverlay && assessmentMenuContainer) {
+        assessmentMenuTrigger.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            assessmentMenuOverlay.classList.toggle('is-open');
+        });
+        document.addEventListener('click', (e) => {
+            if (!assessmentMenuContainer.contains(e.target)) closeAssessmentMenu();
+        });
+    }
+
     if (triggerBtn) {
         triggerBtn.addEventListener('click', () => {
+            closeAssessmentMenu();
             modal.classList.add('is-visible');
             inputField.value = '';
             inputField.focus();
         });
     }
+
+    if (copyAssessmentBtn) {
+        copyAssessmentBtn.addEventListener('click', async () => {
+            closeAssessmentMenu();
+            const cfg = window.ASSESSMENT_COPY_CONFIG || {};
+            if (typeof openBranchPicker !== 'function') {
+                await mapAlert({ title: 'Unavailable', message: 'Branch picker failed to load. Hard-refresh the page and try again.' });
+                return;
+            }
+            if (!cfg.explorerRootFolderId) {
+                await mapAlert({ title: 'Unavailable', message: 'Explorer root folder was not found for your account.' });
+                return;
+            }
+            try {
+                await openBranchPicker({
+                    title: 'Copy assessment into this course',
+                    hint: 'Browse your explorer and select an assessment you can view. A deep copy (including question groups, problem sets, and problems) is added here as Hidden.',
+                    rootFolderId: cfg.explorerRootFolderId,
+                    rootFolderName: cfg.explorerRootFolderName || 'Home',
+                    contentsUrlTemplate: cfg.branchPickerContentsUrlTemplate,
+                    selectableTypes: ['assessment'],
+                    commitLabel: 'Copy',
+                    onSelect: async (item) => {
+                        const response = await fetch(cfg.copyUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': (typeof getCookie === 'function' ? getCookie('csrftoken') : '{{ csrf_token }}'),
+                            },
+                            body: JSON.stringify({ source_branch_id: item.id }),
+                        });
+                        const data = await response.json().catch(() => ({}));
+                        if (!response.ok || !data.success) {
+                            throw new Error(data.error || 'Copy failed.');
+                        }
+                        window.location.reload();
+                    },
+                });
+            } catch (err) {
+                console.error('Copy assessment failed:', err);
+                await mapAlert({
+                    title: 'Copy failed',
+                    message: (err && err.message) || 'Copy failed.',
+                });
+            }
+        });
+    }
+
     if (closeBtn) closeBtn.addEventListener('click', () => modal.classList.remove('is-visible'));
     if (modal) {
         modal.addEventListener('click', (e) => {
@@ -546,12 +666,47 @@ document.addEventListener("DOMContentLoaded", function() {
         pollGeneration(tr.getAttribute('data-id'));
     });
 
+    const classRetakeOverlay = document.getElementById('class-retake-confirm-overlay');
+    function confirmClassRetake() {
+        return new Promise((resolve) => {
+            if (!classRetakeOverlay) {
+                resolve(false);
+                return;
+            }
+            const okBtn = document.getElementById('class-retake-confirm-ok');
+            const cancelBtn = document.getElementById('class-retake-confirm-cancel');
+            const cleanup = (value) => {
+                classRetakeOverlay.hidden = true;
+                classRetakeOverlay.setAttribute('aria-hidden', 'true');
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                resolve(value);
+            };
+            const onOk = () => cleanup(true);
+            const onCancel = () => cleanup(false);
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            classRetakeOverlay.hidden = false;
+            classRetakeOverlay.setAttribute('aria-hidden', 'false');
+        });
+    }
+
     document.querySelectorAll('.status-dropdown-picker').forEach(dropdown => {
         dropdown.addEventListener('change', async function() {
             const assessmentId = this.getAttribute('data-assessment-id');
             const previousState = this.getAttribute('data-previous');
             const targetState = this.value;
             try {
+                let confirmClassRetakeFlag = false;
+                if (targetState === 'retake') {
+                    const confirmed = await confirmClassRetake();
+                    if (!confirmed) {
+                        this.value = previousState;
+                        return;
+                    }
+                    confirmClassRetakeFlag = true;
+                }
+
                 async function submitStatus(synchronizationDecision) {
                     const body = {
                         assessment_id: assessmentId,
@@ -559,6 +714,9 @@ document.addEventListener("DOMContentLoaded", function() {
                     };
                     if (synchronizationDecision) {
                         body.synchronization_decision = synchronizationDecision;
+                    }
+                    if (confirmClassRetakeFlag) {
+                        body.confirm_class_retake = true;
                     }
                     const response = await fetch("{% url 'update_assessment_status_ajax' course.id %}", {
                         method: 'POST',
@@ -593,7 +751,9 @@ document.addEventListener("DOMContentLoaded", function() {
                     if (
                         targetState === 'upcoming' ||
                         previousState === 'upcoming' ||
-                        (targetState === 'open' && data.job && data.job.blocks_edits)
+                        targetState === 'retake' ||
+                        previousState === 'retake' ||
+                        ((targetState === 'open' || targetState === 'retake') && data.job && data.job.blocks_edits)
                     ) {
                         window.location.reload();
                         return;

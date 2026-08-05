@@ -296,3 +296,7 @@
     gap: 8px;
     background: #ffffff;
 }
+
+.setup-header-menu-overlay {
+    min-width: 260px;
+}
