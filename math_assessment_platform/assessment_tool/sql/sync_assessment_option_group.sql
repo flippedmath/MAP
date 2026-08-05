@@ -172,3 +172,26 @@ VALUES
 ON CONFLICT (group_num, choice) DO UPDATE
 SET description = EXCLUDED.description,
     deprecated = false;
+
+-- ---------------------------------------------------------------------------
+-- Group 16: Open session date column (Course Assessments table)
+-- ---------------------------------------------------------------------------
+INSERT INTO assessment_option_group (id, group_num, choice, description, deprecated)
+VALUES
+  (
+    nextval('assessment_option_group_id_seq'),
+    16,
+    1,
+    'Do not show the open session date column on the Course Assessments page',
+    false
+  ),
+  (
+    nextval('assessment_option_group_id_seq'),
+    16,
+    2,
+    'Show a column with the date of the open/retake session (only when at least one student started before close)',
+    false
+  )
+ON CONFLICT (group_num, choice) DO UPDATE
+SET description = EXCLUDED.description,
+    deprecated = false;

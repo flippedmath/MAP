@@ -182,32 +182,34 @@
     </div>
     {% endif %}
 
-    {% if active_retake_assessments %}
-    <div class="card dashboard-active-retakes-card">
-        <h2>Active retakes</h2>
+    {% if teacher_open_assessments %}
+    <div class="card dashboard-teacher-open-assessments-card">
+        <h2>Open assessments</h2>
         <div class="dashboard-course-list">
-            {% for row in active_retake_assessments %}
+            {% for row in teacher_open_assessments %}
             <div class="dashboard-course-row">
                 <div class="dashboard-course-main">
                     <div class="dashboard-course-name">{{ row.assessment_name }}</div>
                     <div class="dashboard-course-meta">
                         <span class="dashboard-course-status">{{ row.course_name }}</span>
-                        <span class="dashboard-active-retake-count">
-                            {{ row.student_count }} active retake{{ row.student_count|pluralize }}
-                        </span>
-                        <span>
-                            Student{{ row.student_count|pluralize }}:
-                            {% for student_name in row.student_names %}
-                                {{ student_name }}{% if not forloop.last %}, {% endif %}
-                            {% endfor %}
-                        </span>
+                        <span>{{ row.status_label }}</span>
+                        {% if row.row_kind == "student_redo" and row.student_name %}
+                        <span>Student: {{ row.student_name }}</span>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="dashboard-course-actions">
+                    {% if row.row_kind == "student_redo" %}
                     <a
                         href="{% url 'course_grades_assessment' row.course_id row.assessment_id %}"
-                        class="btn dashboard-active-retake-link"
-                    >Manage Retakes</a>
+                        class="btn"
+                    >End REDO</a>
+                    {% else %}
+                    <a
+                        href="{% url 'assessment_view' row.course_id %}?highlight={{ row.assessment_id }}"
+                        class="btn"
+                    >Go to assessments</a>
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}

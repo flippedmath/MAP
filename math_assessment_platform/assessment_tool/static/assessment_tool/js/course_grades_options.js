@@ -79,6 +79,7 @@
       const body = { selections };
       if (pending.scope === 'course') {
         body.default_time_limit_minutes = timeLimit;
+        if (pending.subset) body.subset = pending.subset;
       } else {
         body.time_limit_minutes = timeLimit;
         if (pending.subset) body.subset = pending.subset;
@@ -242,7 +243,9 @@
     applying = false;
     const title =
       opts.scope === 'course'
-        ? 'Course default assessment options'
+        ? opts.subset === 'assessments'
+          ? 'Course Assessments display options'
+          : 'Course default assessment options'
         : opts.subset === 'delivery'
           ? 'Assessment delivery options'
           : opts.subset === 'grades'
@@ -251,7 +254,9 @@
     el.querySelector('#grades-options-title').textContent = title;
     el.querySelector('#grades-options-sub').textContent =
       opts.scope === 'course'
-        ? 'These defaults apply to assessments unless an assessment overrides them. Changes apply when you close this panel.'
+        ? opts.subset === 'assessments'
+          ? 'These settings control columns on the Course Assessments page. Changes apply when you close this panel.'
+          : 'These defaults apply to assessments unless an assessment overrides them. Changes apply when you close this panel.'
         : (opts.assessmentName || '') + ' — changes apply when you close this panel.';
     el.querySelector('#grades-options-status').textContent = 'Loading…';
     const printTray = el.querySelector('#grades-options-print-actions');
@@ -321,6 +326,7 @@
       evt.preventDefault();
       openOptions({
         scope: 'course',
+        subset: gear.getAttribute('data-options-subset') || '',
         loadUrl: gear.getAttribute('data-options-load-url'),
         saveUrl: gear.getAttribute('data-options-save-url'),
       });

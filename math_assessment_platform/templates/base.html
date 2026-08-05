@@ -20,22 +20,76 @@
     {% block extra_css %}{% endblock %}
 </head>
 <body{% if request.resolver_match.url_name == 'home' %} class="page-home"{% endif %}>
-    <nav>
-        <a href="{% url 'home' %}" style="font-weight: bold; font-size: 1.2rem; color: inherit; text-decoration: none;">MAP</a>
-        <div class="nav-links">
-            {% if user.is_authenticated %}
-                {% if user.user_type == 'IT_Support' %}
-                <a href="{% url 'tickets_admin' %}" style="color: white; text-decoration: none;">Tickets</a>
-                <a href="{% url 'qa_admin' %}" style="color: white; text-decoration: none;">Q&amp;A Admin</a>
-                <a href="{% url 'credits_admin' %}" style="color: white; text-decoration: none;">Credits</a>
-                <a href="{% url 'site_announcements_admin' %}" style="color: white; text-decoration: none;">Announcements</a>
-                <a href="{% url 'db_viewer' %}" style="color: white; text-decoration: none;">Database</a>
+    <nav class="site-nav{% if user.is_authenticated and user.user_type == 'IT_Support' %} site-nav--admin{% endif %}" aria-label="Main">
+        <a href="{% url 'home' %}" class="nav-brand">MAP</a>
+        {% if user.is_authenticated and user.user_type == 'IT_Support' %}
+        <button
+            type="button"
+            class="nav-toggle"
+            id="nav-toggle"
+            aria-controls="site-nav-links"
+            aria-expanded="false"
+            aria-label="Open menu"
+        >
+            <span class="nav-toggle-bars" aria-hidden="true"></span>
+        </button>
+        {% endif %}
+        <div class="nav-links" id="site-nav-links">
+            {% if user.is_authenticated and user.user_type == 'IT_Support' %}
+                {# Admin chrome: compact IT tools + direct access to normal pages #}
+                <div class="nav-dropdown nav-admin-dropdown">
+                    <button type="button" class="nav-dropdown-trigger" aria-haspopup="true" aria-expanded="false">
+                        Admin
+                        <i class="fas fa-caret-down" aria-hidden="true"></i>
+                    </button>
+                    <div class="nav-dropdown-menu" role="menu" hidden>
+                        <a href="{% url 'tickets_admin' %}" class="nav-dropdown-item" role="menuitem">Tickets</a>
+                        <a href="{% url 'qa_admin' %}" class="nav-dropdown-item" role="menuitem">Q&amp;A Admin</a>
+                        <a href="{% url 'credits_admin' %}" class="nav-dropdown-item" role="menuitem">Credits</a>
+                        <a href="{% url 'site_announcements_admin' %}" class="nav-dropdown-item" role="menuitem">Announcements</a>
+                        <a href="{% url 'db_viewer' %}" class="nav-dropdown-item" role="menuitem">Database</a>
+                    </div>
+                </div>
+                <a href="{% url 'course_list' %}" class="nav-link">Courses</a>
+                <a href="{% url 'dashboard' %}" class="nav-link">Dashboard</a>
+                <a href="{% url 'about' %}" class="nav-link">About</a>
+                <a href="{% url 'qa' %}" class="nav-link">Q&amp;A</a>
+                <a href="{% url 'contact_us' %}" class="nav-link">Contact Us</a>
+                <div class="nav-account-dropdown" data-has-unread="{% if has_unread_notifications %}true{% else %}false{% endif %}">
+                    <button type="button" class="btn nav-account-trigger" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
+                        <span class="nav-account-label">{{ user.user_display_name|default:user.username }}</span>
+                        <i class="fas fa-caret-down" aria-hidden="true"></i>
+                        <span class="nav-unread-dot nav-unread-dot--trigger{% if not has_unread_notifications %} is-hidden{% endif %}" aria-hidden="true"></span>
+                    </button>
+                    <div class="nav-account-menu" role="menu" hidden>
+                        <a href="{% url 'notifications' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Notifications</span>
+                            <span class="nav-unread-dot nav-unread-dot--item is-hidden" aria-hidden="true"></span>
+                        </a>
+                        <a href="{% url 'account_settings' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Account Settings</span>
+                        </a>
+                        <a href="{% url 'file_explorer' %}" class="nav-account-menu-item" role="menuitem">
+                            <span>Explorer</span>
+                        </a>
+                        <div class="nav-account-menu-divider nav-logout-desktop-only" role="separator"></div>
+                        <form action="{% url 'logout' %}" method="post" class="nav-account-logout-form nav-logout-desktop-only">
+                            {% csrf_token %}
+                            <button type="submit" class="nav-account-menu-item nav-account-menu-item--button" role="menuitem">Logout</button>
+                        </form>
+                    </div>
+                </div>
+                <form action="{% url 'logout' %}" method="post" class="nav-logout-form nav-logout-mobile-only">
+                    {% csrf_token %}
+                    <button type="submit" class="nav-link nav-link--button">Logout</button>
+                </form>
+            {% elif user.is_authenticated %}
+                {# Teachers / students / parents: simple flat bar (no hamburger) #}
+                {% if user.user_type == 'Teacher' %}
+                <a href="{% url 'course_list' %}" class="nav-link">Courses</a>
                 {% endif %}
-                {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
-                <a href="{% url 'course_list' %}" style="color: white; text-decoration: none;">Courses</a>
-                {% endif %}
-                <a href="{% url 'about' %}" style="color: white; text-decoration: none;">About</a>
-                <a href="{% url 'dashboard' %}" style="color: white; text-decoration: none;">Dashboard</a>
+                <a href="{% url 'about' %}" class="nav-link">About</a>
+                <a href="{% url 'dashboard' %}" class="nav-link">Dashboard</a>
                 <div class="nav-account-dropdown" data-has-unread="{% if has_unread_notifications %}true{% else %}false{% endif %}">
                     <button type="button" class="btn nav-account-trigger" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
                         <span class="nav-account-label">{{ user.user_display_name|default:user.username }}</span>
@@ -59,7 +113,7 @@
                         <a href="{% url 'contact_us' %}" class="nav-account-menu-item" role="menuitem">
                             <span>Contact Us</span>
                         </a>
-                        {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
+                        {% if user.user_type == 'Teacher' %}
                         <a href="{% url 'file_explorer' %}" class="nav-account-menu-item" role="menuitem">
                             <span>Explorer</span>
                         </a>
@@ -72,10 +126,10 @@
                     </div>
                 </div>
             {% else %}
-                <a href="{% url 'about' %}" style="color: white; text-decoration: none;">About</a>
-                <a href="{% url 'qa' %}" style="color: white; text-decoration: none;">Q&amp;A</a>
-                <a href="{% url 'contact_us' %}" style="color: white; text-decoration: none;">Contact Us</a>
-                <a href="{% url 'login' %}" style="color: white; text-decoration: none;">Login</a>
+                <a href="{% url 'about' %}" class="nav-link">About</a>
+                <a href="{% url 'qa' %}" class="nav-link">Q&amp;A</a>
+                <a href="{% url 'contact_us' %}" class="nav-link">Contact Us</a>
+                <a href="{% url 'login' %}" class="nav-link">Login</a>
             {% endif %}
         </div>
     </nav>
@@ -148,8 +202,8 @@
             <script src="{% static 'assessment_tool/js/single_tab_enforcement.js' %}"></script>
         {% endif %}
     {% endblock extra_js %}
+    <script src="{% static 'assessment_tool/js/nav_account_menu.js' %}"></script>
     {% if user.is_authenticated %}
-        <script src="{% static 'assessment_tool/js/nav_account_menu.js' %}"></script>
         <script src="{% static 'assessment_tool/js/local_datetime.js' %}"></script>
         <script src="{% static 'assessment_tool/js/view_only_toast.js' %}"></script>
     {% endif %}

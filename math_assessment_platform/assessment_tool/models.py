@@ -316,6 +316,21 @@ class Assessment(models.Model):
             'the first student starts a new series under class retake.'
         ),
     )
+    open_session_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        db_comment=(
+            'Date of the last open/retake session that had at least one student '
+            'start before the assessment was closed.'
+        ),
+    )
+    open_session_pending_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        db_comment=(
+            'When the current open/retake/upcoming session began; cleared on close.'
+        ),
+    )
 
     def duplicate_assessment(self, new_course, new_owner):
         """Duplicates the assessment and all its related questions."""

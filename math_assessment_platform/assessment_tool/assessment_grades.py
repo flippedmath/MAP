@@ -486,6 +486,11 @@ def assessment_needs_teacher_release(assessment) -> bool:
 def scores_visible_for_assessment(assessment, *, now=None) -> bool:
     if not scores_released_flag(assessment):
         return False
+    # Keep scores hidden while the assessment is still open for taking —
+    # students see results only after close (and release rules are satisfied).
+    status = (getattr(assessment, "status", None) or "").strip().lower()
+    if status in ("open", "upcoming", "active", "retake available"):
+        return False
     mode = assessment_release_mode(assessment)
     return mode in (RELEASE_MODE_SCORES_ONLY, RELEASE_MODE_FULL_REVIEW)
 
@@ -942,6 +947,7 @@ def grades_overview_for_course(course) -> list[dict]:
         curve_allowed_for_assessment,
         score_release_requires_teacher,
     )
+    from .student_attempts import assessment_ids_for_template
 
     assessments = list(
         m.Assessment.objects.filter(
@@ -950,8 +956,43 @@ def grades_overview_for_course(course) -> list[dict]:
             user__isnull=True,
         )
         .exclude(status="deleted")
-        .order_by("order", "id")
     )
+    # Latest attempt timestamp per course template (most recent at bottom).
+    template_by_take_id = {}
+    for assessment in assessments:
+        for take_id in assessment_ids_for_template(assessment):
+            template_by_take_id[int(take_id)] = assessment.id
+    latest_attempt_at = {}
+    if template_by_take_id:
+        for take_id, started_at, submitted_at, creation_date in (
+            m.StudentAssessmentAttempt.objects.filter(
+                course=course,
+                assessment_id__in=template_by_take_id.keys(),
+            ).values_list(
+                "assessment_id",
+                "started_at",
+                "submitted_at",
+                "creation_date",
+            )
+        ):
+            template_id = template_by_take_id.get(int(take_id))
+            if template_id is None:
+                continue
+            stamp = started_at or creation_date or submitted_at
+            if stamp is None:
+                continue
+            previous = latest_attempt_at.get(template_id)
+            if previous is None or stamp > previous:
+                latest_attempt_at[template_id] = stamp
+
+    def _overview_sort_key(assessment):
+        stamp = latest_attempt_at.get(assessment.id) or assessment.creation_date
+        # Ascending: oldest first, most recent attempt activity at the bottom.
+        # Rows with no timestamp sort first, then by id.
+        return (stamp is None, stamp, assessment.id)
+
+    assessments.sort(key=_overview_sort_key)
+
     custom_option_ids = set(
         m.AssessmentOptions.objects.filter(
             assessment_id__in=[a.id for a in assessments],

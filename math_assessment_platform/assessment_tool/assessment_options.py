@@ -23,6 +23,7 @@ GROUP_LOCK_FOCUS = 9
 GROUP_SYNC_TESTS = 12
 GROUP_CURVE = 14
 GROUP_SCORE_RELEASE = 15
+GROUP_OPEN_SESSION_DATE = 16
 
 # Group 2
 CHOICE_VIEW_SCORES_ONLY = 1
@@ -61,6 +62,10 @@ CHOICE_CURVE_ON = 2
 CHOICE_RELEASE_AUTO = 1
 CHOICE_RELEASE_TEACHER = 2
 
+# Group 16 — Course Assessments table column
+CHOICE_OPEN_SESSION_DATE_HIDE = 1
+CHOICE_OPEN_SESSION_DATE_SHOW = 2
+
 GROUP_LABELS = {
     GROUP_STUDENT_VIEW: "Student view of graded assessments",
     GROUP_GRADE_AGGREGATION: "Course total calculation",
@@ -71,6 +76,7 @@ GROUP_LABELS = {
     GROUP_SYNC_TESTS: "Synchronize tests",
     GROUP_CURVE: "Curve",
     GROUP_SCORE_RELEASE: "Score release",
+    GROUP_OPEN_SESSION_DATE: "Open session date column",
 }
 
 # Shown only on the course gear overlay — not per-assessment Settings.
@@ -78,6 +84,7 @@ COURSE_ONLY_OPTION_GROUPS = frozenset(
     {
         GROUP_GRADE_AGGREGATION,
         GROUP_CURVE,
+        GROUP_OPEN_SESSION_DATE,
     }
 )
 
@@ -105,6 +112,11 @@ ASSESSMENT_OPTION_SUBSETS = {
     "delivery": ASSESSMENT_DELIVERY_OPTION_GROUPS,
 }
 
+# Course gear panels that only expose a subset of COURSE_ONLY groups.
+COURSE_OPTION_SUBSETS = {
+    "assessments": frozenset({GROUP_OPEN_SESSION_DATE}),
+}
+
 
 def resolve_assessment_option_subset(subset) -> frozenset[int] | None:
     """
@@ -118,6 +130,16 @@ def resolve_assessment_option_subset(subset) -> frozenset[int] | None:
         return None
     return ASSESSMENT_OPTION_SUBSETS[key]
 
+
+def resolve_course_option_subset(subset) -> frozenset[int] | None:
+    """Return allowed course-only group nums for a course options panel subset."""
+    if subset is None or subset == "":
+        return None
+    key = str(subset).strip().lower()
+    if key not in COURSE_OPTION_SUBSETS:
+        return None
+    return COURSE_OPTION_SUBSETS[key]
+
 # Documented defaults when a course has not yet saved a row for the group
 DEFAULT_CHOICES = {
     GROUP_STUDENT_VIEW: CHOICE_VIEW_SCORES_ONLY,
@@ -129,6 +151,7 @@ DEFAULT_CHOICES = {
     GROUP_SYNC_TESTS: CHOICE_SYNC_OFF,
     GROUP_CURVE: CHOICE_CURVE_OFF,
     GROUP_SCORE_RELEASE: CHOICE_RELEASE_AUTO,
+    GROUP_OPEN_SESSION_DATE: CHOICE_OPEN_SESSION_DATE_HIDE,
 }
 
 
@@ -186,9 +209,15 @@ def list_option_groups(*, include_deprecated: bool = False) -> list[dict]:
     return out
 
 
-def course_default_options_payload(course) -> dict:
+def course_default_options_payload(course, *, subset=None) -> dict:
     m = _models()
-    groups = list_option_groups()
+    allowed = resolve_course_option_subset(subset)
+    groups = []
+    for g in list_option_groups():
+        gnum = int(g["group_num"])
+        if allowed is not None and gnum not in allowed:
+            continue
+        groups.append(g)
     selected = {
         int(r.option_type_id): {
             "choice": int(r.choice),
@@ -196,8 +225,12 @@ def course_default_options_payload(course) -> dict:
         }
         for r in m.CourseDefaultAssessmentOptions.objects.filter(course=course)
         if int(r.option_type_id) in GROUP_LABELS
+        and (allowed is None or int(r.option_type_id) in allowed)
     }
-    if GROUP_GRADE_AGGREGATION not in selected:
+    if (
+        GROUP_GRADE_AGGREGATION not in selected
+        and (allowed is None or GROUP_GRADE_AGGREGATION in allowed)
+    ):
         mode = str(getattr(course, "grade_aggregation_mode", "") or "").strip().lower()
         selected[GROUP_GRADE_AGGREGATION] = {
             "choice": CHOICE_SUM_POINTS if mode == "sum_points" else CHOICE_EQUAL_WEIGHT,
@@ -220,6 +253,11 @@ def course_default_options_payload(course) -> dict:
     return {
         "success": True,
         "scope": "course",
+        "subset": (
+            str(subset).strip().lower()
+            if subset and str(subset).strip().lower() in COURSE_OPTION_SUBSETS
+            else None
+        ),
         "course_id": course.id,
         "groups": groups,
         "selected": selected,
@@ -712,3 +750,11 @@ def curve_allowed_for_assessment(assessment) -> bool:
 
 def any_assessment_allows_curve(course) -> bool:
     return curve_allowed_for_course(course)
+
+
+def show_open_session_date_column(course) -> bool:
+    """Teacher Assessments table: show the Open session date column."""
+    return (
+        resolved_course_option(course, GROUP_OPEN_SESSION_DATE)
+        == CHOICE_OPEN_SESSION_DATE_SHOW
+    )

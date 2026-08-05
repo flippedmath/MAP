@@ -15,20 +15,267 @@ body {
 }
 
 /* Responsive Navigation */
-nav {
+.site-nav,
+nav.site-nav {
     background: var(--nav-bg);
     color: white;
-    padding: 1rem 5%;
+    padding: 0.75rem 5%;
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 0.75rem;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    position: relative;
+    z-index: 1100;
+}
+
+.nav-brand {
+    font-weight: 700;
+    font-size: 1.2rem;
+    color: inherit;
+    text-decoration: none;
+    flex-shrink: 0;
 }
 
 .nav-links {
     display: flex;
-    gap: 20px;
+    gap: 1rem;
     align-items: center;
+    flex-wrap: nowrap;
+}
+
+.nav-link {
+    color: white;
+    text-decoration: none;
+    white-space: nowrap;
+    font-size: 0.95rem;
+}
+
+.nav-link:hover {
+    color: #e2e8f0;
+}
+
+.nav-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 36px;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #0f172a;
+    color: white;
+    cursor: pointer;
+}
+
+.nav-toggle:hover,
+.nav-dropdown-trigger:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+}
+
+.nav-toggle-bars,
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+    display: block;
+    width: 18px;
+    height: 2px;
+    background: currentColor;
+    border-radius: 1px;
+    position: relative;
+}
+
+.nav-toggle-bars::before,
+.nav-toggle-bars::after {
+    content: "";
+    position: absolute;
+    left: 0;
+}
+
+.nav-toggle-bars::before { top: -6px; }
+.nav-toggle-bars::after { top: 6px; }
+
+.nav-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.nav-dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: white;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.nav-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 180px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+    z-index: 1200;
+    padding: 6px 0;
+    color: var(--text-color);
+}
+
+.nav-dropdown-menu[hidden] {
+    display: none !important;
+}
+
+.nav-dropdown-item {
+    display: block;
+    width: 100%;
+    padding: 8px 14px;
+    color: var(--text-color);
+    text-decoration: none;
+    font-size: 0.9rem;
+    box-sizing: border-box;
+    white-space: nowrap;
+}
+
+.nav-dropdown-item:hover {
+    background: #f1f5f9;
+}
+
+.nav-logout-form {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+}
+
+.nav-link--button {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    font-size: 0.95rem;
+    color: white;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.nav-link--button:hover {
+    background: transparent;
+    color: #e2e8f0;
+}
+
+/* Admin desktop: Logout lives in the account menu */
+.site-nav--admin .nav-logout-mobile-only {
+    display: none;
+}
+
+/* Admin-only: hamburger + stacked panel on smaller screens */
+@media (max-width: 900px) {
+    .site-nav--admin .nav-toggle {
+        display: inline-flex;
+    }
+
+    .site-nav--admin .nav-links {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        padding: 0.5rem 0 0.75rem;
+        background: var(--nav-bg);
+        border-top: 1px solid #334155;
+        box-shadow: 0 10px 20px rgba(15, 23, 42, 0.35);
+    }
+
+    .site-nav--admin.is-open .nav-links {
+        display: flex;
+    }
+
+    .site-nav--admin .nav-link,
+    .site-nav--admin .nav-dropdown,
+    .site-nav--admin .nav-account-dropdown,
+    .site-nav--admin .nav-logout-form {
+        width: 100%;
+    }
+
+    .site-nav--admin .nav-link,
+    .site-nav--admin .nav-link--button {
+        padding: 0.75rem 5%;
+        border-bottom: 1px solid #334155;
+        text-align: left;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .site-nav--admin .nav-dropdown-trigger,
+    .site-nav--admin .nav-account-trigger {
+        width: 100%;
+        justify-content: space-between;
+        padding: 0.75rem 5%;
+        border-radius: 0;
+        border-bottom: 1px solid #334155;
+        box-sizing: border-box;
+    }
+
+    .site-nav--admin .nav-account-trigger {
+        font-size: 0.95rem;
+    }
+
+    .site-nav--admin .nav-dropdown-menu,
+    .site-nav--admin .nav-account-menu {
+        position: static;
+        min-width: 0;
+        width: 100%;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 0;
+    }
+
+    .site-nav--admin .nav-dropdown-item,
+    .site-nav--admin .nav-account-menu-item,
+    .site-nav--admin .nav-account-menu-item--button {
+        color: #e2e8f0;
+        padding: 0.65rem 5% 0.65rem calc(5% + 0.75rem);
+        background: transparent;
+    }
+
+    .site-nav--admin .nav-dropdown-item:hover,
+    .site-nav--admin .nav-account-menu-item:hover,
+    .site-nav--admin .nav-account-menu-item--button:hover {
+        background: #1e293b;
+        color: #fff;
+    }
+
+    .site-nav--admin .nav-account-menu-divider {
+        background: #334155;
+        margin: 0;
+    }
+
+    /* Compressed admin menu: Logout at bottom of the panel, not inside account */
+    .site-nav--admin .nav-logout-desktop-only {
+        display: none !important;
+    }
+
+    .site-nav--admin .nav-logout-mobile-only {
+        display: block;
+        order: 99;
+        margin-top: 0.25rem;
+        border-top: 1px solid #334155;
+    }
 }
 
 /* Container that adjusts width based on screen size */
@@ -80,6 +327,13 @@ button, .btn {
 }
 
 button:hover { background-color: #1d4ed8; }
+
+.site-nav .nav-toggle:hover,
+.site-nav .nav-dropdown-trigger:hover,
+.site-nav .nav-link--button:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+}
 
 /* Base style for all messages */
 .alert {
@@ -626,6 +880,7 @@ button:hover { background-color: #1d4ed8; }
 .dashboard-courses-card,
 .dashboard-notifications-card,
 .dashboard-manual-grading-card,
+.dashboard-teacher-open-assessments-card,
 .dashboard-active-retakes-card,
 .dashboard-focus-unlocks-card {
     grid-column: 1 / -1;

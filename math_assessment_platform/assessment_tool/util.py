@@ -8681,13 +8681,146 @@ def grade_entities_payload(entities, context_entities, student_answers):
     }
 
 
-def build_practice_problem_instance(problem):
+def random_values_fingerprint(random_values):
+    """
+    Canonical fingerprint of rand/randInt draws for exact-match comparison.
+    Returns None when there are no usable random values.
+    """
+    if not isinstance(random_values, dict) or not random_values:
+        return None
+    items = []
+    for key in sorted(random_values.keys(), key=lambda k: str(k)):
+        value = random_values[key]
+        if value is None:
+            return None
+        text = str(value)
+        if text.startswith("⚠️") or text in ("", "None", "null", "???"):
+            return None
+        items.append((str(key), text))
+    return tuple(items) if items else None
+
+
+def random_fingerprint_from_segments(segments):
+    """Extract a rand/randInt fingerprint from frozen loaded_segments / all_entities."""
+    random_values = {}
+    for seg in segments or []:
+        if not isinstance(seg, dict):
+            continue
+        arch = entity_archetype_name(seg.get("archetype") or seg.get("token"))
+        if arch not in ("rand", "randInt"):
+            continue
+        token = str(seg.get("sequence_token") or "").strip()
+        if not token:
+            continue
+        value = seg.get("evaluated_output")
+        if value is None or value == "":
+            value = seg.get("simulated_value")
+        random_values[token] = value
+    return random_values_fingerprint(random_values)
+
+
+def random_fingerprint_from_frozen_problem(problem_row):
+    """Fingerprint from a StudentAssessmentProblem (or sync problem) row."""
+    key = getattr(problem_row, "answer_key", None) or {}
+    if not isinstance(key, dict):
+        key = {}
+    segments = key.get("loaded_segments") or key.get("all_entities") or []
+    if not segments:
+        payload = getattr(problem_row, "render_payload", None) or {}
+        if isinstance(payload, dict):
+            segments = payload.get("loaded_segments") or []
+    return random_fingerprint_from_segments(segments)
+
+
+def problem_ids_with_random_entities(problem_ids):
+    """Return the subset of problem ids that contain at least one rand/randInt entity."""
+    ids = {int(pid) for pid in (problem_ids or []) if pid is not None}
+    if not ids:
+        return set()
+    EntitySegment = apps.get_model("assessment_tool", "EntitySegment")
+    rows = EntitySegment.objects.filter(problem_id__in=ids).values_list(
+        "problem_id",
+        "problem_type_id_originator__name",
+    )
+    out = set()
+    for problem_id, token_name in rows:
+        if entity_archetype_name(token_name) in ("rand", "randInt"):
+            out.add(int(problem_id))
+    return out
+
+
+def entity_archetype_name(token_name):
+    """Strip trailing digits from an entity type / sequence name (randInt1 → randInt)."""
+    return re.sub(r"\d+$", "", str(token_name or "").strip())
+
+
+def select_problem_set_pool(ordered_pool, suggested_count, *, seen_source_problem_ids=None):
+    """
+    Choose ``suggested_count`` problems from a CQD pool.
+
+    Prefer problems the student has not seen on prior attempts. When reuse is
+    required, prefer templates that include rand/randInt entities.
+    """
+    pool = list(ordered_pool or [])
+    try:
+        n = int(suggested_count)
+    except (TypeError, ValueError):
+        n = 0
+    if n < 0:
+        n = 0
+    n = min(n, len(pool))
+    if n <= 0:
+        return []
+
+    seen_ids = {
+        int(pid)
+        for pid in (seen_source_problem_ids or set())
+        if pid is not None
+    }
+    unseen = [p for p in pool if int(p.id) not in seen_ids]
+    if len(unseen) >= n:
+        chosen = random.sample(unseen, n)
+    else:
+        chosen = list(unseen)
+        need = n - len(chosen)
+        chosen_ids = {int(p.id) for p in chosen}
+        reuse_pool = [p for p in pool if int(p.id) not in chosen_ids]
+        if need > 0 and reuse_pool:
+            rand_ids = problem_ids_with_random_entities([p.id for p in reuse_pool])
+            with_rand = [p for p in reuse_pool if int(p.id) in rand_ids]
+            without_rand = [p for p in reuse_pool if int(p.id) not in rand_ids]
+            refill = []
+            if with_rand:
+                take = min(need, len(with_rand))
+                refill.extend(random.sample(with_rand, take))
+                need -= take
+            if need > 0 and without_rand:
+                take = min(need, len(without_rand))
+                refill.extend(random.sample(without_rand, take))
+            chosen.extend(refill)
+
+    chosen_ids = {p.id for p in chosen}
+    # Preserve pool order among the chosen sample for stable reading.
+    return [p for p in pool if p.id in chosen_ids]
+
+
+def build_practice_problem_instance(
+    problem,
+    *,
+    forbidden_random_fingerprints=None,
+    max_duplicate_random_rolls=5,
+):
     """
     Fully evaluate one problem for an ephemeral practice-test slot (Option A).
 
     Returns a dict with ``ok`` True/False. On failure (invalid rand/randInt or a
     ``⚠️`` simulated value), includes diagnostics instead of a showable problem:
     ``failed_tokens``, ``card_inputs``, ``random_values``.
+
+    When ``forbidden_random_fingerprints`` is provided, rand/randInt values are
+    rolled first and compared to prior fingerprints for this source problem. A
+    matching draw is rerolled; after ``max_duplicate_random_rolls`` consecutive
+    matches the duplicate is accepted and the rest of the problem is rendered.
     """
     QuestionBlock = apps.get_model('assessment_tool', 'QuestionBlock')
     EntitySegment = apps.get_model('assessment_tool', 'EntitySegment')
@@ -8706,7 +8839,7 @@ def build_practice_problem_instance(problem):
         token_name = segment.problem_type_id_originator.name
         sequence_token = content_data.get("sequence_token") or token_name
         sequence_token = str(sequence_token).strip()
-        archetype_name = re.sub(r'\d+$', '', token_name)
+        archetype_name = entity_archetype_name(token_name)
         clean_inputs = dict(content_data)
         shuffle_seed = clean_inputs.pop("shuffle_seed", None)
         clean_inputs.pop("answer_field", None)
@@ -8721,24 +8854,90 @@ def build_practice_problem_instance(problem):
         })
         prepped_segments.append((segment, content_data, clean_inputs, sequence_token, archetype_name, shuffle_seed))
 
-    loaded_segments = []
-    answer_fields = []
-    failed_tokens = []
-    random_values = {}
-    for segment, content_data, clean_inputs, sequence_token, archetype_name, shuffle_seed in prepped_segments:
+    forbidden = [
+        fp
+        for fp in (forbidden_random_fingerprints or [])
+        if fp is not None
+    ]
+    try:
+        max_dup_rolls = max(1, int(max_duplicate_random_rolls or 5))
+    except (TypeError, ValueError):
+        max_dup_rolls = 5
+
+    def _blueprint_for(segment):
         blueprint_pattern = segment.problem_type_id_originator.format_pattern
         if isinstance(blueprint_pattern, str):
             try:
                 blueprint_pattern = json.loads(blueprint_pattern)
             except json.JSONDecodeError:
                 blueprint_pattern = {}
+        return blueprint_pattern or {}
 
+    def _clear_random_locks():
+        for entry in all_entities_payload:
+            if entry.get("token") in ("rand", "randInt"):
+                entry["simulated_value"] = ""
+
+    def _evaluate_segment(segment, clean_inputs, sequence_token, archetype_name):
+        blueprint_pattern = _blueprint_for(segment)
         render_results = evaluate_and_format_entity(
             archetype_name=archetype_name,
             sequence_token=sequence_token,
             clean_inputs=clean_inputs,
             pattern_blueprint=blueprint_pattern,
             all_entities_payload=all_entities_payload,
+        )
+        return blueprint_pattern, render_results
+
+    random_prepped = [
+        item for item in prepped_segments if item[4] in ("rand", "randInt")
+    ]
+    consecutive_duplicate_rolls = 0
+    if random_prepped and forbidden:
+        while True:
+            _clear_random_locks()
+            random_values = {}
+            random_failed = False
+            for (
+                segment,
+                _content_data,
+                clean_inputs,
+                sequence_token,
+                archetype_name,
+                _shuffle_seed,
+            ) in random_prepped:
+                _blueprint, render_results = _evaluate_segment(
+                    segment, clean_inputs, sequence_token, archetype_name
+                )
+                evaluated_output = render_results["evaluated_output"]
+                evaluation_ok = bool(render_results.get("evaluation_ok", True))
+                random_values[sequence_token] = evaluated_output
+                is_warning_value = (
+                    isinstance(evaluated_output, str)
+                    and evaluated_output.startswith("⚠️")
+                )
+                if not evaluation_ok or is_warning_value:
+                    random_failed = True
+                    break
+
+            if random_failed:
+                # Leave failed random values in place; the full pass records diagnostics.
+                break
+
+            fingerprint = random_values_fingerprint(random_values)
+            if fingerprint is not None and fingerprint in forbidden:
+                consecutive_duplicate_rolls += 1
+                if consecutive_duplicate_rolls < max_dup_rolls:
+                    continue
+            break
+
+    loaded_segments = []
+    answer_fields = []
+    failed_tokens = []
+    random_values = {}
+    for segment, content_data, clean_inputs, sequence_token, archetype_name, shuffle_seed in prepped_segments:
+        blueprint_pattern, render_results = _evaluate_segment(
+            segment, clean_inputs, sequence_token, archetype_name
         )
 
         evaluated_output = render_results['evaluated_output']
@@ -8862,6 +9061,8 @@ def build_practice_problem_instance_with_retries(
     actor_user=None,
     max_extra_attempts=5,
     allow_status_mutation=True,
+    forbidden_random_fingerprints=None,
+    max_duplicate_random_rolls=5,
 ):
     """
     Build a practice instance with up to ``1 + max_extra_attempts`` tries.
@@ -8870,6 +9071,9 @@ def build_practice_problem_instance_with_retries(
     (after retries finish) notify the owner once — unless ``allow_status_mutation``
     is False (e.g. explorer view-only). If all attempts fail, omit the problem
     from the assembled test.
+
+    ``forbidden_random_fingerprints`` avoids repeating prior rand/randInt draws
+    for the same source problem (see ``build_practice_problem_instance``).
     """
     from .notifications import notify_owner_complete_problem_render_failure
 
@@ -8883,7 +9087,11 @@ def build_practice_problem_instance_with_retries(
     was_complete = (getattr(problem, "problem_status", None) or "").lower() == "complete"
 
     for attempt in range(1, max_attempts + 1):
-        result = build_practice_problem_instance(problem)
+        result = build_practice_problem_instance(
+            problem,
+            forbidden_random_fingerprints=forbidden_random_fingerprints,
+            max_duplicate_random_rolls=max_duplicate_random_rolls,
+        )
         summary = {
             "attempt": attempt,
             "ok": bool(result.get("ok")),
@@ -8955,16 +9163,35 @@ def build_practice_problem_instance_with_retries(
     }
 
 
-def assemble_practice_test(assessment, actor_user=None, allow_status_mutation=True):
+def assemble_practice_test(
+    assessment,
+    actor_user=None,
+    allow_status_mutation=True,
+    *,
+    seen_source_problem_ids=None,
+    prior_random_fingerprints_by_source=None,
+):
     """
     Walk assessment question groups in order and build ephemeral practice slots.
     Returns dict with problems, warnings (drafts / zero-count sets), skipped_drafts,
     and omitted_render_failures for problems that could not be rendered.
+
+    Optional student history (retakes / later attempts):
+    - ``seen_source_problem_ids``: prefer unseen CQD pool problems
+    - ``prior_random_fingerprints_by_source``: map source_problem_id → list of
+      prior rand/randInt fingerprints to avoid when rendering
     """
     BranchGroup = apps.get_model('assessment_tool', 'BranchGroup')
     Problem = apps.get_model('assessment_tool', 'Problem')
     AssessmentQuestionGroup = apps.get_model('assessment_tool', 'AssessmentQuestionGroup')
     CustomQuestionDistribution = apps.get_model('assessment_tool', 'CustomQuestionDistribution')
+
+    seen_ids = {
+        int(pid)
+        for pid in (seen_source_problem_ids or set())
+        if pid is not None
+    }
+    prior_random_by_source = prior_random_fingerprints_by_source or {}
 
     aqgs = list(
         AssessmentQuestionGroup.objects.filter(assessment=assessment)
@@ -8985,12 +9212,16 @@ def assemble_practice_test(assessment, actor_user=None, allow_status_mutation=Tr
         'cqd',
     )
 
+    def _forbidden_for(problem):
+        return list(prior_random_by_source.get(int(problem.id), []) or [])
+
     def _append_built_instance(problem, *, section_name, from_problem_set):
         nonlocal slot_index
         build_result = build_practice_problem_instance_with_retries(
             problem,
             actor_user=actor_user,
             allow_status_mutation=allow_status_mutation,
+            forbidden_random_fingerprints=_forbidden_for(problem),
         )
         if not build_result.get("included"):
             omitted_render_failures.append({
@@ -9076,10 +9307,11 @@ def assemble_practice_test(assessment, actor_user=None, allow_status_mutation=Tr
                     })
                     continue
 
-                chosen = random.sample(ordered_pool, n) if n < len(ordered_pool) else list(ordered_pool)
-                # Preserve pool order among the chosen sample for stable reading
-                chosen_ids = {p.id for p in chosen}
-                chosen_ordered = [p for p in ordered_pool if p.id in chosen_ids]
+                chosen_ordered = select_problem_set_pool(
+                    ordered_pool,
+                    n,
+                    seen_source_problem_ids=seen_ids,
+                )
 
                 for p in chosen_ordered:
                     _append_built_instance(

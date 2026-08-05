@@ -52,5 +52,11 @@ VALUES
   (nextval('assessment_option_group_id_seq'), 15, 1,
    'Release grades to students automatically when scores are ready', false),
   (nextval('assessment_option_group_id_seq'), 15, 2,
-   'Teacher must release grades to students for each assessment', false)
+   'Teacher must release grades to students for each assessment', false),
+
+  -- Group 16: Open session date column (Course Assessments table)
+  (nextval('assessment_option_group_id_seq'), 16, 1,
+   'Do not show the open session date column on the Course Assessments page', false),
+  (nextval('assessment_option_group_id_seq'), 16, 2,
+   'Show a column with the date of the open/retake session (only when at least one student started before close)', false)
 ON CONFLICT (group_num, choice) DO NOTHING;

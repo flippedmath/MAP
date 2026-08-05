@@ -399,6 +399,116 @@ def teacher_manual_grading_for_user(user):
     return rows
 
 
+def teacher_open_assessments_for_user(user):
+    """
+    Class assessments with status open/retake, plus per-student REDO grants,
+    for courses this teacher (or IT Support co-teacher) manages.
+    """
+    if (
+        user is None
+        or not getattr(user, "is_authenticated", False)
+        or getattr(user, "user_type", None) not in ("Teacher", "IT_Support")
+    ):
+        return []
+
+    from .models import (
+        Assessment,
+        Course,
+        OpenStudentAssessmentOverwrite,
+        UserProfile,
+    )
+    from .student_attempts import normalize_assessment_status
+
+    course_rows = (
+        Course.objects.filter(Q(owner=user) | Q(usersincourse__user=user))
+        .distinct()
+        .order_by("name", "id")
+    )
+    courses = {course.id: course for course in course_rows}
+    if not courses:
+        return []
+
+    assessments = (
+        Assessment.objects.filter(
+            course_id__in=courses,
+            parent_assessment__isnull=True,
+            user__isnull=True,
+        )
+        .exclude(status="deleted")
+        .order_by("course__name", "order", "id")
+    )
+
+    rows = []
+    for assessment in assessments:
+        status = normalize_assessment_status(assessment.status)
+        if status not in ("open", "retake"):
+            continue
+        rows.append(
+            {
+                "row_kind": "class_status",
+                "course_id": assessment.course_id,
+                "course_name": courses[assessment.course_id].name or "",
+                "assessment_id": assessment.id,
+                "assessment_name": assessment.name or f"Assessment {assessment.id}",
+                "status": status,
+                "status_label": "Open" if status == "open" else "Retake",
+                "student_name": "",
+            }
+        )
+
+    grants = list(
+        OpenStudentAssessmentOverwrite.objects.filter(
+            a__course_id__in=courses,
+            a__parent_assessment__isnull=True,
+            a__user__isnull=True,
+            status_open=True,
+        )
+        .values(
+            "a_id",
+            "a__name",
+            "a__course_id",
+            "u_id",
+        )
+        .order_by("a__course__name", "a__order", "a_id", "u_id")
+    )
+    student_ids = {grant["u_id"] for grant in grants if grant["u_id"]}
+    students = {
+        student.pk: student
+        for student in UserProfile.objects.filter(pk__in=student_ids)
+    }
+    for grant in grants:
+        student_id = grant["u_id"]
+        if not student_id:
+            continue
+        course_id = grant["a__course_id"]
+        assessment_id = grant["a_id"]
+        rows.append(
+            {
+                "row_kind": "student_redo",
+                "course_id": course_id,
+                "course_name": courses[course_id].name or "",
+                "assessment_id": assessment_id,
+                "assessment_name": (
+                    grant["a__name"] or f"Assessment {assessment_id}"
+                ),
+                "status": "redo",
+                "status_label": "REDO",
+                "student_name": user_roster_formal_name(students.get(student_id)),
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            row["course_name"].casefold(),
+            row["assessment_name"].casefold(),
+            0 if row["row_kind"] == "class_status" else 1,
+            row["student_name"].casefold(),
+            row["assessment_id"],
+        )
+    )
+    return rows
+
+
 def teacher_active_retakes_for_user(user):
     """Active per-student retake grants grouped by assessment."""
     if (

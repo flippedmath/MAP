@@ -8,6 +8,12 @@
     timeZoneName: "short",
   };
 
+  var DATE_ONLY_OPTS = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  };
+
   /**
    * Parse an ISO timestamp as an absolute UTC instant.
    * Strings without an explicit offset/Z are treated as UTC (DB convention),
@@ -32,10 +38,22 @@
     return date.toLocaleString(undefined, DATE_OPTS);
   }
 
+  function formatLocalDate(iso) {
+    var date = parseUtcInstant(iso);
+    if (!date) return "";
+    return date.toLocaleDateString(undefined, DATE_ONLY_OPTS);
+  }
+
   function hydrateLocalDatetimes(root) {
     var scope = root || document;
     scope.querySelectorAll("time.local-datetime[datetime]").forEach(function (el) {
       var formatted = formatLocal(el.getAttribute("datetime"));
+      if (formatted) {
+        el.textContent = formatted;
+      }
+    });
+    scope.querySelectorAll("time.local-date[datetime]").forEach(function (el) {
+      var formatted = formatLocalDate(el.getAttribute("datetime"));
       if (formatted) {
         el.textContent = formatted;
       }

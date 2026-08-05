@@ -1,11 +1,25 @@
 /* ==========================================================================
    ✨ MODERN SLATE/DARK DASHBOARD SIDEBAR THEME
    ========================================================================== */
+
+/* Course pages: pull layout out of the wide centered .container gutters
+   (top + left space marked in design review). */
+main.container:has(> .course-layout-container) {
+    width: 100%;
+    max-width: none;
+    margin: 8px 0 16px;
+    padding: 0 10px 0 8px;
+    box-sizing: border-box;
+}
+
 .course-layout-container {
     display: flex;
-    gap: 24px;
+    gap: 12px;
     align-items: flex-start;
-    margin-top: 1rem;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 /* 🏢 Sidebar Container Base Frame */
@@ -125,10 +139,16 @@
 /* ==========================================================================\n   📱 RESPONSIVE MOBILE & TABLET BOTTOM FIXED NAVIGATION\n   ========================================================================== */
 @media (max-width: 768px) {
     /* 1. Stack the main layout vertically and ensure full content width */
+    main.container:has(> .course-layout-container) {
+        margin: 6px 0 16px;
+        padding: 0 6px;
+    }
+
     .course-layout-container {
         flex-direction: column;
-        gap: 16px;
+        gap: 8px;
         margin-bottom: 80px; /* Prevent the fixed bottom bar from covering content */
+        padding: 0;
     }
 
     /* 2. Reposition the sidebar container to anchor rigidly to the viewport floor */

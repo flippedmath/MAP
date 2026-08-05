@@ -16,15 +16,16 @@
     display: none;
     font-variant-numeric: tabular-nums;
     font-weight: 700;
-    font-size: 1rem;
+    font-size: 1.05rem;
     color: #0f172a;
-    background: #f1f5f9;
+    background: #ffffff;
     border: 1px solid #cbd5e1;
-    border-radius: 8px;
-    padding: 0.35rem 0.75rem;
+    border-radius: 10px;
+    padding: 0.5rem 0.9rem;
     white-space: nowrap;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
   }
-  .student-take-timer.is-visible { display: inline-flex; align-items: center; gap: 6px; }
+  .student-take-timer.is-visible { display: inline-flex; align-items: center; gap: 8px; }
   .student-take-timer.is-closing {
     color: #991b1b;
     background: #fef2f2;
@@ -37,11 +38,30 @@
     justify-content: space-between;
     gap: 12px;
   }
+  /* Always-visible while scrolling: viewport top-right */
   .student-take-timers {
+    position: fixed;
+    top: 4.75rem;
+    right: max(12px, env(safe-area-inset-right));
+    z-index: 2000;
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
     gap: 8px;
-    align-items: center;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+  .student-take-timers .student-take-timer {
+    pointer-events: auto;
+  }
+  @media (max-width: 640px) {
+    .student-take-timers {
+      top: 4.25rem;
+      right: 8px;
+    }
+    .student-take-timer {
+      font-size: 0.95rem;
+      padding: 0.4rem 0.7rem;
+    }
   }
   .practice-back-link--disabled {
     color: #94a3b8;

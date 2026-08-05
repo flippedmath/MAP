@@ -423,6 +423,8 @@ def close_assessment_and_finalize_attempts(
             template.save(update_fields=["status", "modified_date"])
             status_changed = True
 
+    finalize_class_session_on_close(template)
+
     if not assessment_has_student_engagement(template):
         discard_result = discard_all_unstarted_attempts(template)
         # Defensive: drop any accidental grade rows for this unused assessment.
@@ -447,6 +449,48 @@ def close_assessment_and_finalize_attempts(
     result["assessment_status"] = template.status
     result["zeros_recorded"] = record_zeros_on_assessment_close(assessment=template)
     return result
+
+
+def mark_class_session_opened(assessment, *, at=None) -> None:
+    """Record the start of an open / retake / upcoming class session."""
+    template = course_template_assessment(assessment) or assessment
+    stamp = _aware(at) or timezone.now()
+    template.open_session_pending_at = stamp
+    template.modified_date = timezone.now()
+    template.save(update_fields=["open_session_pending_at", "modified_date"])
+
+
+def session_had_student_start(template, *, since) -> bool:
+    """True when any student started a take on/after the session open stamp."""
+    since = _aware(since)
+    if since is None:
+        return False
+    template = course_template_assessment(template) or template
+    return (
+        attempts_qs_for_template(template)
+        .filter(started_at__isnull=False, started_at__gte=since)
+        .exists()
+    )
+
+
+def finalize_class_session_on_close(assessment) -> None:
+    """
+    Commit open_session_at only when at least one student started during the
+    pending open/retake session; always clear the pending stamp.
+    """
+    template = course_template_assessment(assessment) or assessment
+    pending = _aware(getattr(template, "open_session_pending_at", None))
+    update_fields = []
+    if pending is not None and session_had_student_start(template, since=pending):
+        template.open_session_at = pending
+        update_fields.append("open_session_at")
+    if getattr(template, "open_session_pending_at", None) is not None:
+        template.open_session_pending_at = None
+        update_fields.append("open_session_pending_at")
+    if update_fields:
+        template.modified_date = timezone.now()
+        update_fields.append("modified_date")
+        template.save(update_fields=update_fields)
 
 
 def assessment_has_student_engagement(template) -> bool:
@@ -964,6 +1008,50 @@ def attempts_qs_for_template(template):
     )
 
 
+def student_prior_problem_history_for_assessment(template, student):
+    """
+    Source problems and rand/randInt fingerprints from all prior attempts
+    by this student on the assessment (including voided attempts).
+    """
+    from .util import random_fingerprint_from_frozen_problem
+
+    m = _models()
+    attempt_ids = list(
+        attempts_qs_for_template(template)
+        .filter(user=student)
+        .values_list("id", flat=True)
+    )
+    seen_source_problem_ids = set()
+    prior_random_fingerprints_by_source = {}
+    if not attempt_ids:
+        return {
+            "seen_source_problem_ids": seen_source_problem_ids,
+            "prior_random_fingerprints_by_source": prior_random_fingerprints_by_source,
+        }
+
+    rows = m.StudentAssessmentProblem.objects.filter(attempt_id__in=attempt_ids).only(
+        "source_problem_id",
+        "answer_key",
+        "render_payload",
+    )
+    for row in rows:
+        source_id = row.source_problem_id
+        if source_id is None:
+            continue
+        source_id = int(source_id)
+        seen_source_problem_ids.add(source_id)
+        fingerprint = random_fingerprint_from_frozen_problem(row)
+        if fingerprint is None:
+            continue
+        prior_random_fingerprints_by_source.setdefault(source_id, []).append(
+            fingerprint
+        )
+    return {
+        "seen_source_problem_ids": seen_source_problem_ids,
+        "prior_random_fingerprints_by_source": prior_random_fingerprints_by_source,
+    }
+
+
 def current_attempt_for_student(template, student, *, enrollment=None):
     """
     Active take for the student on this template: prefer ready/in_progress,
@@ -1229,10 +1317,15 @@ def generate_attempt_for_student(parent_assessment, student, enrollment, *, forc
             synchronized_form.problems.all().order_by("slot_index", "id")
         )
     else:
+        history = student_prior_problem_history_for_assessment(template, student)
         assembled = assemble_practice_test(
             template,
             actor_user=None,
             allow_status_mutation=False,
+            seen_source_problem_ids=history["seen_source_problem_ids"],
+            prior_random_fingerprints_by_source=history[
+                "prior_random_fingerprints_by_source"
+            ],
         )
         problems = assembled.get("problems") or []
 

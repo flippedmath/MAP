@@ -124,6 +124,19 @@
         </p>
     </div>
     {% if not is_student %}
+    <div style="display:flex; align-items:center; gap:10px;">
+    <button
+      type="button"
+      class="btn-option-settings"
+      title="Course Assessments display options"
+      data-course-options
+      data-options-subset="assessments"
+      data-options-load-url="{% url 'course_grades_options' course.id %}?subset=assessments"
+      data-options-save-url="{% url 'course_grades_options' course.id %}"
+      style="cursor:pointer; background:none; border:1px solid #cbd5e1; border-radius:8px; color:#64748b; font-size:1rem; padding:0.4rem 0.65rem;"
+    >
+      <i class="fas fa-cog"></i>
+    </button>
     <div class="setup-action-dropdown" id="create-assessment-dropdown">
         <button type="button" id="trigger-assessment-menu" class="btn-create-assessment" style="cursor: pointer; border: none; display: inline-flex; align-items: center; gap: 6px;">
             + Create Assessment <i class="fas fa-caret-down" style="font-size: 0.75rem;"></i>
@@ -136,6 +149,7 @@
                 <i class="fas fa-copy"></i> Copy Assessment from Explorer…
             </button>
         </div>
+    </div>
     </div>
     {% endif %}
 </div>
@@ -175,6 +189,9 @@
                 {% endif %}
                 {% if show_auto_open_column %}
                 <th>Auto-Open Window (Start - End)</th>
+                {% endif %}
+                {% if show_open_session_column %}
+                <th>Open session</th>
                 {% endif %}
                 {% if show_submission_column %}
                 <th>Submission</th>
@@ -292,6 +309,16 @@
                       {% endif %}
                       {% endif %}
                     {% endif %}
+                </td>
+                {% endif %}
+
+                {% if show_open_session_column %}
+                <td style="white-space:nowrap; color:#334155; font-size:0.9rem;">
+                  {% if assessment.open_session_at %}
+                    <time class="local-date" datetime="{{ assessment.open_session_at|date:'c' }}">{{ assessment.open_session_at|date:"M j, Y" }}</time>
+                  {% else %}
+                    <span style="color:#94a3b8;">—</span>
+                  {% endif %}
                 </td>
                 {% endif %}
 

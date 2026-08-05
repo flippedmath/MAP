@@ -547,20 +547,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const footer = document.querySelector('.student-take-footer');
     if (footer) footer.style.display = 'none';
     if (resultSection) resultSection.hidden = false;
+    // Never show numeric scores on the take page after submit — release is
+    // teacher-controlled and only after the assessment is closed.
     if (resultBody) {
-      if (submitData.scores_visible) {
-        const earned = submitData.earned_total ?? '—';
-        const max = submitData.max_total ?? '—';
-        const extra = submitData.requires_manual_grading
-          ? '<p style="margin-top:8px;color:#b45309;">Some answers need teacher review before your final score is complete.</p>'
-          : '';
-        resultBody.innerHTML =
-          `<strong>Score: ${escapeHtml(earned)} / ${escapeHtml(max)}</strong>${extra}`;
-      } else {
-        resultBody.innerHTML =
-          '<p>Your assessment was submitted successfully.</p>' +
-          '<p style="margin-top:8px;color:#64748b;">Your score will be available after your teacher finishes grading and releases scores.</p>';
-      }
+      const message =
+        submitData.message ||
+        'Your assessment was submitted successfully.';
+      resultBody.innerHTML =
+        `<p>${escapeHtml(message)}</p>` +
+        '<p style="margin-top:8px;color:#64748b;">Your score will be available after your teacher finishes grading and releases scores.</p>';
     }
     setStatus('Submitted.');
   }

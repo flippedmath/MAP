@@ -17,10 +17,10 @@ from .dashboard import (
     dashboard_courses_for_user,
     dashboard_parent_groups_for_user,
     dashboard_student_closed_grades_for_user,
-    teacher_active_retakes_for_user,
     teacher_focus_unlocks_for_user,
     teacher_grade_releases_for_user,
     teacher_manual_grading_for_user,
+    teacher_open_assessments_for_user,
     user_display_name,
     user_greeting_name,
 )
@@ -203,7 +203,7 @@ class HomeDashboardView(LoginRequiredMixin, TemplateView):
         else:
             context['open_assessments'] = []
         context['manual_grading_assessments'] = teacher_manual_grading_for_user(user)
-        context['active_retake_assessments'] = teacher_active_retakes_for_user(user)
+        context['teacher_open_assessments'] = teacher_open_assessments_for_user(user)
         context['focus_unlock_requests'] = teacher_focus_unlocks_for_user(user)
         context['grade_release_assessments'] = teacher_grade_releases_for_user(user)
 
@@ -3018,6 +3018,11 @@ def assessment_view(request, course_id):
     show_submission_column = is_student and any(
         r.get("can_review") for r in assessment_rows
     )
+    show_open_session_column = False
+    if not is_student:
+        from .assessment_options import show_open_session_date_column
+
+        show_open_session_column = show_open_session_date_column(course)
     if is_student:
         empty_colspan = 3  # name, status, actions
         if show_auto_open_column:
@@ -3027,6 +3032,8 @@ def assessment_view(request, course_id):
     else:
         empty_colspan = 5  # drag, name, status, questions, actions
         if show_auto_open_column:
+            empty_colspan += 1
+        if show_open_session_column:
             empty_colspan += 1
 
     from .credits import assert_can_print
@@ -3040,6 +3047,7 @@ def assessment_view(request, course_id):
         'is_student': is_student,
         'show_submission_column': show_submission_column,
         'show_auto_open_column': show_auto_open_column,
+        'show_open_session_column': show_open_session_column,
         'empty_colspan': empty_colspan,
         'active_tab': 'assessments',
         'current_time': now,
@@ -3311,6 +3319,13 @@ def update_assessment_status_ajax(request, course_id):
             reason='teacher_closed',
             set_status=False,  # already saved above
         )
+    elif new_status in ('open', 'retake', 'upcoming'):
+        from .student_attempts import mark_class_session_opened
+
+        session_at = None
+        if new_status == 'upcoming' and assessment.start_time:
+            session_at = assessment.start_time
+        mark_class_session_opened(assessment, at=session_at)
 
     job_payload = None
     if new_status in ('open', 'retake'):
@@ -5860,21 +5875,27 @@ def course_grades_options_ajax(request, course_id):
         save_course_default_options,
     )
 
+    subset = request.GET.get("subset") or None
     if request.method == "GET":
-        return JsonResponse(course_default_options_payload(course))
+        return JsonResponse(course_default_options_payload(course, subset=subset))
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed."}, status=405)
     try:
         body = json.loads(request.body) if request.body else {}
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON."}, status=400)
+    subset = body.get("subset") or subset
     result = save_course_default_options(
         course,
         body.get("selections") or [],
         default_time_limit_minutes=body.get("default_time_limit_minutes"),
     )
     status = 200 if result.get("success") else 400
-    return JsonResponse(result, status=status)
+    payload = dict(result)
+    if result.get("success"):
+        payload.update(course_default_options_payload(course, subset=subset))
+        payload["success"] = True
+    return JsonResponse(payload, status=status)
 
 
 @login_required
