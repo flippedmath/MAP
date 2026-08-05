@@ -580,41 +580,99 @@ class Command(BaseCommand):
         parser.add_argument(
             '--token',
             type=str,
-            required=True,
-            help="The specific token field string identifier to process (e.g., 'randInt', 'numAnswer')."
+            default=None,
+            help="Seed/update one token (e.g. 'randInt', 'numAnswer'). Omit when using --all.",
+        )
+        parser.add_argument(
+            '--all',
+            action='store_true',
+            help="Seed/update every blueprint in DYNAMIC_VARIABLES + ANSWER_INPUT_FIELDS.",
         )
 
+    def _sync_blueprint(self, blueprint):
+        serialized_format_pattern = json.dumps(blueprint)
+        serialized_insert_entity_pattern = json.dumps({})
+        serialized_entity_name_list = json.dumps([blueprint["entity_name_list"]])
+
+        entity_type_obj, created = EntityType.objects.using('default').get_or_create(
+            name=blueprint["token"],
+            defaults={
+                "format_pattern": serialized_format_pattern,
+                "insert_entity_pattern": serialized_insert_entity_pattern,
+                "entity_name_list": serialized_entity_name_list,
+            },
+        )
+
+        if not created:
+            entity_type_obj.format_pattern = serialized_format_pattern
+            entity_type_obj.insert_entity_pattern = serialized_insert_entity_pattern
+            entity_type_obj.entity_name_list = serialized_entity_name_list
+            entity_type_obj.save()
+        return created
+
     def handle(self, *args, **options):
-        target_token = options['token']
-        
+        target_token = options.get('token')
+        seed_all = bool(options.get('all'))
         all_blueprints = self.DYNAMIC_VARIABLES + self.ANSWER_INPUT_FIELDS
-        blueprint = next((item for item in all_blueprints if item["token"] == target_token), None)
-        
-        if not blueprint:
-            raise CommandError(f"Token value '{target_token}' was not found in the verified JSON layouts lists.")
 
-        self.stdout.write(self.style.NOTICE(f"Found token template for token '{target_token}'. Synchronizing table record..."))
+        if seed_all and target_token:
+            raise CommandError("Use either --all or --token, not both.")
+        if not seed_all and not target_token:
+            raise CommandError("Provide --token=<name> or --all.")
 
-        with transaction.atomic():
-            serialized_format_pattern = json.dumps(blueprint)
-            serialized_insert_entity_pattern = json.dumps({})
-            serialized_entity_name_list = json.dumps([blueprint["entity_name_list"]])
-
-            entity_type_obj, created = EntityType.objects.using('default').get_or_create(
-                name=blueprint["token"],
-                defaults={
-                    "format_pattern": serialized_format_pattern,
-                    "insert_entity_pattern": serialized_insert_entity_pattern,
-                    "entity_name_list": serialized_entity_name_list
-                }
+        if seed_all:
+            created_n = 0
+            updated_n = 0
+            self.stdout.write(
+                self.style.NOTICE(
+                    f"Synchronizing all {len(all_blueprints)} entity_type blueprints..."
+                )
             )
-            
-            # If the record already existed, synchronize it with the latest structure safely
-            if not created:
-                entity_type_obj.format_pattern = serialized_format_pattern
-                entity_type_obj.insert_entity_pattern = serialized_insert_entity_pattern
-                entity_type_obj.entity_name_list = serialized_entity_name_list
-                entity_type_obj.save()
+            with transaction.atomic():
+                for blueprint in all_blueprints:
+                    created = self._sync_blueprint(blueprint)
+                    if created:
+                        created_n += 1
+                        verb = "CREATED"
+                    else:
+                        updated_n += 1
+                        verb = "UPDATED"
+                    self.stdout.write(
+                        f"  {verb}: {blueprint['name']} ({blueprint['token']})"
+                    )
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Done. created={created_n} updated={updated_n} "
+                    f"total={len(all_blueprints)}"
+                )
+            )
+            return
 
-        status_text = "CREATED fresh rows successfully" if created else "UPDATED active schema maps successfully"
-        self.stdout.write(self.style.SUCCESS(f"🚀 SUCCESS: '{blueprint['name']}' ({target_token}) was {status_text} inside the database."))
+        blueprint = next(
+            (item for item in all_blueprints if item["token"] == target_token),
+            None,
+        )
+        if not blueprint:
+            raise CommandError(
+                f"Token value '{target_token}' was not found in the verified JSON layouts lists."
+            )
+
+        self.stdout.write(
+            self.style.NOTICE(
+                f"Found token template for token '{target_token}'. Synchronizing table record..."
+            )
+        )
+        with transaction.atomic():
+            created = self._sync_blueprint(blueprint)
+
+        status_text = (
+            "CREATED fresh rows successfully"
+            if created
+            else "UPDATED active schema maps successfully"
+        )
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"SUCCESS: '{blueprint['name']}' ({target_token}) was {status_text} "
+                "inside the database."
+            )
+        )

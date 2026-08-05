@@ -14,6 +14,7 @@
         background: #e0f2fe; color: #075985; padding: 6px 10px; border-radius: 999px;
         font-size: 0.85rem; font-weight: 600;
     }
+    .help-active-tag[hidden] { display: none !important; }
     .help-active-tag a { color: #0c4a6e; text-decoration: none; }
     .help-status { color: #64748b; font-size: 0.9rem; min-height: 1.25rem; margin-bottom: 0.75rem; }
     .help-results { list-style: none; padding: 0; margin: 0; }
@@ -53,8 +54,9 @@
     }
     .help-pagination button {
         padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1;
-        background: #fff; cursor: pointer; font-weight: 600;
+        background: #fff; color: #1e293b; cursor: pointer; font-weight: 600;
     }
+    .help-pagination button:hover:not(:disabled) { background: #f8fafc; color: #1e293b; }
     .help-pagination button:disabled { opacity: 0.45; cursor: default; }
     .help-pagination .page-info { color: #64748b; font-size: 0.9rem; }
 </style>

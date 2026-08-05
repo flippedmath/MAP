@@ -18,10 +18,11 @@
     }
     .help-tag--editable { padding-right: 4px; }
     .help-tag-remove {
-        border: 0; background: transparent; color: #64748b; cursor: pointer;
-        font-size: 1rem; line-height: 1; padding: 0 2px; border-radius: 999px;
+        border: 0; background: transparent !important; color: #64748b !important;
+        cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px !important;
+        border-radius: 999px;
     }
-    .help-tag-remove:hover { color: #b91c1c; background: #fee2e2; }
+    .help-tag-remove:hover { color: #b91c1c !important; background: #fee2e2 !important; }
     .help-tag-text {
         flex: 1 1 120px; min-width: 120px; border: 0; outline: none; padding: 4px 2px;
         font-size: 0.95rem; background: transparent;
@@ -29,6 +30,16 @@
     .help-content-editor { border: 1px solid #cbd5e1; border-radius: 6px; overflow: hidden; background: #fff; }
     .help-content-editor .ql-toolbar.ql-snow { border: 0; border-bottom: 1px solid #e2e8f0; }
     .help-content-editor .ql-container.ql-snow { border: 0; min-height: 220px; font-size: 0.95rem; }
+    .help-content-editor .ql-toolbar.ql-snow button {
+        background: transparent; color: #444; padding: 3px 5px; border-radius: 0;
+        width: 28px; height: 24px;
+    }
+    .help-content-editor .ql-toolbar.ql-snow button:hover {
+        background: #f0f0f0; color: #444;
+    }
+    .help-content-editor .ql-toolbar.ql-snow button.ql-active {
+        background: #e1e1e1; color: #444;
+    }
     .help-content-hint { color: #64748b; font-size: 0.82rem; margin: 0.35rem 0 0; }
 </style>
 {% endblock %}

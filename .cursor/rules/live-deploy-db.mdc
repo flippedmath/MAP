@@ -1,5 +1,5 @@
 ---
-description: Full push-to-live workflow — git, main, server pull, SQL, Q&A ask
+description: Full push-to-live workflow — git, main, server pull, SQL, catalogs, Q&A ask
 alwaysApply: true
 ---
 
@@ -36,7 +36,37 @@ Confirm `map-gunicorn` is active and key URLs return 200.
 - Apply it on live Postgres in this deploy (before or with restart). Prefer idempotent scripts; confirm success.
 - Unmanaged tables: do **not** rely on Django `migrate`.
 
-## 4. Ask about syncing About / public Q&A to live
+## 4. Sync code-owned catalog tables (always)
+These are growing static lists: row sets defined in git that the app assumes exist. Sync them on **every** push to live (idempotent upsert), not only when you remember they changed.
+
+Run on the live server (venv + `math_assessment_platform`):
+
+```bash
+# entity_type — problem entity blueprints (seed_entity_type.py)
+python manage.py seed_entity_type --all
+
+# assessment_option_group — assessment settings catalog (sql/sync_assessment_option_group.sql)
+python -c "
+import django, os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'math_assessment_platform.settings')
+django.setup()
+from assessment_tool.assessment_options import sync_option_groups
+n = sync_option_groups()
+print(f'assessment_option_group sync ok; active_groups_rows≈{n}')
+"
+
+# permission_group — system admins + public collaboration groups
+python manage.py setup_collaboration_groups
+```
+
+**When adding a new catalog table later**, add it here if:
+1. The row set is defined in git (Python seed and/or SQL seed/sync),
+2. The app assumes those rows exist, and
+3. Teachers/students do not create the catalog itself.
+
+Do **not** treat instance/user data as catalogs (e.g. `assessment_options`, `course_default_assessment_options`, `problem_tags`, general `qa_tag`, per-user `branch_group` folders).
+
+## 5. Ask about syncing About / public Q&A to live
 Q&A article rows live in Postgres (`Q_A`), not in git alone. Seed source of truth for About-linked articles is:
 - `assessment_tool/about.py` (canonical titles)
 - `assessment_tool/about_qa_articles.py` (bodies, tags, optional `former_titles` for renames)
@@ -59,4 +89,4 @@ python manage.py seed_about_qa_articles
 If none of the “when to ask” conditions apply, no need to ask.
 
 ## Example
-“Push to live” after renaming an About Q&A title → commit + push branch → ff-merge/push `main` → server pull/restart → **ask** whether to sync live Q&A → on yes, run `seed_about_qa_articles` on live (in-place title/body update).
+“Push to live” after entity/option catalog + UI polish → commit + push branch → ff-merge/push `main` → server pull/restart → apply any new DDL → `seed_entity_type --all` + `sync_option_groups` + `setup_collaboration_groups` → ask about About Q&A only if seed sources changed.
