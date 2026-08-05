@@ -1,0 +1,51 @@
+<div>
+    <label for="id_title">Title (admin label)</label>
+    <input id="id_title" name="title" type="text" required maxlength="{{ max_title }}" value="{{ form.title }}">
+</div>
+<div>
+    <label for="id_message">Banner message</label>
+    <textarea id="id_message" name="message" required maxlength="{{ max_message }}" rows="3">{{ form.message }}</textarea>
+    <p class="ann-hint">Shown on the selected pages while the announcement is active.</p>
+</div>
+<div class="ann-check-row">
+    <label><input type="checkbox" name="is_enabled" {% if form.is_enabled %}checked{% endif %}> Enabled (on)</label>
+    <label><input type="checkbox" name="is_high_priority" {% if form.is_high_priority %}checked{% endif %}> High priority (larger banner)</label>
+</div>
+<div>
+    <label>Time range (optional, UTC)</label>
+    <div style="display:flex;flex-wrap:wrap;gap:0.75rem;">
+        <div style="flex:1 1 200px;">
+            <label for="id_starts_at" style="font-weight:500;font-size:0.85rem;color:#64748b;">Start</label>
+            <input id="id_starts_at" name="starts_at" type="datetime-local" value="{{ form.starts_at }}">
+        </div>
+        <div style="flex:1 1 200px;">
+            <label for="id_ends_at" style="font-weight:500;font-size:0.85rem;color:#64748b;">End</label>
+            <input id="id_ends_at" name="ends_at" type="datetime-local" value="{{ form.ends_at }}">
+        </div>
+    </div>
+    <p class="ann-hint">Leave both empty for always-on while enabled. Banner shows only inside this window when set.</p>
+</div>
+<div>
+    <label class="ann-check-row" style="margin-bottom:8px;">
+        <input type="checkbox" name="warning_enabled" id="id_warning_enabled" {% if form.warning_enabled %}checked{% endif %}>
+        Login warning (shows once when a user just logs in)
+    </label>
+    <label for="id_warning_message">Warning message</label>
+    <textarea id="id_warning_message" name="warning_message" maxlength="{{ max_warning }}" rows="2">{{ form.warning_message }}</textarea>
+    <div style="margin-top:0.75rem;max-width:280px;">
+        <label for="id_warning_starts_at" style="font-weight:500;font-size:0.85rem;color:#64748b;">Warning start (UTC, optional)</label>
+        <input id="id_warning_starts_at" name="warning_starts_at" type="datetime-local" value="{{ form.warning_starts_at }}">
+    </div>
+    <p class="ann-hint">Use this for upcoming maintenance: start the warning before the banner window. Stops after the announcement end time if set.</p>
+</div>
+<div>
+    <label>Pages / surfaces</label>
+    <div class="ann-check-row" style="margin-top:6px;">
+        {% for field, label, checked in page_fields %}
+        <label>
+            <input type="checkbox" name="{{ field }}" {% if checked %}checked{% endif %}> {{ label }}
+        </label>
+        {% endfor %}
+    </div>
+    <p class="ann-hint">“Once when first logging in” appears on the first page load after login (in addition to any page-specific banners).</p>
+</div>

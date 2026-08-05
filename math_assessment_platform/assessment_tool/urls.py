@@ -8,9 +8,30 @@ from . import content_image_views
 from . import credit_views
 from . import assessment_print
 from . import about as about_views
+from . import site_announcement_views
 
 urlpatterns = [
     path('', views.under_construction_view, name='home'),
+    path(
+        'announcements/',
+        site_announcement_views.site_announcements_admin_view,
+        name='site_announcements_admin',
+    ),
+    path(
+        'announcements/<int:announcement_id>/edit/',
+        site_announcement_views.site_announcement_edit_view,
+        name='site_announcement_edit',
+    ),
+    path(
+        'announcements/<int:announcement_id>/delete/',
+        site_announcement_views.site_announcement_delete_view,
+        name='site_announcement_delete',
+    ),
+    path(
+        'announcements/<int:announcement_id>/toggle/',
+        site_announcement_views.site_announcement_toggle_view,
+        name='site_announcement_toggle',
+    ),
     path('about/', about_views.about_view, name='about'),
     path('verify/', views.verify_email, name='verify_email'),
     path('dashboard/', views.HomeDashboardView.as_view(), name='dashboard'),

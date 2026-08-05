@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+    .ann-table { width: 100%; border-collapse: collapse; }
+    .ann-table th, .ann-table td {
+        padding: 10px 8px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; font-size: 0.92rem;
+    }
+    .ann-table th { color: #64748b; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; }
+    .ann-table tr:hover { background: #f8fafc; }
+    .ann-badge {
+        display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+    }
+    .ann-badge--on, .ann-badge--active { background: #dcfce7; color: #166534; }
+    .ann-badge--off { background: #f1f5f9; color: #475569; }
+    .ann-badge--scheduled { background: #dbeafe; color: #1d4ed8; }
+    .ann-badge--expired { background: #fee2e2; color: #991b1b; }
+    .ann-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .ann-actions a, .ann-actions button {
+        font-size: 0.85rem; padding: 4px 10px; border-radius: 6px; border: 1px solid #cbd5e1;
+        background: #fff; cursor: pointer; text-decoration: none; color: #1e293b; font-weight: 600;
+    }
+    .ann-actions .danger { color: #b91c1c; border-color: #fecaca; }
+    .ann-form-grid { display: grid; gap: 1rem; }
+    .ann-form-grid label { display: block; font-weight: 600; margin-bottom: 5px; }
+    .ann-form-grid input[type="text"],
+    .ann-form-grid input[type="datetime-local"],
+    .ann-form-grid textarea {
+        width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box;
+    }
+    .ann-check-row { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; }
+    .ann-check-row label { font-weight: 600; display: flex; align-items: center; gap: 0.4rem; margin: 0; }
+    .ann-hint { color: #94a3b8; font-size: 0.85rem; margin: 4px 0 0; }
+    .ann-preview { color: #334155; line-height: 1.45; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 980px; margin: 0 auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+        <h1 style="margin:0;">Site announcements</h1>
+        <button type="button" class="btn" style="font-weight:600;" id="ann-toggle-create">
+            {% if show_create %}Hide form{% else %}New announcement{% endif %}
+        </button>
+    </div>
+    <p style="color:#64748b;">
+        Schedule banners for selected pages, optional post-login warnings, and maintenance windows.
+        Leave the time range empty for an always-on announcement while it is enabled. Schedule times are UTC.
+    </p>
+
+    <div class="card" id="ann-create-card" {% if not show_create %}hidden{% endif %} style="margin-bottom:1.5rem;">
+        <h2 style="margin-top:0;">New announcement</h2>
+        <form method="post" class="ann-form-grid">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create">
+            {% include "assessment_tool/components/site_announcement_form_fields.html" with form=create_form %}
+            <div>
+                <button type="submit" class="btn" style="font-weight:600;">Create announcement</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2 style="margin-top:0;">All announcements</h2>
+        {% if announcement_rows %}
+        <div style="overflow-x:auto;">
+            <table class="ann-table">
+                <thead>
+                    <tr>
+                        <th>Title</th>
+                        <th>Status</th>
+                        <th>Pages</th>
+                        <th>Message</th>
+                        <th>Warning</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in announcement_rows %}
+                    <tr>
+                        <td>
+                            <strong>{{ item.row.title }}</strong>
+                            {% if item.row.is_high_priority %}
+                            <div style="color:#c2410c;font-size:0.8rem;font-weight:700;">High priority</div>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="ann-badge ann-badge--{{ item.status }}">{{ item.status }}</span>
+                            {% if item.row.starts_at or item.row.ends_at %}
+                            <div style="color:#94a3b8;font-size:0.8rem;margin-top:4px;">
+                                {% if item.row.starts_at %}<time class="local-datetime" datetime="{{ item.row.starts_at|date:'c' }}">{{ item.row.starts_at }}</time>{% else %}—{% endif %}
+                                →
+                                {% if item.row.ends_at %}<time class="local-datetime" datetime="{{ item.row.ends_at|date:'c' }}">{{ item.row.ends_at }}</time>{% else %}—{% endif %}
+                            </div>
+                            {% endif %}
+                        </td>
+                        <td style="max-width:180px;">
+                            {% if item.pages %}
+                                {% for p in item.pages %}<div>{{ p }}</div>{% endfor %}
+                            {% else %}
+                            <span style="color:#94a3b8;">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="ann-preview" style="max-width:240px;">{{ item.preview }}</td>
+                        <td>
+                            {% if item.row.warning_enabled %}
+                            On
+                            {% if item.row.warning_starts_at %}
+                            <div style="color:#94a3b8;font-size:0.8rem;">from <time class="local-datetime" datetime="{{ item.row.warning_starts_at|date:'c' }}">{{ item.row.warning_starts_at }}</time></div>
+                            {% endif %}
+                            {% else %}
+                            <span style="color:#94a3b8;">Off</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="ann-actions">
+                                <a href="{% url 'site_announcement_edit' announcement_id=item.row.id %}">Edit</a>
+                                <form method="post" action="{% url 'site_announcement_toggle' announcement_id=item.row.id %}">
+                                    {% csrf_token %}
+                                    <button type="submit">{% if item.row.is_enabled %}Turn off{% else %}Turn on{% endif %}</button>
+                                </form>
+                                <form method="post" action="{% url 'site_announcement_delete' announcement_id=item.row.id %}"
+                                      data-map-confirm="Delete this announcement permanently?" data-map-confirm-danger>
+                                    {% csrf_token %}
+                                    <button type="submit" class="danger">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p style="color:#64748b;margin:0;">No announcements yet.</p>
+        {% endif %}
+    </div>
+</div>
+<script>
+(function () {
+    var btn = document.getElementById('ann-toggle-create');
+    var card = document.getElementById('ann-create-card');
+    if (!btn || !card) return;
+    btn.addEventListener('click', function () {
+        var open = card.hasAttribute('hidden');
+        if (open) {
+            card.removeAttribute('hidden');
+            btn.textContent = 'Hide form';
+        } else {
+            card.setAttribute('hidden', '');
+            btn.textContent = 'New announcement';
+        }
+    });
+})();
+</script>
+{% endblock %}

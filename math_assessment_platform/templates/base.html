@@ -19,7 +19,7 @@
     
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body{% if request.resolver_match.url_name == 'home' %} class="page-home"{% endif %}>
     <nav>
         <a href="{% url 'home' %}" style="font-weight: bold; font-size: 1.2rem; color: inherit; text-decoration: none;">MAP</a>
         <div class="nav-links">
@@ -28,6 +28,7 @@
                 <a href="{% url 'tickets_admin' %}" style="color: white; text-decoration: none;">Tickets</a>
                 <a href="{% url 'qa_admin' %}" style="color: white; text-decoration: none;">Q&amp;A Admin</a>
                 <a href="{% url 'credits_admin' %}" style="color: white; text-decoration: none;">Credits</a>
+                <a href="{% url 'site_announcements_admin' %}" style="color: white; text-decoration: none;">Announcements</a>
                 <a href="{% url 'db_viewer' %}" style="color: white; text-decoration: none;">Database</a>
                 {% endif %}
                 {% if user.user_type == 'Teacher' or user.user_type == 'IT_Support' %}
@@ -79,6 +80,24 @@
         </div>
     </nav>
     <main class="container">
+        {% if site_announcement_warnings %}
+            <div class="site-announce-stack" aria-live="polite">
+                {% for w in site_announcement_warnings %}
+                <div class="site-announce site-announce--warning" role="status">
+                    {{ w.warning_message|linebreaksbr }}
+                </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+        {% if site_announcement_banners %}
+            <div class="site-announce-stack" aria-live="polite">
+                {% for a in site_announcement_banners %}
+                <div class="site-announce{% if a.is_high_priority %} site-announce--high{% endif %}" role="status">
+                    {{ a.message|linebreaksbr }}
+                </div>
+                {% endfor %}
+            </div>
+        {% endif %}
         {% if messages %}
             <div class="messages-container">
                 {% for message in messages %}

@@ -100,6 +100,7 @@ TEMPLATES = [
                 'django.contrib.messages.context_processors.messages',
                 'assessment_tool.context_processors.notifications',
                 'assessment_tool.context_processors.content_view_only',
+                'assessment_tool.context_processors.site_announcements',
             ],
         },
     },

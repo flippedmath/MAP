@@ -60,6 +60,7 @@ from .models import (
     CreditInvoice,
     CreditLedger,
     CreditPurchase,
+    SiteAnnouncement,
     Ticket,
     TicketAttachment,
     TicketDiscussion,
@@ -618,6 +619,7 @@ def database_viewer(request):
         'credit_invoice': CreditInvoice,
         'credit_ledger': CreditLedger,
         'credit_purchase': CreditPurchase,
+        'site_announcement': SiteAnnouncement,
         'ticket': Ticket,
         'ticket_attachment': TicketAttachment,
         'ticket_discussion': TicketDiscussion,
@@ -1666,6 +1668,12 @@ def login_view(request):
                     "Failed to nullify password resets after login for user_id=%s",
                     getattr(user, "user_id", None),
                 )
+            try:
+                from .site_announcements import mark_post_login
+
+                mark_post_login(request)
+            except Exception:
+                logger.exception("Failed to mark post-login announcements")
             messages.success(request, f"Welcome back, {user_greeting_name(user)}!")
             invite_code = request.session.get(INVITE_SESSION_KEY)
             if invite_code:

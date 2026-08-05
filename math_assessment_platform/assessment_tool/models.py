@@ -1489,6 +1489,40 @@ class Subscriptions(models.Model):
         db_table = 'subscriptions'
 
 
+class SiteAnnouncement(models.Model):
+    """IT-managed site banner / login warning (private schedule, page targets)."""
+
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_enabled = models.BooleanField(default=True)
+    is_high_priority = models.BooleanField(default=False)
+    starts_at = models.DateTimeField(blank=True, null=True)
+    ends_at = models.DateTimeField(blank=True, null=True)
+    warning_enabled = models.BooleanField(default=False)
+    warning_message = models.TextField(blank=True, null=True)
+    warning_starts_at = models.DateTimeField(blank=True, null=True)
+    show_on_landing = models.BooleanField(default=False)
+    show_on_about = models.BooleanField(default=False)
+    show_on_login = models.BooleanField(default=False)
+    show_on_contact_us = models.BooleanField(default=False)
+    show_on_dashboard = models.BooleanField(default=False)
+    show_on_login_once = models.BooleanField(default=False)
+    created_by = models.ForeignKey(
+        'UserProfile',
+        models.DO_NOTHING,
+        db_column='created_by_id',
+        related_name='site_announcement_created_set',
+        blank=True,
+        null=True,
+    )
+    creation_date = models.DateTimeField()
+    modification_date = models.DateTimeField()
+
+    class Meta:
+        managed = False
+        db_table = 'site_announcement'
+
+
 class Ticket(models.Model):
     status = models.TextField(blank=True, null=True)  # This field type is a guess.
     title = models.CharField(max_length=255)

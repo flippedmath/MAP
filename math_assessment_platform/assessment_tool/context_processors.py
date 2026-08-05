@@ -17,3 +17,15 @@ def notifications(request):
 
 def content_view_only(request):
     return {"content_view_only": is_content_view_only(request)}
+
+
+def site_announcements(request):
+    try:
+        from .site_announcements import announcements_for_request
+
+        return announcements_for_request(request)
+    except Exception:
+        return {
+            "site_announcement_banners": [],
+            "site_announcement_warnings": [],
+        }

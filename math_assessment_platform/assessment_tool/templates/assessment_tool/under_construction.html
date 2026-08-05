@@ -7,18 +7,15 @@
     margin: 2.5rem auto 3rem;
     text-align: center;
   }
-  .uc-banner {
+  /* High-priority landing banners sit above content in base.html; center the stack on home. */
+  body.page-home .site-announce-stack {
+    text-align: center;
+  }
+  body.page-home .site-announce--high {
     display: inline-block;
-    margin: 0 0 1.5rem;
-    padding: 0.65rem 1.25rem;
-    font-size: clamp(1.35rem, 4vw, 2rem);
-    font-weight: 800;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: #7c2d12;
-    background: #ffedd5;
-    border: 2px solid #f97316;
-    border-radius: 8px;
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
   }
   .uc-brand {
     margin: 0 0 0.75rem;
@@ -65,7 +62,6 @@
 
 {% block content %}
 <div class="uc-wrap">
-  <div class="uc-banner" role="status">Under Construction</div>
   <h1 class="uc-brand">Math Assessment Platform</h1>
   <p class="uc-lead">
     The <strong>Math Assessment Platform (MAP)</strong> helps teachers build,

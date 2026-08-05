@@ -1,5 +1,5 @@
 ---
-description: Full push-to-live workflow — git, main, server pull, SQL, catalogs, Q&A ask
+description: Full push-to-live workflow — git, main, server pull, SQL, catalogs, Q&A ask, announcements ask
 alwaysApply: true
 ---
 
@@ -90,6 +90,43 @@ python manage.py seed_about_qa_articles
 
 If none of the “when to ask” conditions apply, no need to ask.
 
+## 6. Ask about syncing site announcements to live
+`site_announcement` rows live in Postgres (IT-created in the Announcements admin), not in git alone. Local is the source when the user has added or edited banners for production.
+
+**When to ask (do not skip if any of these apply):**
+- Local has one or more `site_announcement` rows, **and**
+- This deploy touches announcement-related code/SQL (`site_announcements.py`, `site_announcement_views.py`, `sql/site_announcements.sql`, announcement templates/CSS), **or** local has announcements that are missing on live (compare by exact `title`), **or** the user created/edited announcements in this session / since the last live sync
+
+**Always ask per announcement before writing to live.** Do **not** copy silently.
+
+1. On local (venv + `math_assessment_platform`), list announcements and dump JSON:
+```bash
+python manage.py dump_site_announcements -o /tmp/map_site_announcements.json
+```
+2. On live, list current titles (SSH, same app dir):
+```bash
+python manage.py dump_site_announcements
+```
+3. For **each** local announcement you intend to sync (at least every local title missing on live; also offer any local titles the user edited), ask clearly, e.g.:
+   - “Sync announcement **Under Construction** to live? Should it stay **on**, or should I turn it **off** on live?”
+4. After answers, copy the dump to the server and load with overrides:
+```bash
+# from local
+scp /tmp/map_site_announcements.json root@143.198.163.40:/tmp/map_site_announcements.json
+
+# on live
+cd /var/www/map && source .venv/bin/activate && cd math_assessment_platform
+python manage.py load_site_announcements /tmp/map_site_announcements.json \
+  --enable "Under Construction" \
+  --disable "Some draft title"
+```
+- Upsert key is exact `title` (creates or updates in place).
+- `--enable` / `--disable` override `is_enabled` on live regardless of the local flag.
+- If the user declines syncing a given announcement, omit it from the dump (`--title "..."`) or skip the load for that title.
+- Ensure section 3 has already applied `sql/site_announcements.sql` so the table exists before load.
+
+If local has no announcements and live already has what it needs, skip section 6.
+
 ## Example
-“Push to live” after only UI polish → commit + push → server pull/restart → skip catalog sync (no seed-source diffs) → skip Q&A ask.  
-“Push to live” after editing `seed_entity_type.py` → same deploy steps → run `seed_entity_type --all` only → skip other catalogs unless their sources also changed.
+“Push to live” after only UI polish → commit + push → server pull/restart → skip catalog sync (no seed-source diffs) → skip Q&A ask → still check announcements (ask if local rows should sync / on vs off).  
+“Push to live” after editing `seed_entity_type.py` → same deploy steps → run `seed_entity_type --all` only → skip other catalogs unless their sources also changed → ask about announcements if local has any to sync.
